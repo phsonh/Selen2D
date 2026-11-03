@@ -33,7 +33,16 @@ dofile('example/main.lua')
 
 关闭程序，修改 EXE 旁的 `example/main.lua`，保存后重新运行即可。修改 Lua 或 HLSL 不需要重新编译 C++；示例也没有自动热重载。
 
-源码默认构建会刷新 `build/<配置>/bin` 和 `releases/<版本目录>` 中的发行示例，并在 `releases` 下生成 ZIP。这些目录中的同名示例文件会被构建覆盖，请解压 ZIP 到独立目录后开发自己的 Lua。引擎仓库的示例模板位于 `src/res/development/`；维护发行示例时修改模板。
+源码普通构建只刷新对应 `build/<配置>/bin` 中的引擎、启动脚本和示例，不写入正式发行目录。Debug 不能发布正式包。先完成 Release 构建，再显式运行发布目标：
+
+```powershell
+.\tools\build.ps1 -Configuration Release
+cmake --build --preset selen2d-release --target stage_release
+```
+
+只有第二步会刷新 `releases/selen2d-v2.0.0-windows-x64` 并生成同名 ZIP。它也会更新 Release 的本地示例；Debug 发布请求及直接以 Debug 配置调用发布脚本都会报错。不同配置的本地构建目录互相独立。
+
+构建目录中的同名示例会被覆盖，请解压 ZIP 到独立目录后开发自己的 Lua。引擎仓库的示例模板位于 `src/res/development/`；维护发行示例时修改模板。
 
 可以先修改文件开头的设置：
 

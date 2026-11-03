@@ -16,6 +16,31 @@ function(engine_stage_release)
         message(FATAL_ERROR "Release staging has already been registered")
     endif()
 
+    # Ordinary builds prepare only their own runnable bin directory. They never
+    # publish into the shared release directory or create a release ZIP.
+    add_custom_target(stage_development ALL
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/src/res/development/launch.lua"
+            "$<TARGET_FILE_DIR:engine_app>/launch.lua"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${PROJECT_SOURCE_DIR}/src/res/development/example"
+            "$<TARGET_FILE_DIR:engine_app>/example"
+        DEPENDS engine_app
+        COMMENT "Preparing the local development entry and example"
+        VERBATIM)
+
+    # This project uses single-configuration Ninja builds. Keep an explicit
+    # failing target in Debug so a mistaken publish request cannot build or
+    # copy anything into the official package.
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        add_custom_target(stage_release
+            COMMAND "${CMAKE_COMMAND}" -E echo
+                "stage_release requires a Release build; this configuration cannot publish"
+            COMMAND "${CMAKE_COMMAND}" -E false
+            VERBATIM)
+        return()
+    endif()
+
     string(TOLOWER "${ENGINE_PRODUCT_NAME}" release_product)
     if(NOT release_product MATCHES "^[a-z0-9][a-z0-9_-]*$")
         message(FATAL_ERROR "The product name must form a safe release directory name")
@@ -24,9 +49,9 @@ function(engine_stage_release)
     get_filename_component(linker_directory "${CMAKE_LINKER}" DIRECTORY)
     find_program(ENGINE_RELEASE_DUMPBIN NAMES dumpbin HINTS "${linker_directory}" REQUIRED)
 
-    # Always refresh the development shell and docs, even without relinking.
-    # The packer is an optional tool and is neither built nor distributed here.
-    add_custom_target(stage_release ALL
+    # Publishing is explicit and Release-only. The packer is an optional tool
+    # and is neither built nor distributed here.
+    add_custom_target(stage_release
         COMMAND "${CMAKE_COMMAND}"
             "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"
             "-DENGINE_EXECUTABLE=$<TARGET_FILE:engine_app>"

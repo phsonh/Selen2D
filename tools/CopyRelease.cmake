@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.25)
 
+# Reject non-Release calls before inspecting paths, taking locks, or writing
+# anything. This also protects direct cmake -P invocations outside the target.
+if(NOT DEFINED CONFIGURATION OR NOT CONFIGURATION STREQUAL "Release")
+    message(FATAL_ERROR "Formal release staging requires CONFIGURATION=Release; Debug builds cannot publish")
+endif()
+
 foreach(argument IN ITEMS SOURCE_ROOT ENGINE_EXECUTABLE LEGACY_PACK_FILENAME RELEASE_NAME DESTINATION CONFIGURATION DUMPBIN)
     if(NOT DEFINED ${argument} OR "${${argument}}" STREQUAL "")
         message(FATAL_ERROR "Release staging requires ${argument}")
@@ -87,7 +93,7 @@ foreach(dependency IN LISTS imported_dlls)
 endforeach()
 
 file(MAKE_DIRECTORY "${work_root}" "${releases_root}")
-# Both configurations publish the same version; lock outside the delivery tree.
+# Serialize explicit Release publishers; keep the lock outside the package.
 file(LOCK "${work_root}/${RELEASE_NAME}.lock" GUARD PROCESS TIMEOUT 120)
 string(TIMESTAMP staged_at "%Y%m%dT%H%M%SZ" UTC)
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef nonce)
