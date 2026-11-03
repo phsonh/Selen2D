@@ -1,0 +1,33 @@
+Third-party notices
+
+The project MIT License applies to the project-owned portions only.
+Third-party source and binaries retain their respective licenses and authors.
+The distribution keeps the project license and this notice in doc/guide.
+Third-party source licenses accompany them in doc/guide/licenses.
+
+Included components: SDL3 (and its bundled dependencies), LuaJIT,
+nlohmann/json, libogg, libvorbis, dr_wav, stb_image, FreeType, Zstandard,
+and Microsoft DirectX Shader Compiler (DXC, including its LLVM/Clang code).
+SDL local fixes and the stb_image local fix are recorded with their original
+provenance; migration has not modified these vendor sources.
+
+FreeType portions of this software are copyright (c) The FreeType Project
+(www.freetype.org). All rights reserved. Used under the FreeType License;
+the original dual-license materials are retained in doc/guide/licenses/freetype.
+SDL's HIDAPI is used under its BSD option; its original license options and
+copyright statements are preserved in doc/guide/licenses/SDL.
+
+DXC notices come from the pinned compiler source, including its LICENSE.TXT,
+ThirdPartyNotices.txt and nested component licenses. The source revision and
+local static-integration changes are described in licenses/dxc/STATIC-INTEGRATION.md
+and licenses/dxc/patches/static-embedding.patch, relative to this document.
+Older Windows SDK DLL redistribution files are not
+the license record for this source integration and are not included here.
+
+Windows system components remain operating-system dependencies. The C++
+compiler and Windows SDK are external build tools, not runtime package content.
+The statically linked Microsoft C/C++ runtime and ATL base-module implementation
+remain Microsoft components under the applicable Visual Studio redistribution
+terms; they are not covered by this project's MIT License.
+This is a development baseline; tests using SDL dummy audio do not establish
+physical audio-device validation.

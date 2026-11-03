@@ -1,0 +1,23 @@
+#pragma once
+#include <lua.hpp>
+#include <memory>
+
+namespace core::modules::Graphic::Render { class Renderer; }
+namespace core::modules::Resource { class Service; }
+namespace lua_bind::modules::Graphic {
+// Borrowed host services; close before resource/renderer destruction. Lua GC
+// only releases wrapper storage, never decides Canvas or GPU residency.
+class Context final {
+public:
+    Context(lua_State*, core::modules::Graphic::Render::Renderer&, core::modules::Resource::Service&);
+    ~Context();
+    Context(const Context&)=delete;
+    Context& operator=(const Context&)=delete;
+    void Shutdown() noexcept;
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+    friend void Register(lua_State*, Context&);
+};
+void Register(lua_State*, Context&);
+}

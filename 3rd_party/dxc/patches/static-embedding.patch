@@ -1,0 +1,82 @@
+--- a/tools/clang/tools/dxcompiler/CMakeLists.txt
++++ b/tools/clang/tools/dxcompiler/CMakeLists.txt
+@@ -124,7 +124,14 @@
+   find_package(DiaSDK REQUIRED) # Used for constants and declarations.
+ endif (MSVC)
+ 
+-add_clang_library(dxcompiler SHARED ${SOURCES})
++if (ENGINE_DXC_STATIC)
++  list(REMOVE_ITEM SOURCES DXCompiler.rc DXCompiler.def)
++  add_clang_library(dxcompiler STATIC ${SOURCES})
++  target_compile_definitions(dxcompiler PRIVATE ENGINE_DXC_STATIC=1 _CINDEX_LIB_)
++  target_compile_definitions(dxcompiler PUBLIC DXC_API_IMPORT=)
++else()
++  add_clang_library(dxcompiler SHARED ${SOURCES})
++endif()
+ add_dependencies(dxcompiler TablegenHLSLOptions) 
+ if (MSVC)
+   # No DxcEtw on non-Windows platforms.
+--- a/tools/clang/tools/dxcompiler/dxcapi.cpp
++++ b/tools/clang/tools/dxcompiler/dxcapi.cpp
+@@ -11,7 +11,9 @@
+ 
+ #include "dxc/Support/WinIncludes.h"
+ 
+-#ifdef _WIN32
++#if defined(ENGINE_DXC_STATIC)
++#define DXC_API_IMPORT
++#elif defined(_WIN32)
+ #define DXC_API_IMPORT __declspec(dllexport)
+ #else
+ #define DXC_API_IMPORT __attribute__((visibility("default")))
+--- a/tools/clang/tools/dxcompiler/DXCompiler.cpp
++++ b/tools/clang/tools/dxcompiler/DXCompiler.cpp
+@@ -82,7 +82,47 @@
+   }
+   return hr;
+ }
+-#if defined(LLVM_ON_UNIX)
++#if defined(ENGINE_DXC_STATIC)
++// Static embedding owns the same process lifetime that DllMain owns in a DLL.
++// Shutdown is terminal and requires every compiler job and COM object to end.
++static INIT_ONCE EngineDxcInitOnce = INIT_ONCE_STATIC_INIT;
++static HRESULT EngineDxcInitResult = E_UNEXPECTED;
++static LONG EngineDxcStopped = 0;
++
++static BOOL CALLBACK EngineDxcInitializeOnce(PINIT_ONCE, PVOID, PVOID *) {
++  EventRegisterMicrosoft_Windows_DXCompiler_API();
++  DxcEtw_DXCompilerInitialization_Start();
++  EngineDxcInitResult = InitMaybeFail();
++  DxcEtw_DXCompilerInitialization_Stop(EngineDxcInitResult);
++  if (FAILED(EngineDxcInitResult))
++    EventUnregisterMicrosoft_Windows_DXCompiler_API();
++  return TRUE;
++}
++
++extern "C" HRESULT WINAPI EngineDxcInitialize() {
++  if (InterlockedCompareExchange(&EngineDxcStopped, 0, 0))
++    return E_UNEXPECTED;
++  if (!InitOnceExecuteOnce(&EngineDxcInitOnce, EngineDxcInitializeOnce, nullptr,
++                          nullptr))
++    return HRESULT_FROM_WIN32(GetLastError());
++  return EngineDxcInitResult;
++}
++
++extern "C" void WINAPI EngineDxcShutdown() {
++  if (InterlockedCompareExchange(&EngineDxcStopped, 1, 0) ||
++      FAILED(EngineDxcInitResult))
++    return;
++  DxcEtw_DXCompilerShutdown_Start();
++  DxcSetThreadMallocToDefault();
++  ::hlsl::options::cleanupHlslOptTable();
++  ::llvm::sys::fs::CleanupPerThreadFileSystem();
++  ::llvm::llvm_shutdown();
++  DxcClearThreadMalloc();
++  DxcCleanupThreadMalloc();
++  DxcEtw_DXCompilerShutdown_Stop(S_OK);
++  EventUnregisterMicrosoft_Windows_DXCompiler_API();
++}
++#elif defined(LLVM_ON_UNIX)
+ HRESULT __attribute__((constructor)) DllMain() { return InitMaybeFail(); }
+ 
+ void __attribute__((destructor)) DllShutdown() {

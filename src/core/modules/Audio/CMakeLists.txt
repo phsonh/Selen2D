@@ -1,0 +1,7 @@
+add_library(engine_audio STATIC Audio.cpp Decoder.cpp LoopingReader.cpp)
+target_include_directories(engine_audio PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../../..")
+target_link_libraries(engine_audio PUBLIC SDL3::SDL3-static engine_jobs PRIVATE engine_file DependencyVorbis DependencyDrWav)
+target_compile_features(engine_audio PUBLIC cxx_std_20)
+if(MSVC)
+    target_compile_options(engine_audio PRIVATE /W4 /utf-8)
+endif()

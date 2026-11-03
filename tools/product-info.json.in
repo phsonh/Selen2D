@@ -1,0 +1,11 @@
+{
+  "product": "@ENGINE_PRODUCT_NAME@",
+  "version": "@PROJECT_VERSION@",
+  "fileVersion": "@ENGINE_FILE_VERSION@",
+  "developer": "@ENGINE_DEVELOPER@",
+  "copyright": "@ENGINE_COPYRIGHT@",
+  "runtimeExecutable": "@ENGINE_RUNTIME_NAME@@CMAKE_EXECUTABLE_SUFFIX@",
+  "packExecutable": "@ENGINE_PACK_NAME@@CMAKE_EXECUTABLE_SUFFIX@",
+  "license": "MIT",
+  "versionPolicy": "Development revisions; compatibility changes are documented explicitly."
+}

@@ -1,0 +1,30 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "selen2d-release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "selen2d-debug",
+      "inherits": "selen2d-release",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "selen2d-release", "configurePreset": "selen2d-release" },
+    { "name": "selen2d-debug", "configurePreset": "selen2d-debug" }
+  ],
+  "testPresets": [
+    { "name": "selen2d-release", "configurePreset": "selen2d-release", "output": { "outputOnFailure": true } },
+    { "name": "selen2d-debug", "configurePreset": "selen2d-debug", "output": { "outputOnFailure": true } }
+  ]
+}

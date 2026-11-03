@@ -1,0 +1,53 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+
+/tests/
+/devs/
+/build/
+/releases/
+
+# Local output, private launch material and per-machine configuration.
+/CMakeUserPresets.json
+/launch
+**/launch.h
+*.pdb
+*.exp
+*.ilk
+*.log
+.vs/
+.idea/
+.env
+.env.*
+*.key
+*.pem
