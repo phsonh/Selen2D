@@ -149,7 +149,13 @@ target_link_libraries(engine_core PUBLIC SDL3::SDL3-static LuaJIT::LuaJIT engine
 
 set(ENGINE_EXECUTABLE "${ENGINE_RUNTIME_NAME}${CMAKE_EXECUTABLE_SUFFIX}")
 configure_file(res/windows/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/engine-version.rc" @ONLY)
-add_executable(engine_app main.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/engine-version.rc")
+set(ENGINE_ICON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/res/windows/selen2d-logo.ico")
+configure_file(res/windows/app-icon.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/app-icon.rc" @ONLY)
+set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/generated/app-icon.rc"
+    PROPERTIES OBJECT_DEPENDS "${ENGINE_ICON_FILE}")
+add_executable(engine_app main.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/engine-version.rc"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/app-icon.rc")
 target_include_directories(engine_app PRIVATE "${CMAKE_BINARY_DIR}/generated")
 add_library(engine_startup STATIC engine/Startup.cpp)
 target_include_directories(engine_startup PUBLIC .)
