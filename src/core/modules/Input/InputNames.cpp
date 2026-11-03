@@ -273,9 +273,13 @@ constexpr NamedInput buttons[]{
     {"right_paddle1",SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1},{"left_paddle1",SDL_GAMEPAD_BUTTON_LEFT_PADDLE1},
     {"right_paddle2",SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2},{"left_paddle2",SDL_GAMEPAD_BUTTON_LEFT_PADDLE2},
     {"touchpad",SDL_GAMEPAD_BUTTON_TOUCHPAD},
-    {"left_trigger",leftTriggerButton},{"right_trigger",rightTriggerButton}
+    {"left_trigger",leftTriggerButton},{"right_trigger",rightTriggerButton},
+    {"left_stick_up",leftStickUpButton},{"left_stick_down",leftStickDownButton},
+    {"left_stick_left",leftStickLeftButton},{"left_stick_right",leftStickRightButton},
+    {"right_stick_up",rightStickUpButton},{"right_stick_down",rightStickDownButton},
+    {"right_stick_left",rightStickLeftButton},{"right_stick_right",rightStickRightButton}
 };
-static_assert(std::size(buttons)==SDL_GAMEPAD_BUTTON_COUNT+2);
+static_assert(std::size(buttons)==gamepadButtonCount);
 constexpr NamedInput axes[]{
     {"left_x",SDL_GAMEPAD_AXIS_LEFTX},{"left_y",SDL_GAMEPAD_AXIS_LEFTY},
     {"right_x",SDL_GAMEPAD_AXIS_RIGHTX},{"right_y",SDL_GAMEPAD_AXIS_RIGHTY},

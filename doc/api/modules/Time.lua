@@ -1,8 +1,8 @@
 ---@meta
 
--- Selen2D v2.0.0 一号机基线声明；仅供编辑器，不应执行。
+-- Selen2D 二号机已实现声明；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Time/Time.cpp、core/modules/Time、core/runtime/Clock。
--- 设计依据：devs/design/Solongo API 一号机/modules/Time.md。
+-- 设计依据：二号机 modules/Time.md。
 -- 查询立即返回，不改变时钟。参数数量/类型不符、非法数值或转换溢出均抛 Lua 错误。
 ---@class TimeDate
 ---@field year integer 公历年。
@@ -36,15 +36,15 @@ function Time.GetFrameCount() end
 function Time.GetDeltaMilliseconds() end
 
 ---返回 frames / fps，不取整；立即执行纯数值换算。
----frames 必须有限、非负，可以为小数；fps 必须有限且大于 0。结果非有限时抛错。
+---frames 必须有限，允许负数和小数；fps 必须有限且大于 0。结果非有限时抛错。
 ---@param frames number
----@param fps? number 省略或 nil 时读取当前 Runtime.GetTargetFPS()，不读取实际 FPS。
+---@param fps number 必填；不读取 Runtime 目标或实际 FPS。
 ---@return number seconds
 function Time.FramesToSeconds(frames, fps) end
 
----将 seconds * fps 四舍五入为整数帧，恰为半帧时向上；立即执行，不修改任何计数。
----seconds 必须有限、非负；fps 必须有限且大于 0。结果超过 2^53-1 或非有限时抛错。
+---将 seconds * fps 舍入为最近整数帧，恰为半帧时远离零；立即执行，不修改任何计数。
+---seconds 必须有限，允许负数；fps 必须有限且大于 0。结果绝对值超过 2^53-1 或非有限时抛错。
 ---@param seconds number
----@param fps? number 省略或 nil 时读取当前目标 FPS。
+---@param fps number 必填；不读取 Runtime 目标或实际 FPS。
 ---@return integer frames
 function Time.SecondsToFrames(seconds, fps) end

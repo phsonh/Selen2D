@@ -1,7 +1,7 @@
 ---@meta
 
--- Selen2D v2.0.0 一号机基线声明；仅供编辑器，不应执行。
--- 来源：lua_bind/modules/Debug、core/modules/Debug、core/runtime/Log；设计依据：一号机/modules/Debug.md。
+-- Selen2D 二号机已实现声明；仅供编辑器，不应执行。
+-- 来源：lua_bind/modules/Debug、core/modules/Debug、core/runtime/Log；设计依据：二号机/modules/Debug.md。
 -- 参数数量和类型错误抛 Lua 错误；日志不隐式 tostring。弹窗是 SDL 主线程同步阻塞操作。
 ---@alias DebugDialogType 'info'|'warning'|'error'
 ---@class DebugModule
@@ -15,9 +15,9 @@ function Debug.Log(message) end
 ---@param message string
 function Debug.Warn(message) end
 
----记录 Error 日志并立即设置宿主退出请求，无返回值；有效调用自身不抛 Lua 错误。
----当前 Lua 代码继续执行，宿主随后在安全边界退出并调用 ExitFunction；pcall 不能取消请求。
----不会自动弹窗；参数使用错误仍抛错且不会设置退出请求。
+---记录 Error 日志后立即抛出含原消息的 Lua 错误，没有正常返回路径，不自动弹窗。
+---pcall/xpcall/coroutine 可以捕获；捕获后可继续后续帧，不额外设置退出请求。
+---未捕获错误到达宿主边界才安全关闭；不会取消此前独立的 Runtime.Quit 请求。
 ---@param message string
 function Debug.Error(message) end
 

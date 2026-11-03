@@ -44,11 +44,22 @@ int Warn(lua_State* L) {
     return 0;
 }
 
-int Error(lua_State* L) {
+int RecordError(lua_State* L) {
     Count(L, 1, 1);
-    core::runtime::Log::Error(CheckString(L, 1));
-    *static_cast<bool*>(lua_touserdata(L, lua_upvalueindex(1))) = true;
+    const auto message = CheckString(L, 1);
+    // A logging failure cannot replace or suppress the requested Lua error.
+    try { core::runtime::Log::Error(message); } catch (...) {}
     return 0;
+}
+
+int Error(lua_State* L) {
+    char diagnostic[4096]{};
+    if (TryFunction<RecordError>(L, diagnostic, sizeof(diagnostic)) < 0)
+        lua_pushstring(L, diagnostic);
+    else
+        lua_pushvalue(L, 1); // Preserve the original string, including length/NUL.
+    // All C++ exception scopes have ended before LuaJIT unwinds to its caller.
+    return lua_error(L);
 }
 
 int MessageBox(lua_State* L) {
@@ -115,14 +126,13 @@ int ButtonBox(lua_State* L) {
 }
 }
 
-void Register(lua_State* L, bool& quitRequested) {
+void Register(lua_State* L) {
     const luaL_Reg functions[] = {
-        {"Log", Guard<Log>}, {"Warn", Guard<Warn>}, {"Error", Guard<Error>},
+        {"Log", Guard<Log>}, {"Warn", Guard<Warn>}, {"Error", Error},
         {"MessageBox", Guard<MessageBox>}, {"ButtonBox", Guard<ButtonBox>},
         {nullptr, nullptr}
     };
-    lua_pushlightuserdata(L, &quitRequested);
-    luaL_openlib(L, "Debug", functions, 1);
+    luaL_openlib(L, "Debug", functions, 0);
     lua_pop(L, 1);
 }
 }

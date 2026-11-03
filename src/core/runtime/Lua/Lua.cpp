@@ -1,5 +1,6 @@
 #include "Lua.h"
 #include "VfsScripts.h"
+#include "Error.h"
 #include "core/runtime/Log/Log.h"
 
 namespace core::runtime::Lua {
@@ -8,8 +9,10 @@ lua_State* state{};
 int frameRef=LUA_NOREF, exitRef=LUA_NOREF;
 bool exitCalled{};
 void ReadError(std::string& error) {
-    const auto* message=lua_tostring(state,-1);
-    error=message ? message : "Unknown Lua error";
+    std::size_t size{};
+    const auto* message=lua_tolstring(state,-1,&size);
+    if(message) error.assign(message,size);
+    else error="Unknown Lua error";
     lua_pop(state,1);
 }
 bool SetCallback(lua_State* caller, int index, int& reference) {
@@ -26,11 +29,15 @@ bool CallCallback(int reference, std::string& error) {
     error.clear();
     if(!state) { error="Lua runtime is not initialized"; return false; }
     if(reference==LUA_NOREF || reference==LUA_REFNIL) return true;
+    const int handler=lua_gettop(state)+1;
+    lua_pushcfunction(state,ErrorTraceback);
     lua_rawgeti(state,LUA_REGISTRYINDEX,reference);
     if(!lua_isfunction(state,-1)) {
-        lua_pop(state,1); error="Stored Lua callback is not a function"; return false;
+        lua_pop(state,2); error="Stored Lua callback is not a function"; return false;
     }
-    if(lua_pcall(state,0,0,0)) { ReadError(error); return false; }
+    const int status=lua_pcall(state,0,0,handler);
+    lua_remove(state,handler);
+    if(status) { ReadError(error); return false; }
     return true;
 }
 }

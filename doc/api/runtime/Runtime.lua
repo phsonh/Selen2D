@@ -1,10 +1,10 @@
 ---@meta
 
--- Selen2D v2.0.0 一号机基线声明；仅供编辑器，不应由游戏执行。
+-- Selen2D 二号机已实现声明；仅供编辑器，不应由游戏执行。
 -- 核对来源：lua_bind/runtime/Runtime.cpp、core/runtime/Clock、core/runtime/Lua、engine/Engine.cpp。
--- 设计依据：devs/design/Solongo API 一号机/runtime/Runtime.md。
+-- 设计依据：二号机 runtime/Runtime.md。
 -- 所有函数严格检查实参数量和类型；不将字符串转换为数字。调用错误抛 Lua 错误。
--- Runtime 只调度整帧回调；不会自动更新、碰撞或绘制 Object，也不管理游戏暂停/Replay。
+-- Runtime 只调度整帧回调；不会自动 Commit、更新、碰撞或绘制 Object，也不管理游戏暂停/Replay。
 ---@class RuntimeModule
 Runtime = {}
 
@@ -18,6 +18,7 @@ function Runtime.SetFrameFunction(func) end
 ---替换正常退出回调；无实参、返回值丢弃，退出阶段最多调用一次（抛错或重新注册也不重试）。
 ---默认未注册。执行时 Lua、File、Audio、资源仍有效，但普通绘图没有活动帧；强杀/崩溃不保证调用。
 ---必须传同一 VM 的函数，不接受 nil；回调错误被报告后仍继续清理。
+---入口报错后已注册的回调仍执行；此时 Object.Commit 已禁止。其后收尾显式请求的 Delete，不激活剩余对象。
 ---@param func fun()
 function Runtime.SetExitFunction(func) end
 
@@ -36,6 +37,12 @@ function Runtime.SetTargetFPS(fps) end
 function Runtime.GetTargetFPS() end
 
 ---立即读取已采集帧间隔的实际 FPS；尚无有效间隔时为 0。
----基线用最近至多 60 个 Runtime 帧开始间隔计算，不等于目标值；统计窗口为实现细节。
+---使用最近至多 60 个实际 Lua 帧函数开始间隔，不把未注册回调的空帧计入；不以 Present 为计数条件。
 ---@return number fps
 function Runtime.GetCurrentFPS() end
+
+---返回去除程序名的原始启动参数快照的新表，保留顺序、空字符串、重复项及参数边界。
+---入口前准备；可在帧回调或 ExitFunction 查询。无参数时返回空表；不创建全局 arg。
+---包含引擎已识别的参数；不解析游戏选项，不改变入口、CWD 或任何文件授权。
+---@return string[] arguments
+function Runtime.GetArguments() end

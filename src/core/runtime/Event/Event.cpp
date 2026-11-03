@@ -32,6 +32,7 @@ namespace core::runtime::Event {
     void Pump() {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            Window::HandleEvent(event);
             Input::HandleEvent(event);
             switch (event.type)
             {
@@ -50,7 +51,7 @@ namespace core::runtime::Event {
             }
         }
     }
-    void EndFrame() { Input::EndFrame(); }
+    void EndFrame() { Window::PublishFrameState(); Input::EndFrame(); }
     void Shutdown()
     {
         if (!Initialized)

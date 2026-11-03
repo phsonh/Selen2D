@@ -1,8 +1,8 @@
 ---@meta
 
--- Selen2D v2.0.0 一号机基线声明；仅供编辑器，不应执行。
+-- Selen2D Window 声明（14 个公开函数）；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Window、core/modules/Window、core/modules/Graphic/Graphic.cpp、engine/Engine.cpp。
--- 设计依据：devs/design/Solongo API 一号机/modules/Window.md。
+-- 设计依据：二号机 Window 契约；操作系统状态与绘制目标可用性分别处理。
 -- 单一宿主窗口；所有接口须在已初始化 SDL/图形主线程调用。参数数量/类型或平台操作失败抛错。
 -- Setter 无返回值；Getter 读取当前已应用状态，不推动状态变更。系统可能异步应用窗口请求。
 -- 启动客户区基线为 1280x960，窗口先隐藏创建，在入口配置完成后由宿主显示；不等待游戏资源加载。
@@ -23,7 +23,9 @@ function Window.GetTitle() end
 ---@param height integer
 function Window.SetSize(width, height) end
 
----返回操作系统当前客户区尺寸；与 Input.GetMousePosition 使用同一单位，不含边框/标题栏。
+---返回本帧已确认客户区逻辑尺寸；与 Input.GetMousePosition 共用快照，不含边框/标题栏。
+---首个输入帧前读取已应用启动尺寸；帧内请求 resize 不追改已发布快照，下一采集更新。
+---窗口逻辑中心为 (0,0)，X 右正/Y 上正；GPU 像素尺寸不向 Lua 暴露。
 ---@return integer width
 ---@return integer height
 function Window.GetSize() end
@@ -33,7 +35,7 @@ function Window.GetSize() end
 ---@param enabled boolean
 function Window.SetFullscreen(enabled) end
 
----读取当前原生窗口全屏标志；不会把尚未应用的请求报告成已生效。
+---读取窗口事件已经确认的全屏状态；不会把隐藏窗口的待应用请求报告成已生效。
 ---@return boolean fullscreen
 function Window.IsFullscreen() end
 
@@ -66,3 +68,8 @@ function Window.IsCursorVisible() end
 ---读取主窗口是否拥有键盘输入焦点；失焦不会自动暂停游戏逻辑。
 ---@return boolean focused
 function Window.IsFocused() end
+
+---读取窗口事件已经确认的系统最小化状态；隐藏、失焦或交换链无图像不等于最小化。
+---查询不泵事件、不获取/等待 GPU，也不暂停 Lua、音频或离屏工作；服务无效时抛错。
+---@return boolean minimized
+function Window.IsMinimized() end

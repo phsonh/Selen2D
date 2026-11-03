@@ -1,4 +1,5 @@
 #include "VfsScripts.h"
+#include "Error.h"
 #include "core/modules/File/Vfs.h"
 #include "lua_bind/Guard.h"
 #include <algorithm>
@@ -30,14 +31,9 @@ const FileSystem& Filesystem(lua_State* L) {
 void Count(lua_State* L, int count) {
     if (lua_gettop(L) != count) throw std::invalid_argument("VFS script function requires one path/module name");
 }
-int Traceback(lua_State* L) {
-    const char* message = lua_tostring(L, 1);
-    luaL_traceback(L, L, message ? message : "non-string Lua error", 1);
-    return 1;
-}
 int ExecuteLoaded(lua_State* L, int results) {
     const int function = lua_gettop(L);
-    lua_pushcfunction(L, Traceback);
+    lua_pushcfunction(L, ErrorTraceback);
     lua_insert(L, function);
     const int status = lua_pcall(L, 0, results, function);
     lua_remove(L, function);

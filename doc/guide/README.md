@@ -5,9 +5,11 @@
 - [开始运行与修改 Lua](getting-started.md)：目录、入口、固定项目根和常用修改。
 - [编写 Shader](shader.md)：运行时编译、相对 include、Lua 参数与一号机 HLSL ABI。
 - [API 声明](../api/)：`modules/*.lua` 与 `runtime/Runtime.lua` 是编辑器定义，不能 `require`、`dofile` 或作为入口执行。
+- [帧调度、时间与错误](runtime.md)：二号机已实现的显式对象提交、时间换算和安全关闭。
+- [输入快照与窗口坐标](input-window.md)：二号机输入配置、逻辑坐标和状态查询。
 
 原生模块由引擎注册为顶层 `Runtime`、`Window`、`Input`、`Resource`、`Graphic`、`Time` 等全局表。示例直接调用这些表，不从 API 声明文件加载实现。
 
 发行包的项目许可证、第三方说明和依赖许可证分别放在本目录的 `LICENSE`、`THIRD_PARTY_NOTICES.txt` 和 `licenses/` 中。请保留这些文件。
 
-这里记录的是一号机已有接口与启动壳，不引入 `launch.h`、授权配置或加密配置。
+启动与 Shader 示例暂保留当前可运行的一号机路径；二号机模块按阶段迁移，本文链接及 API 声明随实际实现更新。

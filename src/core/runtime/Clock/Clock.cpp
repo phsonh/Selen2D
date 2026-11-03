@@ -19,16 +19,17 @@ void Clock::SetTargetFPS(double fps) {
 }
 void Clock::BeginFrame(std::uint64_t now,bool invokesCallback) {
     if(now<origin_ || (started_ && now<start_)) throw std::logic_error("Runtime clock moved backwards");
-    if(started_) {
-        const auto interval=now-start_;
-        total_-=intervals_[cursor_]; total_+=interval;
-        intervals_[cursor_]=interval; cursor_=(cursor_+1)%intervals_.size();
-        if(samples_<intervals_.size()) ++samples_;
-        deltaMs_=double(interval)/1'000'000.;
-    }
     start_=now; started_=true;
     if(invokesCallback) {
         if(callbacks_==std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("Runtime frame counter overflow");
+        if(callbacks_) {
+            const auto interval=now-callbackStart_;
+            total_-=intervals_[cursor_]; total_+=interval;
+            intervals_[cursor_]=interval; cursor_=(cursor_+1)%intervals_.size();
+            if(samples_<intervals_.size()) ++samples_;
+            deltaMs_=double(interval)/1'000'000.;
+        }
+        callbackStart_=now;
         ++callbacks_;
     }
 }

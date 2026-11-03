@@ -27,10 +27,10 @@ int GetElapsedMilliseconds(lua_State* L) { Count(L,0,0); lua_pushnumber(L,Clock(
 int GetFrameCount(lua_State* L) { Count(L,0,0); lua_pushnumber(L,static_cast<double>(Clock(L).FrameCount())); return 1; }
 int GetDeltaMilliseconds(lua_State* L) { Count(L,0,0); lua_pushnumber(L,Clock(L).DeltaMilliseconds()); return 1; }
 int FramesToSeconds(lua_State* L) {
-    Count(L,1,2); lua_pushnumber(L,Native::FramesToSeconds(Number(L,1),OptionalNumber(L,2,Clock(L).TargetFPS()))); return 1;
+    Count(L,2,2); lua_pushnumber(L,Native::FramesToSeconds(Number(L,1),Number(L,2))); return 1;
 }
 int SecondsToFrames(lua_State* L) {
-    Count(L,1,2); lua_pushnumber(L,Native::SecondsToFrames(Number(L,1),OptionalNumber(L,2,Clock(L).TargetFPS()))); return 1;
+    Count(L,2,2); lua_pushnumber(L,Native::SecondsToFrames(Number(L,1),Number(L,2))); return 1;
 }
 }
 void Register(lua_State* L,core::runtime::Clock& clock) {

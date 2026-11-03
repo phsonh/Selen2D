@@ -42,7 +42,8 @@ namespace Log=core::runtime::Log;
 namespace Graphic=core::modules::Graphic;
 // Host lifetime, not game state. Borrowed by Lua until the VM is closed.
 core::runtime::Clock clock;
-bool started{}, initialized{}, ran{}, quitRequested{}, exitCalled{}, exitSucceeded{true};
+bool started{}, initialized{}, bindingsReady{}, ran{}, quitRequested{}, exitCalled{}, exitSucceeded{true};
+std::vector<std::string> startupArguments;
 core::modules::Audio::AudioSystem audio;
 std::unique_ptr<lua_bind::modules::Object::Context> objects;
 std::unique_ptr<ResourceHost> resources;
@@ -54,7 +55,7 @@ std::shared_ptr<const core::modules::File::FileSystem> files;
 void Report(const char* context,const std::string& error) { Log::Error(std::string(context)+": "+error); }
 void RegisterBindings() {
     auto* L=Lua::GetState();
-    lua_bind::runtime::Register(L,clock,quitRequested);
+    lua_bind::runtime::Register(L,clock,quitRequested,startupArguments);
     lua_bind::modules::Time::Register(L,clock);
     lua_bind::modules::Text::Register(L);
     lua_bind::modules::Window::Register(L);
@@ -71,11 +72,12 @@ void RegisterBindings() {
     lua_bind::modules::Graphic::Register(L,*graphicBindings);
     objects=std::make_unique<lua_bind::modules::Object::Context>(L,65536);
     lua_bind::modules::Object::Register(L,*objects);
-    lua_bind::modules::Debug::Register(L,quitRequested);
+    lua_bind::modules::Debug::Register(L);
 }
 bool Exit() {
-    if(!initialized || exitCalled) return exitSucceeded;
+    if(!bindingsReady || exitCalled) return exitSucceeded;
     exitCalled=true;
+    if(objects) objects->BeginShutdown();
     std::string error;
     exitSucceeded=Lua::CallExitFunction(error);
     if(!exitSucceeded) Report("Lua exit callback failed",error);
@@ -87,9 +89,10 @@ bool Pump() {
     return !quitRequested;
 }
 }
-bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::FileSystem> fileSystem) {
+bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::FileSystem> fileSystem,
+    const std::vector<std::string>& arguments) {
     if(started) { Log::Error("Engine must be shut down before reinitialization"); return false; }
-    started=true; initialized=ran=quitRequested=exitCalled=false; exitSucceeded=true;
+    started=true; initialized=bindingsReady=ran=quitRequested=exitCalled=false; exitSucceeded=true;
     clock.Reset(SDL_GetTicksNS());
     if(!Log::Init()) return false;
     Log::Info(std::string(build::Title) + " | " + build::Developer + " | MIT License (third-party notices retained)");
@@ -97,6 +100,7 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
     try {
         if(!fileSystem) throw std::invalid_argument("Engine requires a mounted FileSystem");
         files=std::move(fileSystem);
+        startupArguments=arguments;
         if(!core::runtime::SDL::Init() || !Event::Init() || !Lua::Init() ||
            !core::modules::Debug::Init() || !core::modules::Window::Init(1280,960) ||
            !core::modules::Input::Init() || !Graphic::Init() || !core::modules::Math::Init())
@@ -105,6 +109,7 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         audio.Initialize();
         resources=std::make_unique<ResourceHost>(Graphic::Uploads(),files,&audio,&Graphic::Shaders());
         RegisterBindings();
+        bindingsReady=true; // Entry errors must still run an already registered ExitFunction.
         std::string error;
         if(!entry.empty() && !Lua::DoFile(entry,*files,error)) {
             Report("Failed to execute entry script",error); return false;
@@ -145,13 +150,12 @@ bool Run(std::uint64_t frameLimit) {
             if(!recording) break;
             if(!Pump()) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             Event::EndFrame();
-            objects->BeginFrame();
             if(quitRequested) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             clock.BeginFrame(SDL_GetTicksNS(),Lua::HasFrameFunction());
             std::string error;
             if(!Lua::CallFrameFunction(error)) {
-                renderer.AbortFrame(); recording=false;
                 Report("Lua frame callback failed",error); succeeded=false;
+                renderer.AbortFrame(); recording=false;
                 Graphic::ApplyPendingPresentation(); break;
             }
             renderer.EndFrame(); recording=false;
@@ -163,6 +167,7 @@ bool Run(std::uint64_t frameLimit) {
             if(frameLimit && hostFrames>=frameLimit) quitRequested=true;
         }
     } catch(const std::exception& error) {
+        Report("Engine frame failed",error.what()); succeeded=false;
         // A terminal GPU failure may already have closed recording. Keep its
         // in-flight pins until Graphic shutdown drains the device.
         if(recording) {
@@ -170,7 +175,6 @@ bool Run(std::uint64_t frameLimit) {
             catch(const std::exception& cleanup) { Report("Engine frame cleanup failed",cleanup.what()); }
             catch(...) { Log::Error("Engine frame cleanup failed: unknown native exception"); }
         }
-        Report("Engine frame failed",error.what()); succeeded=false;
     }
     quitRequested=true;
     const bool exited=Exit();
@@ -181,16 +185,25 @@ bool Shutdown() {
     quitRequested=true;
     Exit(); // Also covers Init followed by Shutdown without Run.
     Log::Info("Engine shutting down");
+    if(objects) {
+        objects->BeginShutdown();
+        std::string error;
+        if(!objects->FinalizeShutdown(error)) {
+            Report("Object shutdown callbacks failed",error);
+            exitSucceeded=false;
+        }
+    }
     // Exit can still use File, Audio and initialized resources. Ordinary drawing
     // is illegal here because no frame is recording. Revoke bindings afterwards.
     graphicBindings.reset(); resourceBindings.reset(); audioBindings.reset();
-    resources.reset(); objects.reset();
+    objects.reset(); resources.reset();
     Lua::Shutdown();
+    startupArguments.clear();
     core::modules::Math::Shutdown(); audio.Shutdown(); Graphic::Shutdown();
     files.reset();
     core::modules::Input::Shutdown(); core::modules::Window::Shutdown();
     core::modules::Debug::Shutdown(); Event::Shutdown(); core::runtime::SDL::Shutdown();
-    initialized=false; started=false;
+    initialized=bindingsReady=false; started=false;
     Log::Info("Engine shutdown complete"); Log::Shutdown();
     return exitSucceeded;
 }

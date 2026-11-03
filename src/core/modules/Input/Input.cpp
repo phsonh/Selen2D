@@ -14,7 +14,7 @@ SDL_Window* window{};
 SDL_WindowID windowId{};
 bool collecting{};
 Uint64 wheelNotBefore{};
-bool Focused() { return window && SDL_GetKeyboardFocus()==window && !(SDL_GetWindowFlags(window)&(SDL_WINDOW_MINIMIZED|SDL_WINDOW_HIDDEN)); }
+bool Focused() { return window && Window::IsFocused() && !Window::IsMinimized() && !(SDL_GetWindowFlags(window)&SDL_WINDOW_HIDDEN); }
 void Check() { if(!window || !SDL_IsMainThread()) throw std::logic_error("Input requires an initialized main-thread service"); }
 }
 bool Init() {
@@ -34,6 +34,11 @@ void BeginFrame() { if(window) { wheel.Begin(Focused()); collecting=true; } }
 void HandleEvent(const SDL_Event& event) {
     if(!window) return;
     gamepad.Event(event);
+    if(event.type==SDL_EVENT_GAMEPAD_REMOVED || event.type==SDL_EVENT_GAMEPAD_REMAPPED)
+        snapshot.InvalidateGamepad(event.gdevice.which,event.type==SDL_EVENT_GAMEPAD_REMOVED);
+    if((event.type==SDL_EVENT_WINDOW_FOCUS_LOST || event.type==SDL_EVENT_WINDOW_MINIMIZED || event.type==SDL_EVENT_WINDOW_HIDDEN) &&
+        event.window.windowID==windowId) snapshot.InvalidateFocus();
+    if(event.type==SDL_EVENT_WINDOW_MOUSE_LEAVE && event.window.windowID==windowId) snapshot.InvalidateMouse();
     if(!collecting) return;
     if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST || event.type==SDL_EVENT_WINDOW_MINIMIZED || event.type==SDL_EVENT_WINDOW_HIDDEN) {
         if(event.window.windowID==windowId) wheel.Focus(false);
@@ -49,11 +54,13 @@ void HandleEvent(const SDL_Event& event) {
 }
 void EndFrame() {
     if(!window || !collecting) return;
-    Sample sample; sample.focused=Focused(); sample.mouseFocused=SDL_GetMouseFocus()==window;
+    const auto metrics=Window::GetFrameMetrics();
+    Sample sample; sample.focused=metrics.focused && !metrics.minimized && !metrics.hidden;
+    sample.mouseFocused=SDL_GetMouseFocus()==window;
     int count{}; const bool* keys=SDL_GetKeyboardState(&count);
     sample.keys={keys,static_cast<std::size_t>(count)};
     sample.mouseButtons=SDL_GetMouseState(&sample.mouseX,&sample.mouseY);
-    SDL_GetWindowSize(window,&sample.width,&sample.height);
+    sample.width=metrics.logicalSize.width; sample.height=metrics.logicalSize.height;
     sample.wheelX=wheel.X(); sample.wheelY=wheel.Y();
     sample.gamepad=gamepad.Poll();
     snapshot.Publish(sample); collecting=false;
@@ -67,4 +74,9 @@ void SetMouseEnabled(bool enabled) {
     snapshot.SetMouseEnabled(enabled);
     if(!enabled) wheel.Clear();
 }
+void SetGamepadEnabled(bool enabled) { Check(); snapshot.SetGamepadEnabled(enabled); }
+void SetGamepadDeadzone(double left,double right) { Check(); snapshot.SetGamepadDeadzone(left,right); }
+void SetGamepadTriggerDeadzone(double left,double right) { Check(); snapshot.SetGamepadTriggerDeadzone(left,right); }
+void SetGamepadStickButtonThreshold(double press,double release) { Check(); snapshot.SetGamepadStickButtonThreshold(press,release); }
+void SetGamepadTriggerThreshold(double press,double release) { Check(); snapshot.SetGamepadTriggerThreshold(press,release); }
 }

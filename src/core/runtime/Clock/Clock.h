@@ -19,7 +19,7 @@ public:
     double DeltaMilliseconds() const { return deltaMs_; }
     std::uint64_t FrameCount() const { return callbacks_; }
 private:
-    std::uint64_t origin_{}, start_{}, callbacks_{}, budget_{16666667};
+    std::uint64_t origin_{}, start_{}, callbackStart_{}, callbacks_{}, budget_{16666667};
     double targetFPS_{60}, deltaMs_{};
     bool started_{};
     std::array<std::uint64_t,60> intervals_{};

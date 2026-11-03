@@ -1,8 +1,8 @@
 ---@meta
 
--- Selen2D v2.0.0 一号机基线声明；仅供编辑器，不应执行。
+-- Selen2D Input 声明（19 个公开函数）；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Input、core/modules/Input/{Input,InputNames,InputState,Gamepad}.cpp。
--- 设计依据：devs/design/Solongo API 一号机/modules/Input.md。
+-- 设计依据：二号机 Input 契约；配置 Getter 立即更新，采样处理从下一帧生效。
 -- 宿主在每次帧回调前采集一个快照；同帧重复读取不消耗状态。无刚按下/刚松开事件或文本/IME 输入。
 -- 所有接口要求已初始化 SDL 主线程服务；参数数量、类型、大小写或未知名称错误抛 Lua 错误。
 -- 窗口失焦、隐藏或最小化时键/按钮为 false、轴与滚轮为 0、鼠标位置 nil；不会自动暂停游戏。
@@ -255,7 +255,7 @@
 ---| "y"
 ---| "z"
 ---@alias InputMouseButton 'left'|'middle'|'right'|'x1'|'x2'
----@alias InputGamepadButton 'a'|'b'|'x'|'y'|'back'|'guide'|'start'|'left_stick'|'right_stick'|'left_shoulder'|'right_shoulder'|'dpad_up'|'dpad_down'|'dpad_left'|'dpad_right'|'misc1'|'misc2'|'misc3'|'misc4'|'misc5'|'misc6'|'right_paddle1'|'left_paddle1'|'right_paddle2'|'left_paddle2'|'touchpad'|'left_trigger'|'right_trigger'
+---@alias InputGamepadButton 'a'|'b'|'x'|'y'|'back'|'guide'|'start'|'left_stick'|'right_stick'|'left_shoulder'|'right_shoulder'|'dpad_up'|'dpad_down'|'dpad_left'|'dpad_right'|'misc1'|'misc2'|'misc3'|'misc4'|'misc5'|'misc6'|'right_paddle1'|'left_paddle1'|'right_paddle2'|'left_paddle2'|'touchpad'|'left_trigger'|'right_trigger'|'left_stick_up'|'left_stick_down'|'left_stick_left'|'left_stick_right'|'right_stick_up'|'right_stick_down'|'right_stick_left'|'right_stick_right'
 ---@alias InputGamepadAxis 'left_x'|'left_y'|'right_x'|'right_y'|'left_trigger'|'right_trigger'
 
 ---@class InputModule
@@ -277,9 +277,9 @@ function Input.SetMouseEnabled(enabled) end
 ---@return boolean enabled
 function Input.IsMouseEnabled() end
 
----有效时返回客户区左上原点的坐标，X 向右/Y 向下，单位同 Window.GetSize，可有小数。
+---有效时返回客户区中心原点的逻辑坐标，X 向右/Y 向上，可有小数。
 ---鼠标禁用、失焦、隐藏/最小化、离开客户区或尚无有效采样时只返回单个 nil。
----不自动转换到 Graphic Canvas 坐标，不保留旧坐标冒充有效位置。
+---与 Window.GetSize 共用本帧已确认尺寸；(u,v) 转为 (u-W/2,H/2-v)，不使用 GPU 像素。
 ---@return number|nil x
 ---@return number? y 仅 x 非 nil 时存在。
 function Input.GetMousePosition() end
@@ -295,16 +295,73 @@ function Input.GetMouseWheel() end
 ---@return boolean down
 function Input.IsMouseButtonDown(button) end
 
+---设置游戏手柄输入开关，默认 true；只接受 boolean，不关闭物理设备。
+---false 立即清空轴、按钮及迟滞；同帧 true 不恢复旧输入，下一次采集才重新发布。
+---@param enabled boolean
+function Input.SetGamepadEnabled(enabled) end
+
+---返回配置开关；失焦、最小化或断开设备不修改此配置。
+---@return boolean enabled
+function Input.IsGamepadEnabled() end
+
+---返回当前逻辑手柄的连接快照；与启用、焦点、最小化和按钮状态独立。
+---查询不打开设备或泵事件；重映射的中立输入帧不伪装成设备断开。
+---@return boolean connected
+function Input.IsGamepadConnected() end
+
+---设置两个摇杆的径向死区，默认 0.2,0.2；有限 number 且 0<=d<1。
+---省略 right 则等于 left；显式传入时必须为 number；整组验证成功后原子更新。
+---配置立即可读；下次采集按新值重映射并清除有关方向迟滞，不追改本帧轴/按钮。
+---@param left number
+---@param right? number
+function Input.SetGamepadDeadzone(left, right) end
+
+---@return number left
+---@return number right
+function Input.GetGamepadDeadzone() end
+
+---设置两扳机死区，默认 0.05,0.05；范围及原子性同摇杆死区。
+---归一化值 r<=d 为 0，否则 (r-d)/(1-d)；轴及数字按钮共用此结果。
+---@param left number
+---@param right? number
+function Input.SetGamepadTriggerDeadzone(left, right) end
+
+---@return number left
+---@return number right
+function Input.GetGamepadTriggerDeadzone() end
+
+---设置八个摇杆方向按钮共用的阈值，默认 0.5,0.4；有限 0<=release<press<=1。
+---省略 release 时为 press*0.8；>=press 激活，<=release 释放，中间保持。
+---改变配置只在下一采集清除旧迟滞并应用；各方向独立，可同时激活两个斜向分量。
+---@param press number
+---@param release? number
+function Input.SetGamepadStickButtonThreshold(press, release) end
+
+---@return number press
+---@return number release
+function Input.GetGamepadStickButtonThreshold() end
+
+---设置两扳机数字按钮共用的阈值，默认 0.5,0.4；范围和时机同摇杆按钮阈值。
+---按扳机死区处理后的模拟值判定；数字按钮不改变连续轴值。
+---@param press number
+---@param release? number
+function Input.SetGamepadTriggerThreshold(press, release) end
+
+---@return number press
+---@return number release
+function Input.GetGamepadTriggerThreshold() end
+
 ---读取唯一逻辑手柄的标准位置按钮；没有设备/失焦/设备不支持该按钮时 false。
----a/b/x/y 为标准位置语义，非所有品牌印字；扳机数字映射 >=0.5 按下、<=0.4 松开，中间保留状态。
----宿主保持当前设备；断开或重映射时发布完整中立快照，之后才选择替代设备，不混合多个设备。
+---a/b/x/y 为标准位置语义，非所有品牌印字；left_stick/right_stick 始终是实体 L3/R3。
+---方向虚拟按钮使用带方向后缀的八个名字；未启用时仍校验名字，未知名称抛错。
+---断开/替换/重映射、失焦、禁用会清除旧按钮迟滞，不混合多个设备。
 ---@param button InputGamepadButton
 ---@return boolean down
 function Input.IsGamepadButtonDown(button) end
 
 ---读取标准模拟轴；摇杆 [-1,1]、X 向右/Y 向上，扳机 [0,1]；无设备/失焦返回 0。
----基线摇杆使用 0.2 径向死区并重新缩放，向量长度不超过 1；十字键不混入摇杆轴。
----死区和扳机阈值是基线内部实现常量，不提供 Lua 配置接口。
+---使用当前配置的径向死区/扳机死区；摇杆向量裁剪到单位圆，死区外线性重映射。
+---同帧重复读取保持一致；数值配置修改下一次采集生效，禁用/设备失效可立即中立。
 ---@param axis InputGamepadAxis
 ---@return number value
 function Input.GetGamepadAxis(axis) end

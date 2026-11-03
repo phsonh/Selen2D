@@ -7,8 +7,8 @@
 namespace core::modules::Time {
 namespace {
 constexpr double maximumInteger=9007199254740991.;
-void Nonnegative(double value) {
-    if(!std::isfinite(value) || value<0) throw std::invalid_argument("Time values must be finite and nonnegative");
+void Finite(double value) {
+    if(!std::isfinite(value)) throw std::invalid_argument("Time values must be finite");
 }
 void Frequency(double fps) {
     if(!std::isfinite(fps) || fps<=0) throw std::invalid_argument("Time conversion FPS must be finite and positive");
@@ -25,15 +25,15 @@ Date GetDate() {
     return {local.tm_year+1900,local.tm_mon+1,local.tm_mday,local.tm_hour,local.tm_min,local.tm_sec};
 }
 double FramesToSeconds(double frames,double fps) {
-    Nonnegative(frames); Frequency(fps);
+    Finite(frames); Frequency(fps);
     const double result=frames/fps;
     if(!std::isfinite(result)) throw std::overflow_error("Time conversion exceeds numeric range");
     return result;
 }
 double SecondsToFrames(double seconds,double fps) {
-    Nonnegative(seconds); Frequency(fps);
-    const double result=std::round(seconds*fps); // Nonnegative halfway values round up.
-    if(!std::isfinite(result) || result>maximumInteger) throw std::overflow_error("Frame count exceeds Lua exact integer range");
+    Finite(seconds); Frequency(fps);
+    const double result=std::round(seconds*fps); // Halfway values round away from zero on either side.
+    if(!std::isfinite(result) || std::abs(result)>maximumInteger) throw std::overflow_error("Frame count exceeds Lua exact integer range");
     return result;
 }
 }

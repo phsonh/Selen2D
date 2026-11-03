@@ -16,10 +16,6 @@ namespace core::modules::Math {
         constexpr std::uint64_t FullRange = std::uint64_t{1} << 32;
         bool initialized = false;
 
-        struct RandomState {
-            std::uint32_t x, y, z, w;
-        };
-
         constexpr std::uint64_t SplitMix64Next(std::uint64_t& state) {
             auto z = (state += 0x9E3779B97F4A7C15ULL);
             z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -27,9 +23,10 @@ namespace core::modules::Math {
             return z ^ (z >> 31);
         }
 
-        constexpr RandomState ExpandSeed(std::uint32_t seed) {
+        constexpr Random::State ExpandSeed(std::uint32_t seed) {
             std::uint64_t expansion = seed;
-            RandomState result{};
+            Random::State result{};
+            result.seed = seed;
             result.x = static_cast<std::uint32_t>(SplitMix64Next(expansion));
             result.y = static_cast<std::uint32_t>(SplitMix64Next(expansion));
             result.z = static_cast<std::uint32_t>(SplitMix64Next(expansion));
@@ -38,16 +35,7 @@ namespace core::modules::Math {
             return result;
         }
 
-        RandomState randomState = ExpandSeed(0);
-
-        std::uint32_t NextU32() {
-            const std::uint32_t t = randomState.x ^ (randomState.x << 11);
-            randomState.x = randomState.y;
-            randomState.y = randomState.z;
-            randomState.z = randomState.w;
-            randomState.w = randomState.w ^ (randomState.w >> 19) ^ t ^ (t >> 8);
-            return randomState.w;
-        }
+        Random::Generator hostGenerator;
 
         void RequireFinite(double value, const char* argument) {
             if (!std::isfinite(value))
@@ -69,7 +57,7 @@ namespace core::modules::Math {
 
     bool Init() {
         if (initialized) return true;
-        randomState = ExpandSeed(0);
+        hostGenerator.Seed(0);
         initialized = true;
         core::runtime::Log::Debug("Math module initialized");
         return true;
@@ -114,12 +102,27 @@ namespace core::modules::Math {
     }
 
     namespace Random {
-        void Seed(double seed) {
+        Generator::Generator(double seed) { Seed(seed); }
+        void Generator::Seed(double seed) {
             RequireInteger(seed, 0, 4294967295.0, "Math.Random.Seed seed");
-            randomState = ExpandSeed(static_cast<std::uint32_t>(seed));
+            state_ = ExpandSeed(static_cast<std::uint32_t>(seed));
         }
-
-        std::int64_t Int(double begin, double end) {
+        std::uint32_t Generator::GetSeed() const noexcept { return state_.seed; }
+        State Generator::GetState() const noexcept { return state_; }
+        void Generator::SetState(State state) {
+            if (!(state.x | state.y | state.z | state.w))
+                throw std::invalid_argument("Math.Random state words must not all be zero");
+            state_ = state;
+        }
+        std::uint32_t Generator::NextU32() noexcept {
+            const std::uint32_t t = state_.x ^ (state_.x << 11);
+            state_.x = state_.y;
+            state_.y = state_.z;
+            state_.z = state_.w;
+            state_.w = state_.w ^ (state_.w >> 19) ^ t ^ (t >> 8);
+            return state_.w;
+        }
+        std::int64_t Generator::Int(double begin, double end) {
             RequireInteger(begin, -ExactIntegerLimit, ExactIntegerLimit, "Math.Random.Int begin");
             RequireInteger(end, -ExactIntegerLimit, ExactIntegerLimit, "Math.Random.Int end");
             if (begin > end) throw std::invalid_argument("Math.Random.Int requires begin <= end");
@@ -137,7 +140,7 @@ namespace core::modules::Math {
             return first + static_cast<std::int64_t>(sample % n);
         }
 
-        double Float(double begin, double end) {
+        double Generator::Float(double begin, double end) {
             RequireFinite(begin, "Math.Random.Float begin");
             RequireFinite(end, "Math.Random.Float end");
             if (begin > end) throw std::invalid_argument("Math.Random.Float requires begin <= end");
@@ -160,8 +163,12 @@ namespace core::modules::Math {
             return std::max(begin, result);
         }
 
-        int Sign() {
+        int Generator::Sign() {
             return (NextU32() & 1U) == 0 ? -1 : 1;
         }
+        void Seed(double seed) { hostGenerator.Seed(seed); }
+        std::int64_t Int(double begin, double end) { return hostGenerator.Int(begin, end); }
+        double Float(double begin, double end) { return hostGenerator.Float(begin, end); }
+        int Sign() { return hostGenerator.Sign(); }
     }
 }

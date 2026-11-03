@@ -31,13 +31,26 @@ int SetTargetFPS(lua_State* L) {
 }
 int GetTargetFPS(lua_State* L) { Count(L,0); lua_pushnumber(L,Clock(L).TargetFPS()); return 1; }
 int GetCurrentFPS(lua_State* L) { Count(L,0); lua_pushnumber(L,Clock(L).CurrentFPS()); return 1; }
+int GetArguments(lua_State* L) {
+    Count(L,0);
+    const auto& arguments=*static_cast<const std::vector<std::string>*>(lua_touserdata(L,lua_upvalueindex(3)));
+    lua_createtable(L,static_cast<int>(arguments.size()),0);
+    int index=1;
+    for(const auto& value:arguments) {
+        lua_pushlstring(L,value.data(),value.size());
+        lua_rawseti(L,-2,index++);
+    }
+    return 1;
 }
-void Register(lua_State* L,core::runtime::Clock& clock,bool& quitRequested) {
+}
+void Register(lua_State* L,core::runtime::Clock& clock,bool& quitRequested,const std::vector<std::string>& arguments) {
     const luaL_Reg functions[]={
         {"SetFrameFunction",Guard<SetFrameFunction>},{"SetExitFunction",Guard<SetExitFunction>},
         {"Quit",Guard<Quit>},{"SetTargetFPS",Guard<SetTargetFPS>},
-        {"GetTargetFPS",Guard<GetTargetFPS>},{"GetCurrentFPS",Guard<GetCurrentFPS>},{nullptr,nullptr}};
+        {"GetTargetFPS",Guard<GetTargetFPS>},{"GetCurrentFPS",Guard<GetCurrentFPS>},
+        {"GetArguments",Guard<GetArguments>},{nullptr,nullptr}};
     lua_pushlightuserdata(L,&clock); lua_pushlightuserdata(L,&quitRequested);
-    luaL_openlib(L,"Runtime",functions,2); lua_pop(L,1);
+    lua_pushlightuserdata(L,const_cast<std::vector<std::string>*>(&arguments));
+    luaL_openlib(L,"Runtime",functions,3); lua_pop(L,1);
 }
 }

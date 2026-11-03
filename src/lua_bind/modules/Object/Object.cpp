@@ -1,5 +1,6 @@
 #include "Object.h"
 #include "core/modules/Object/ObjectSystem.h"
+#include "core/runtime/Log/Log.h"
 #include "lua_bind/Guard.h"
 #include <cmath>
 #include <limits>
@@ -16,6 +17,7 @@ namespace Native=core::modules::Object;
 constexpr const char* InstanceType="Solongo.Object.Instance";
 constexpr const char* ServiceType="Solongo.Object.Service";
 constexpr const char* ClassType="Solongo.Object.Class";
+constexpr const char* IteratorType="Object.Iterator";
 char ClassKey,ContextKey;
 struct StackRestore {
     lua_State* L; int top;
@@ -26,6 +28,13 @@ struct StackRestore {
 struct ServiceToken { void* owner{}; };
 struct ServiceBox { static constexpr std::uint64_t tag=0x534f424a53455256ULL; std::shared_ptr<ServiceToken> token; };
 struct InstanceBox { static constexpr std::uint64_t tag=0x534f424a494e5354ULL; std::shared_ptr<ServiceToken> token; Native::ObjectHandle handle; };
+struct IteratorBox {
+    static constexpr std::uint64_t tag=0x4f424a4954455232ULL;
+    std::shared_ptr<ServiceToken> token;
+    std::vector<Native::ObjectHandle> handles;
+    std::size_t cursor{};
+    std::optional<std::int32_t> group;
+};
 template<class Box> struct LuaSlot { std::uint64_t tag{Box::tag}; Box* value{}; };
 template<class Box> Box** NewSlot(lua_State* L) {
     auto* slot=new(lua_newuserdata(L,sizeof(LuaSlot<Box>))) LuaSlot<Box>{}; return &slot->value;
@@ -81,8 +90,9 @@ struct Context::Impl final:Native::ObjectCallbacks {
     std::vector<Root> roots;
     int classes{LUA_NOREF}; // Weak class keys -> strong direct parent, or true for root.
     Native::ObjectHandle readableDeleted;
-    std::uint32_t initializingDepth{},nativeEntryDepth{};
-    bool shutdownRequested{},finalized{};
+    std::uint32_t callbackDepth{},nativeEntryDepth{};
+    bool closing{},shutdownRequested{},finalized{},cleanupFailed{};
+    std::string cleanupError;
     Impl(lua_State* state,std::uint32_t capacity):L(state),callbackState(state),system(std::make_unique<Native::ObjectSystem>(capacity)),roots(capacity) {
         if(!state) throw std::invalid_argument("Object Context requires a Lua VM"); token->owner=this;
     }
@@ -96,9 +106,26 @@ struct Context::Impl final:Native::ObjectCallbacks {
         Access(Impl& o,Native::ObjectHandle h={}):owner(o),previous(o.readableDeleted) { owner.readableDeleted=h; }
         ~Access() { owner.readableDeleted=previous; }
     };
-    struct Initializing { Impl& owner; explicit Initializing(Impl& o):owner(o) { ++o.initializingDepth; } ~Initializing() { --owner.initializingDepth; } };
+    struct Callback {
+        Impl& owner;
+        explicit Callback(Impl& o):owner(o) {
+            if(owner.callbackDepth==std::numeric_limits<std::uint32_t>::max()) throw std::overflow_error("Object callback nesting overflow");
+            ++owner.callbackDepth;
+        }
+        ~Callback() { --owner.callbackDepth; }
+    };
     void RequireRunning() const { if(shutdownRequested) throw std::runtime_error("Object service has shut down"); }
-    void RequireBatch() const { if(initializingDepth) throw std::logic_error("Object batch dispatch cannot run inside Init"); }
+    void RequireBatch() const { if(callbackDepth) throw std::logic_error("Object batch dispatch cannot run inside an Object callback"); }
+    void BeginShutdown() noexcept {
+        closing=true;
+        if(system) system->BeginShutdown();
+    }
+    void CleanupError(const char* message) noexcept override {
+        cleanupFailed=true;
+        // Diagnostics must never prevent another queued object's reclamation.
+        try { if(cleanupError.empty()) cleanupError=message; } catch(...) {}
+        try { core::runtime::Log::Error(std::string("Object shutdown deletion failed: ")+message); } catch(...) {}
+    }
     void Finalize(lua_State* state) noexcept {
         if(finalized) return;
         for(auto& root:roots) { if(root.reference!=LUA_NOREF) luaL_unref(state,LUA_REGISTRYINDEX,root.reference); root={}; }
@@ -173,6 +200,7 @@ struct Context::Impl final:Native::ObjectCallbacks {
     void Invoke(Native::ObjectHandle h,const char* hook,Native::ObjectHandle other={}) {
         RequireRunning(); auto* state=callbackState; StackRestore stack(state);
         Access access(*this,std::string_view(hook)=="Delete"?h:Native::ObjectHandle{});
+        Callback callback(*this);
         if(!lua_checkstack(state,10)) throw std::runtime_error("Object callback stack exceeded");
         PushInstance(state,h); const int instance=lua_gettop(state);
         PushClass(state,instance); LookupHook(state,lua_gettop(state),hook);
@@ -197,6 +225,39 @@ struct Context::Impl final:Native::ObjectCallbacks {
     static int CollectService(lua_State* state) {
         auto** slot=TrySlot<ServiceBox>(state,1,ServiceType); if(slot) { delete *slot; *slot=nullptr; } return 0;
     }
+    static int CollectIterator(lua_State* state) {
+        auto** slot=TrySlot<IteratorBox>(state,1,IteratorType); if(slot) { delete *slot; *slot=nullptr; } return 0;
+    }
+    static int IteratorNext(lua_State* state) {
+        // Generic for supplies its state/control values. They are deliberately
+        // unused: the single returned closure owns its snapshot and cursor.
+        auto** slot=TrySlot<IteratorBox>(state,lua_upvalueindex(1),IteratorType);
+        if(!slot || !*slot) throw std::runtime_error("Object iterator is unavailable");
+        auto& iterator=**slot;
+        if(iterator.cursor==iterator.handles.size()) { lua_pushnil(state); return 1; }
+        if(!iterator.token || !iterator.token->owner) throw std::runtime_error("Object iterator service has shut down");
+        auto& owner=*static_cast<Impl*>(iterator.token->owner); Entry entry(owner,state);
+        if(!OwnsVM(state,owner)) throw std::invalid_argument("Object iterator belongs to another VM");
+        owner.RequireRunning();
+        while(iterator.cursor<iterator.handles.size()) {
+            const auto h=iterator.handles[iterator.cursor++];
+            if(!owner.system->IsValid(h)) continue;
+            if(iterator.group && owner.system->Get(h)->collision.group!=iterator.group) continue;
+            owner.PushInstance(state,h); return 1;
+        }
+        lua_pushnil(state); return 1;
+    }
+    static int MakeIterator(lua_State* state,std::optional<std::int32_t> group) {
+        auto& owner=Service(state); Entry entry(owner,state);
+        auto** slot=NewSlot<IteratorBox>(state);
+        luaL_getmetatable(state,IteratorType); lua_setmetatable(state,-2);
+        *slot=new IteratorBox{owner.token,owner.system->Snapshot(group),0,group};
+        // The userdata is rooted by this closure, but only identities (not the
+        // instances' registry references or native slots) are retained in it.
+        lua_pushcclosure(state,Guard<IteratorNext>,1); return 1;
+    }
+    static int GetAll(lua_State* state) { Count(state,0,0); return MakeIterator(state,{}); }
+    static int GetGroup(lua_State* state) { Count(state,1,1); return MakeIterator(state,Integer(state,1,"group")); }
     static int Class(lua_State* state) {
         Count(state,0,1); auto& owner=Service(state); Entry entry(owner,state);
         const bool parent=lua_gettop(state)==1 && !lua_isnil(state,1);
@@ -289,8 +350,8 @@ struct Context::Impl final:Native::ObjectCallbacks {
         try { owner.RequireRunning(); handle=owner.system->Create(); if(!handle.is_valid()) throw std::runtime_error("Object.New: pool is full"); }
         catch(...) { luaL_unref(state,LUA_REGISTRYINDEX,reference); throw; }
         (*slot)->handle=handle; owner.roots[handle.index]={handle.generation,reference};
-        try {
-            Initializing initializing(owner); Access access(owner);
+        {
+            Callback callback(owner); Access access(owner);
             owner.LookupHook(state,1,"Init");
             if(lua_isnil(state,-1)) lua_pop(state,1);
             else {
@@ -300,7 +361,9 @@ struct Context::Impl final:Native::ObjectCallbacks {
                 if(result) throw std::runtime_error(CallbackError(state,"Init",handle));
             }
             owner.RequireRunning();
-        } catch(...) { owner.system->Discard(handle,owner); throw; }
+        }
+        // Init errors deliberately leave this established, rooted object and
+        // its queued state intact. Lua may have retained self or created others.
         lua_settop(state,instance); return 1;
     }
     static int IsValid(lua_State* state) {
@@ -316,6 +379,21 @@ struct Context::Impl final:Native::ObjectCallbacks {
     static int UpdateAll(lua_State* state) {
         Count(state,0,0); auto& owner=Service(state); Entry entry(owner,state); owner.RequireBatch();
         owner.system->Update(owner); owner.RequireRunning(); return 0;
+    }
+    static int Commit(lua_State* state) {
+        Count(state,0,0); auto& owner=Service(state); Entry entry(owner,state); owner.RequireBatch();
+        if(owner.closing) throw std::logic_error("Object.Commit is unavailable during shutdown");
+        owner.system->Commit(owner); owner.RequireRunning(); return 0;
+    }
+    static int IsColliding(lua_State* state) {
+        Count(state,2,2); auto& owner=Service(state); Entry entry(owner,state);
+        const auto& first=Box(state,1); const auto& second=Box(state,2);
+        if(first.token!=owner.token || second.token!=owner.token) throw std::invalid_argument("Object instance belongs to another Context");
+        lua_pushboolean(state,owner.system->IsColliding(first.handle,second.handle)); return 1;
+    }
+    static int GetPoolCapacity(lua_State* state) {
+        Count(state,0,0); auto& owner=Service(state); Entry entry(owner,state);
+        lua_pushnumber(state,static_cast<double>(owner.system->GetPoolCapacity())); return 1;
     }
     static int RenderAll(lua_State* state) {
         Count(state,0,0); auto& owner=Service(state); Entry entry(owner,state); owner.RequireBatch();
@@ -345,9 +423,21 @@ struct Context::Impl final:Native::ObjectCallbacks {
 Context::Context(lua_State* L,std::uint32_t capacity):impl_(std::make_unique<Impl>(L,capacity)) {}
 Context::~Context() { Shutdown(); }
 void Context::Shutdown() noexcept { if(impl_) impl_->Shutdown(); }
-void Context::BeginFrame() {
-    impl_->RequireRunning(); Impl::Entry entry(*impl_,impl_->L);
-    impl_->system->BeginFrame(*impl_); impl_->RequireRunning();
+void Context::BeginShutdown() noexcept { if(impl_) impl_->BeginShutdown(); }
+bool Context::FinalizeShutdown(std::string& error) {
+    if(!impl_) { error.clear(); return true; }
+    auto& owner=*impl_;
+    if(!owner.finalized) {
+        if(owner.nativeEntryDepth || owner.callbackDepth) throw std::logic_error("Object shutdown cannot finalize inside an Object call");
+        owner.BeginShutdown();
+        Impl::Entry entry(owner,owner.L);
+        try { if(!owner.system->FinalizeShutdown(owner)) owner.cleanupFailed=true; }
+        catch(...) { owner.Shutdown(); throw; }
+        owner.Shutdown(); // Physical release waits until Entry has unwound.
+    }
+    error=owner.cleanupError;
+    if(owner.cleanupFailed && error.empty()) error="Object deletion failed during shutdown";
+    return !owner.cleanupFailed;
 }
 void Register(lua_State* L,Context& context) {
     if(!L || !context.impl_ || context.impl_->L!=L || !context.impl_->token->owner) throw std::invalid_argument("Object.Register requires live Context for VM");
@@ -367,6 +457,9 @@ void Register(lua_State* L,Context& context) {
     luaL_newmetatable(L,ServiceType);
     lua_pushcfunction(L,Guard<Context::Impl::CollectService>); lua_setfield(L,-2,"__gc");
     lua_pushliteral(L,"Object.Service"); lua_setfield(L,-2,"__metatable"); lua_pop(L,1);
+    luaL_newmetatable(L,IteratorType);
+    lua_pushcfunction(L,Guard<Context::Impl::CollectIterator>); lua_setfield(L,-2,"__gc");
+    lua_pushliteral(L,"Object.Iterator"); lua_setfield(L,-2,"__metatable"); lua_pop(L,1);
     auto** slot=NewSlot<ServiceBox>(L); const int service=lua_gettop(L);
     luaL_getmetatable(L,ServiceType); lua_setmetatable(L,service); *slot=new ServiceBox{owner.token};
     luaL_newmetatable(L,ClassType);
@@ -378,6 +471,8 @@ void Register(lua_State* L,Context& context) {
         {"IsValid",Guard<Context::Impl::IsValid>},{"UpdateAll",Guard<Context::Impl::UpdateAll>},{"RenderAll",Guard<Context::Impl::RenderAll>},
         {"CheckCollision",Guard<Context::Impl::CheckCollision>},{"SetBound",Guard<Context::Impl::SetBound>},{"CheckOutBound",Guard<Context::Impl::CheckOutBound>},
         {"GetObjectCount",Guard<Context::Impl::GetObjectCount>},{"GetBound",Guard<Context::Impl::GetBound>},
+        {"GetPoolCapacity",Guard<Context::Impl::GetPoolCapacity>},{"GetAll",Guard<Context::Impl::GetAll>},
+        {"GetGroup",Guard<Context::Impl::GetGroup>},{"IsColliding",Guard<Context::Impl::IsColliding>},{"Commit",Guard<Context::Impl::Commit>},
         {nullptr,nullptr}};
     luaL_openlib(L,"Object",functions,1); owner.RequireRunning();
 }

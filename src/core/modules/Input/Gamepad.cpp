@@ -29,7 +29,12 @@ GamepadSample Gamepad::Poll() {
         SDL_CloseGamepad(device_); device_=nullptr; dirty_=true; neutral_=false;
         return result; // One complete release snapshot before any replacement.
     }
-    if(neutral_) { neutral_=false; return result; }
+    if(neutral_) {
+        neutral_=false;
+        result.id=device_?SDL_GetGamepadID(device_):0;
+        result.neutral=true;
+        return result;
+    }
     if(!device_ && dirty_) {
         dirty_=false;
         int count{};
