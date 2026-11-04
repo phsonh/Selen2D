@@ -1,9 +1,10 @@
 # Selen2D
-A lightweight 2D game engine.
 
-The `v2-development` branch is the staged implementation of the second API
-revision. Its development version is 2.0.1; this does not mean that every planned
-interface is available yet. `v2.0.0` remains the published first-revision baseline.
+![Selen2D Banner](src/res/image/selen2d-banner.png)
+A lightweight 2D game engine.
+The `v2-development` branch implements the frozen second API revision. Its
+development version is 2.0.1, not a newly published release. Windows x64/D3D12
+validation and remaining platform limits are recorded separately from API coverage. `v2.0.0` remains the published first-revision baseline.
 The editor definitions in `doc/api` describe the interfaces actually implemented
 in the current source, and are updated alongside each module.
 
@@ -19,9 +20,9 @@ statically; the running engine and example do not require Python or compiler DLL
 ```
 
 Normal builds do not require the local, ignored `tests/` or `devs/` directories.
-`-Test` explicitly opts into locally installed tests. During the staged API
-migration, the second-revision contract tests intentionally report missing or
-conflicting behavior rather than accepting old aliases.
+`-Test` explicitly opts into locally installed tests. The second-revision tests
+check the current contract and do not accept obsolete aliases. Private integration
+fixtures are not silently required by a normal checkout or build.
 
 Packaging is an explicit Release-only step:
 
@@ -51,5 +52,6 @@ implemented. The integration acceptance is recorded separately from API coverage
 
 See [running the example](doc/guide/getting-started.md) and
 [File, packages and compiled startup configuration](doc/guide/file-launch.md).
-The Shader example uses the built-in `Engine.hlsl` declarations described
+The complete Lua example includes menu, loading, play, pause and cleanup flows.
+Its custom Shader uses the built-in `Engine.hlsl` declarations described
 in the [Shader guide](doc/guide/shader.md).
