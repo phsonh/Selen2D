@@ -1,8 +1,9 @@
 # Selen2D 入门
 
-这个示例由 EXE 内编译的启动配置直接执行 `example/main.lua`。默认只接入部署目录中的 `example/` 和 `output/`，不读取外部启动文件。画面由自定义 HLSL 全屏绘制：WASD 或方向键移动发光圆形，Esc 退出。示例不需要图片、字体或资源包，也不会写入截图或测试结果。
+这个示例由 EXE 内编译的启动配置直接执行 `example/main.lua`。默认只接入部署目录中的 `example/` 和 `output/`，不读取外部启动文件。Orbit Garden 展示菜单、异步加载、对象更新、暂停与返回菜单：Enter 开始，WASD 或方向键移动，P / 空格暂停，游戏中 Esc 返回菜单、菜单中 Esc 退出。随包包含原创图片/铃声和附 OFL 许可的 Noto Sans 字体；普通运行不会写入截图或测试结果。
 
 - [开始运行与修改 Lua](getting-started.md)：目录、入口、固定项目根和常用修改。
+- [完整 Lua 示例](example.md)：资源加载、显式 Object 提交、独立 RNG、播放器、Canvas、释放与两轮自动流程。
 - [编写 Shader](shader.md)：运行时编译、相对 include、Lua 参数与 Engine.hlsl ABI。
 - [API 声明](../api/)：`modules/*.lua` 与 `runtime/Runtime.lua` 是编辑器定义，不能 `require`、`dofile` 或作为入口执行。
 - [帧调度、时间与错误](runtime.md)：二号机已实现的显式对象提交、时间换算和安全关闭。

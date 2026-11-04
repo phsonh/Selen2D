@@ -1,13 +1,30 @@
+![Selen2D Banner](src/res/image/Selen2D_banner_2048x1024.png)
+
 # Selen2D
 
 A lightweight 2D game engine.
-![Selen2D Banner](src/res/image/Selen2D_banner_2048x1024.png)
 
-The `v2-development` branch implements the frozen second API revision. Its
-development version is 2.0.1, not a newly published release. Windows x64/D3D12
+The 2.1.0 release candidate implements the frozen second API revision. Windows x64/D3D12
 validation and remaining platform limits are recorded separately from API coverage. `v2.0.0` remains the published first-revision baseline.
 The editor definitions in `doc/api` describe the interfaces actually implemented
 in the current source, and are updated alongside each module.
+
+## Branches and releases
+
+- `main` contains accepted stable releases; experimental work does not go directly into it.
+- `develop` is the long-lived branch for features, fixes and intermediate revisions.
+  The current second-revision work remains on `v2-development` until its approved
+  release, after which that branch will become `develop` with its history preserved.
+- CMake supplies the single product-version value. Planned feature releases use
+  versions such as `2.1.0`; development revisions normally remain untagged.
+  An explicitly approved stable hotfix may use a patch version and must also
+  reach `develop`. These development numbers do not promise strict SemVer compatibility.
+- Merging, pushing, tagging, publishing a GitHub Release, or deleting an old remote
+  branch requires an explicit release instruction. Release source and binaries must
+  correspond to the same verified commit; published tags and history are immutable.
+
+The full maintainer workflow is recorded locally in `devs/log/development-workflow.md`.
+Local tests, design records, builds and release artifacts remain excluded by `.gitignore`.
 
 ## Windows build
 

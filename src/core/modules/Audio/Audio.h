@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace core::modules::File { class FileSystem; }
@@ -115,6 +116,12 @@ public:
     // Owner-thread boundary: consumes one retained asynchronous error and
     // throws with its virtual source path. A reclaimed voice cannot hide it.
     void CheckErrors();
+    // Owner-thread shutdown boundary, after consumers/workers have stopped.
+    // Consumes every queued error and overflow summary without allocating or
+    // throwing; calls the nonthrowing sink outside the control lock. Returns
+    // whether an error was reported. A null sink leaves the queue unchanged.
+    // Not a Lua API, and never invokes Lua.
+    bool DrainErrors(void (*sink)(std::string_view, void*) noexcept, void* context = nullptr) noexcept;
     std::size_t GetActivePlaybackCount() const; // C++ diagnostic, not required Lua API.
 private:
     std::shared_ptr<const File::FileSystem> files_;

@@ -735,6 +735,28 @@ void AudioSystem::CheckErrors() {
     }
     if(!message.empty()) throw std::runtime_error(message);
 }
+bool AudioSystem::DrainErrors(void (*sink)(std::string_view, void*) noexcept, void* context) noexcept {
+    if(!sink) return false;
+    bool reported{};
+    for(;;) {
+        std::array<char,2048> message{};
+        {
+            std::lock_guard lock(system_->control);
+            if(system_->errorCount) {
+                message=system_->errors[system_->errorHead];
+                system_->errorHead=(system_->errorHead+1)%system_->errors.size();
+                --system_->errorCount;
+            } else if(system_->droppedErrors) {
+                SDL_snprintf(message.data(),message.size(),
+                    "audio error queue overflow: %zu additional errors were suppressed",system_->droppedErrors);
+                system_->droppedErrors=0;
+            } else break;
+        }
+        reported=true;
+        sink(std::string_view(message.data()),context);
+    }
+    return reported;
+}
 std::size_t AudioSystem::GetActivePlaybackCount() const {
     std::lock_guard lock(system_->control);
     return static_cast<std::size_t>(std::count_if(system_->active.begin(),system_->active.end(),[](const auto& voice){return !detail::Terminal(voice->state.load());}));

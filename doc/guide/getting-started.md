@@ -8,6 +8,7 @@ example/
   main.lua
   effect.hlsl
   palette.hlsl
+  assets/     -- 原创 PNG/WAV、Noto Sans、OFL.txt 与 SOURCE.md
 doc/
   api/
     modules/  -- Audio.lua、Graphic.lua 等功能模块声明
@@ -20,9 +21,9 @@ doc/
 
 启动配置已编译在 EXE 内。默认配置来自源码 `src/res/development/launch.h.in`，入口是 `example/main.lua`，没有资源包或 secret，真实目录授权是 `example → example` 和 `output → output`。运行时不读取 EXE 旁的 `launch.lua`、JSON 或 `launch.h`，也没有失败后改读外部配置的备用路径。
 
-双击 EXE 即可运行。WASD 或方向键移动圆形，Esc 退出；标题栏也显示操作方式。示例保留 `Window.GetTitle()` 返回的基础标题，再追加自己的说明，不读取构建元数据。
+双击 EXE 即可运行。Enter 从菜单开始，WASD 或方向键移动金色光点，P 或空格暂停；游戏中 Esc 返回菜单、菜单中 Esc 退出。标题栏也显示当前操作方式。示例保留 `Window.GetTitle()` 返回的基础标题，再追加自己的说明，不读取构建元数据。完整状态流和 `--self-test` 用法见 [Orbit Garden 示例](example.md)。
 
-Lua 使用相对 VFS 根的虚拟路径。默认配置将 `example/...` 映射到 EXE 旁的 `example/...`，`output/...` 映射到 EXE 旁的 `output/...`；其他部署文件不会自动获准访问。从哪个终端目录或快捷方式启动、当前执行哪个脚本，都不会改变这组映射。因此示例通过 `Resource.LoadShader('example.effect', 'example/effect.hlsl')` 加载 Shader，`dofile('example/other.lua')` 也保持完整虚拟路径。
+Lua 使用相对 VFS 根的虚拟路径。默认配置将 `example/...` 映射到 EXE 旁的 `example/...`，`output/...` 映射到 EXE 旁的 `output/...`；其他部署文件不会自动获准访问。从哪个终端目录或快捷方式启动、当前执行哪个脚本，都不会改变这组映射。因此示例通过 Loader 的 `LoadShader('garden.effect', 'example/effect.hlsl')` 登记 Shader，`dofile('example/other.lua')` 也保持完整虚拟路径。
 
 默认运行不需要资源包、SDK、tools 目录或 Python。缺少 `example/main.lua` 会导致启动失败。`output/` 可以不存在，启动不会自动创建；需要写入时先调用 `File.CreateDirectory('output')`。标准 Lua 的文件名形式 `io.open/input/output/lines`、`loadfile/dofile` 和 `os.remove/rename` 也经过 VFS，仍保持各自的 LuaJIT 返回形式。FFI、`popen`、`os.execute` 和主动编译字符串不是完整沙箱保证，详见 [File 与启动配置](file-launch.md)。
 
@@ -44,12 +45,11 @@ cmake --build --preset selen2d-release --target stage_release
 | 设置 | 效果 |
 |---|---|
 | `width`、`height` | 初始窗口客户区大小 |
-| `moveSpeed` | 移动速度，单位为每秒多少个窗口高度 |
-| `radius` | 圆形半径，建议从 `0.01` 到 `0.30` 调整 |
-| `accentColor` | 三个 RGB 数值，例如 `{1.0, 0.35, 0.15}` |
-| `backgroundColor` | 背景 RGB 数值，示例使用 `0..1` 范围 |
+| `speed` | 每秒 60 个逻辑步时移动的场景坐标距离 |
+| `seed` | 独立游戏 RNG 的种子，相同种子重现初始布局 |
+| `motes` | 初始漂浮光点数量 |
 
-入口先加载资源，再用 `Runtime.SetFrameFunction` 注册帧回调。输入、移动和 `Graphic.Render` 都在帧回调中执行；绘制函数不能直接放在入口顶层或退出回调中。示例按真实帧间隔移动，并限制拖动窗口后单次移动距离。
+入口先加载菜单 UI 的字体与白色像素，再注册帧回调；开始游戏时用 Loader 异步整批加载图片、铃声和 Shader。输入、显式 Object 更新与绘制都在帧回调中执行；绘制函数不能直接放在入口顶层或退出回调中。示例每个回调推进一个逻辑步，目标 60 FPS，不追赶卡顿期间的步数；暂停时不推进场景或 Shader 时间。返回菜单会销毁本轮对象、播放器与 Canvas，并卸载游戏资源，支持再次进入。
 
 `dofile` 每次执行都重新读取文件；`File.RunLuaFile` 也可执行脚本，但丢弃脚本返回值，成功返回 `true, nil`，正常读取失败返回 `false, err`；语法、执行或授权错误仍抛错。`require('example.main')` 会走相同的脚本文件服务，不过受 `package.loaded` 缓存影响。默认搜索路径是 `?.lua;?/init.lua`，不会自动加入当前脚本目录。
 

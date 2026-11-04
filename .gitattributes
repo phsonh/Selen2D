@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Preserve the upstream OFL bytes and the asset-source SHA256 on every checkout/export.
+src/res/development/example/assets/OFL.txt -text

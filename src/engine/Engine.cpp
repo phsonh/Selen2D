@@ -3,6 +3,7 @@
 #include "BuildInfo.h"
 #include <algorithm>
 #include <exception>
+#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <SDL3/SDL.h>
@@ -203,7 +204,18 @@ bool Shutdown() {
     objects.reset(); resources.reset();
     Lua::Shutdown();
     startupArguments.clear();
-    core::modules::Math::Shutdown(); audio.Shutdown(); Graphic::Shutdown();
+    core::modules::Math::Shutdown(); audio.Shutdown();
+    // Stop/join, Resource retirement and Lua finalizers can append errors after
+    // the last frame CheckErrors. Preserve them as additional diagnostics while
+    // logging is still live; never rethrow or replace the original Lua error.
+    if(audio.DrainErrors([](std::string_view message,void*) noexcept {
+        try { Log::Error(message); }
+        catch(...) {
+            std::fwrite(message.data(),1,message.size(),stderr);
+            std::fputc('\n',stderr);
+        }
+    })) exitSucceeded=false;
+    Graphic::Shutdown();
     files.reset();
     core::modules::Input::Shutdown(); core::modules::Window::Shutdown();
     core::modules::Debug::Shutdown(); Event::Shutdown(); core::runtime::SDL::Shutdown();
