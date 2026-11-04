@@ -1,16 +1,16 @@
-<p align="center">
-  <img src="src/res/image/selen2d-logo.png" alt="Selen2D logo" width="104" />
-</p>
-<h1 align="center">Selen2D</h1>
+
+
 
 ![Selen2D Banner](src/res/image/Selen2D_banner_2048x1024.png)
 
 <p align="center">
-  <strong>A lightweight, LuaJIT-driven game engine for 2D games.</strong><br />
-  <strong>轻量级 LuaJIT 驱动的 2D 游戏引擎。</strong><br />
-  <strong>LuaJIT を中心とした軽量な 2D ゲームエンジン。</strong>
+  <strong>Selen2D, A lightweight, LuaJIT-driven game engine for 2D games.</strong><br />
+  <strong>Selen2D, 轻量级 LuaJIT 驱动的 2D 游戏引擎。</strong><br />
+  <strong>Selen2D, LuaJIT を中心とした軽量な 2D ゲームエンジン。</strong>
 </p>
-
+<p align="center">
+  <img src="src/res/image/selen2d-logo.png" alt="Selen2D logo" width="104" />
+</p>
 <p align="center">
   <a href="https://github.com/phsonh/Selen2D/releases/latest">Latest release</a> ·
   <a href="doc/guide/README.md">Guides</a> ·
@@ -22,7 +22,48 @@
 
 > **Current stable release: v2.1.0 · Windows x64 / Direct3D 12**  
 > **Two ways to use Selen2D:** download the ready-to-run Release to write Lua immediately, or build a project-specific engine from source while keeping your game in a separate directory.  
-> **v2.2.x development:** a PyQt6 project/packing GUI, automatic JSON-to-EXE configuration, and console visibility controls are planned/in progress on `develop`. They are **not features of v2.1.0**.
+> **v2.2.x development:** a PyQt6 project/packing GUI, automatic JSON-to-EXE configuration, and console visibility controls are implemented and being validated on `develop`. They are **not features of v2.1.0**.
+
+### Current develop quick start / 当前开发版 / 開発版
+
+The following commands apply to this `develop` checkout (development revision
+2.1.1, targeting v2.2.0), not the historical v2.1.0 instructions below.
+本分支已接入 JSON 自动编译与 PyQt6 工具；下载 v2.1.0 Release 的普通用户仍按下文直接解压运行，无需开发工具。
+この `develop` ブランチでは次の手順を使用します。公開済み v2.1.0 の手順とは別です。
+
+```powershell
+python -m venv build/tools-venv
+./build/tools-venv/Scripts/python.exe -m pip install -r tools/pack/requirements-gui.txt
+./build/tools-venv/Scripts/python.exe -B tools/pack/main.py
+# GUI: save/activate your project, then build (no manual header generation).
+./tools/build.ps1 -Configuration Release
+```
+
+Game resources can remain in an independent directory. Open or save profiles
+anywhere; **Set as current build project** saves the chosen JSON snapshot to
+private `launch/launch.json`. The build script reselects it on every invocation;
+it never silently reuses the old CMake project's selection. When absent, the
+public `src/res/development/launch.json` is used. A one-build override is
+`-LaunchConfig path/to/project.json`. Without the GUI, install only
+`tools/pack/requirements-launch.txt`; ordinary builds do not need Qt, PyNaCl or Zstd.
+
+游戏目录无需搬进引擎源码。GUI 的“设为当前构建项目”将选中配置保存到被忽略的 `launch/launch.json`；构建和加密打包使用同一份配置。JSON 变更会触发重新生成与编译，失败中止构建。独立游戏只部署对应 EXE、资源包及许可，运行时不读取 JSON，也不需要 Python。
+
+Standard packages use an **isolated public build**, even when a private project exists:
+
+```powershell
+./tools/build.ps1 -Configuration Release -PublicRelease -StageRelease
+```
+
+This uses `build/public-release`, forces the secret-free public example, and
+rejects private configuration. Ordinary/custom `stage_release` targets fail.
+标准包继续直接解压运行，允许修改普通文件示例 Lua/HLSL；不会包含 JSON、工具、私有密钥或额外 DLL。
+开发版 Windows 控制台默认隐藏，可用 `Debug.SetConsoleVisible(true/false)` 和
+`Debug.IsConsoleVisible()` 控制；日志仍写入 EXE 旁的 `engine.log`。
+
+See [GUI workflow / 图形工具](doc/guide/tools-gui.md),
+[JSON and deployment / 自动构建与部署](doc/guide/file-launch.md), and
+[console and diagnostics / 控制台与诊断](doc/guide/debug-console.md).
 
 ---
 
@@ -99,10 +140,10 @@ Workspace/
     └── dist/                   # final, separately assembled game
 ```
 
-**Intended v2.2.x experience (PyQt6; not yet available in v2.1.0):**
+**Current develop workflow (not part of the published v2.1.0):**
 
 1. Clone Selen2D and create your independent game folder.
-2. Start the **PyQt6 project/configuration GUI** (the entry command will be documented once implemented). Choose the external game project, set the Lua entry, `mounts`, `parts`, writable directory mappings and optional secret, then save **one JSON configuration**.
+2. Start the **PyQt6 project/configuration GUI** (`python tools/pack/main.py`; install the GUI requirements first). Choose the external game project, set the Lua entry, `mounts`, `parts`, writable directory mappings and optional secret, then save **one JSON configuration**.
 3. Run `./tools/build.ps1 -Configuration Release`. The build system should validate that JSON, generate an **internal** `launch.h`, and embed the values in `Selen2D.exe`—without manual header editing.
 4. Use the **PyQt6 package GUI** with the **same configuration and secret** to pack and verify your game folder as SLPK v1 (plain) or v2 (authenticated/encrypted).
 5. Place the game-specific executable and the referenced package files together in `MyGame/dist/`. Keep the project licenses/notices when redistributing.
@@ -142,48 +183,24 @@ This JSON is for an **independent game project**, not for the standard Selen2D R
 - `base: "user_data"` uses the operating system's user-data root. On Windows, `save/settings.json` maps beneath `%LOCALAPPDATA%\MyStudio\MyGame\settings.json`; `deployment` instead refers to a folder beneath the executable directory.
 - Package contents are read-only. Writable paths must be authorized through `directories`. Physical directory files cannot silently override package files at the same virtual path.
 
-##### Current v2.1.0 source-build procedure (command-line fallback)
+##### Current develop source workflow (GUI and CI)
 
-Until the v2.2.x GUI/automatic JSON integration lands, you can already build your own game using the current Python CLI tools. In the commands below, `Workspace/Selen2D` and `Workspace/MyGame` are siblings: **run the initial `git clone` from `Workspace/`, then run the remaining commands from the Selen2D root**:
+Run from the engine root; the independent MyGame directory can remain outside it. The single Python entry automatically uses an installed repository tools-venv for the GUI. No manual header generation or editing is needed.
 
 ```powershell
-# Get the engine source (once)
-git clone https://github.com/phsonh/Selen2D.git
-cd Selen2D
-
-# Install development-only package tool dependencies
 python -m venv build/tools-venv
-$py = ".\build\tools-venv\Scripts\python.exe"
-& $py -m pip install -r tools/pack/requirements-tools.txt
-New-Item -ItemType Directory -Force build/launch, ../MyGame/dist | Out-Null
-
-# Convert the game's private JSON to a generated build input
-& $py tools/pack/make_launch.py build `
-  --config ../MyGame/config/launch.json `
-  --output build/launch/launch.h
-
-# Configure once with the generated header (in an x64 VS Developer terminal)
-cmake --preset selen2d-release -DENGINE_LAUNCH_HEADER=build/launch/launch.h
-.\tools\build.ps1 -Configuration Release
-
-# Pack and verify the game's contents using the SAME private JSON
-& $py tools/pack/pack_resources.py pack `
-  --source ../MyGame/content `
-  --output ../MyGame/dist/data.bin `
-  --encrypt --config ../MyGame/config/launch.json
-& $py tools/pack/pack_resources.py verify `
-  --input ../MyGame/dist/data.bin `
-  --config ../MyGame/config/launch.json
-
-# Assemble the game's own deployment directory
+$py = "./build/tools-venv/Scripts/python.exe"
+& $py -m pip install -r tools/pack/requirements-gui.txt
+python tools/pack/main.py
+# GUI: open/save/activate the current project, or explicitly select JSON:
+./tools/build.ps1 -Configuration Release -LaunchConfig ../MyGame/config/launch.json
+New-Item -ItemType Directory -Force ../MyGame/dist | Out-Null
+& $py tools/pack/main.py pack --source ../MyGame/content --output ../MyGame/dist/data.bin --encrypt --config ../MyGame/config/launch.json
+& $py tools/pack/main.py verify --input ../MyGame/dist/data.bin --config ../MyGame/config/launch.json
 Copy-Item build/release/bin/Selen2D.exe ../MyGame/dist/Selen2D.exe
 ```
 
-Create `MyGame/content/main.lua` and `MyGame/config/launch.json` **before** running the example. If you use plain packages instead, remove `secret`/encryption requirements from the configuration and omit `--encrypt --config` for `pack`. A modified configuration requires rebuilding the EXE; a modified secret also requires rebuilding encrypted packages. The command-line tools remain useful for automation after the GUI arrives.
-
-The `build.ps1` script currently does **not** automatically consume an arbitrary JSON: v2.1.0 still requires the explicit `make_launch.py`/`ENGINE_LAUNCH_HEADER` step above. Do not assume the future PyQt6 entry point or `ENGINE_LAUNCH_CONFIG` option already exists.
-
-The regular `stage_release` target packages the **engine's example**, not your external game's assets. Do not run official release staging from a build tree configured with a private game header; use a clean, public/default-config build for engine releases. The dedicated public/private build isolation is part of the v2.2.x plan.
+GUI activation saves the same JSON to private launch/launch.json, then plain build.ps1 uses it. The explicit -LaunchConfig form is useful for CI. With no GUI, requirements-launch.txt suffices for compiling and requirements-tools.txt for packaging. Changed secrets require both recompilation and repacking. Standard releases use the isolated -PublicRelease build, never the private project.
 
 ### Build the engine itself
 
@@ -197,7 +214,7 @@ On Windows x64, install Visual Studio C++ tools (**MSVC 14.44** is the currently
 For an **official, public example package** (maintainers only; use a clean/default launch configuration):
 
 ```powershell
-cmake --build --preset selen2d-release --target stage_release
+./tools/build.ps1 -Configuration Release -PublicRelease -StageRelease
 ```
 
 A normal build updates `build/<configuration>/bin`; staging alone creates a ZIP under ignored `releases/`. The Debug configuration cannot stage an official Release. Project-specific games should assemble their own distribution rather than modifying this repository's standard example package.
@@ -302,7 +319,7 @@ Workspace/
     └── dist/                 # 最终游戏部署目录
 ```
 
-**2.2.x 计划实现的 PyQt6 开箱即用流程（2.1.0 尚未提供）：**
+**当前 develop 的 PyQt6 工作流（已发布的 2.1.0 不包含）：**
 
 1. 克隆 Selen2D，并在仓库外创建独立游戏项目。
 2. 启动 **PyQt6 图形化配置工具**，选择项目目录，设置 Lua 入口、资源包 `mounts`、挂载优先级 `parts`、读写目录映射和可选 `secret`，保存为**一份 JSON**。
@@ -349,50 +366,24 @@ Workspace/
 
 资源包只读；需要写入存档时，请使用获准的真实目录映射，按需调用 `File.CreateDirectory("save")`。资源包和真实目录的同名虚拟文件不能互相静默覆盖。JSON 应保留在**游戏项目目录**中，不要提交任何真实 `secret`。
 
-##### 当前 v2.1.0 可用的命令行流程
+##### 当前 develop 的 GUI／命令行流程
 
-在 2.2.x 图形界面和 JSON 自动构建接线完成之前，**v2.1.0 已经能够通过现有 Python 命令行工具完成同样的定制功能**，只是还需要手动生成一次头文件。
-
-假设 `Workspace/Selen2D` 和 `Workspace/MyGame` 是兄弟目录，并且 `MyGame/content/main.lua`、`MyGame/config/launch.json` 已经存在：**先在 `Workspace/` 运行 `git clone`，随后进入 `Selen2D/`，执行其余命令**。
+在引擎根目录执行，独立的 MyGame 仍可放在仓库外。Python 唯一入口自动使用已安装的项目 tools-venv；不需要手工生成头文件。
 
 ```powershell
-# 取得引擎源码；只需操作一次
-git clone https://github.com/phsonh/Selen2D.git
-cd Selen2D
-
-# 准备仅供开发工具使用的 Python 环境
 python -m venv build/tools-venv
-$py = ".\build\tools-venv\Scripts\python.exe"
-& $py -m pip install -r tools/pack/requirements-tools.txt
-New-Item -ItemType Directory -Force build/launch, ../MyGame/dist | Out-Null
-
-# 从游戏项目的 JSON 生成内部 launch.h
-& $py tools/pack/make_launch.py build `
-  --config ../MyGame/config/launch.json `
-  --output build/launch/launch.h
-
-# 在 VS x64 开发者终端配置构建
-cmake --preset selen2d-release -DENGINE_LAUNCH_HEADER=build/launch/launch.h
-.\tools\build.ps1 -Configuration Release
-
-# 使用相同 JSON 的密钥打包并校验游戏目录
-& $py tools/pack/pack_resources.py pack `
-  --source ../MyGame/content `
-  --output ../MyGame/dist/data.bin `
-  --encrypt --config ../MyGame/config/launch.json
-& $py tools/pack/pack_resources.py verify `
-  --input ../MyGame/dist/data.bin `
-  --config ../MyGame/config/launch.json
-
-# 将定制构建结果放入游戏发行目录
+$py = "./build/tools-venv/Scripts/python.exe"
+& $py -m pip install -r tools/pack/requirements-gui.txt
+python tools/pack/main.py
+# GUI: open/save/activate the current project, or explicitly select JSON:
+./tools/build.ps1 -Configuration Release -LaunchConfig ../MyGame/config/launch.json
+New-Item -ItemType Directory -Force ../MyGame/dist | Out-Null
+& $py tools/pack/main.py pack --source ../MyGame/content --output ../MyGame/dist/data.bin --encrypt --config ../MyGame/config/launch.json
+& $py tools/pack/main.py verify --input ../MyGame/dist/data.bin --config ../MyGame/config/launch.json
 Copy-Item build/release/bin/Selen2D.exe ../MyGame/dist/Selen2D.exe
 ```
 
-不加密时，应在 JSON 中设置 `encrypted: false` 并按实际需要移除 `secret`，`pack` 命令不传 `--encrypt`／`--config`。修改入口或挂载后需要重新构建 EXE；修改密钥还必须重新制作加密包。GUI 完成后，这些命令行工具仍保留，方便脚本化和 CI 使用。
-
-**注意当前版本差异：** v2.1.0 的 `build.ps1` **还不会自动读取任意游戏 JSON**；目前仍需执行上述 `make_launch.py` 和 `ENGINE_LAUNCH_HEADER` 配置。不要把规划中的 PyQt6 命令、JSON 自动构建选项当成已经发布的功能。
-
-`stage_release` 只用于制作**引擎官方默认示例包**，不会替你收集外部游戏素材。不要在已经编入私有游戏配置的构建树上直接制作官方通用 Release；请使用干净的公开默认配置独立构建。2.2.x 将补齐标准发布和私有配置的自动隔离。
+GUI 的“设为当前构建项目”把同一份 JSON 保存到私有 launch/launch.json，之后直接运行 build.ps1 即可；-LaunchConfig 用于 CI 或单次显式选择。无 GUI 时，普通编译只需 requirements-launch.txt，打包需 requirements-tools.txt。密钥改变必须重新编译并重打包。标准发行固定使用独立 -PublicRelease 构建，不采用私有项目。
 
 ### 构建引擎本身
 
@@ -406,7 +397,7 @@ Windows x64 下需要 Visual Studio C++ 工具（目前文档使用 **MSVC 14.44
 只有维护者在**公开默认启动配置**的干净 Release 构建上执行下面的命令，才用于生成官方引擎示例 ZIP：
 
 ```powershell
-cmake --build --preset selen2d-release --target stage_release
+./tools/build.ps1 -Configuration Release -PublicRelease -StageRelease
 ```
 
 普通构建仅更新 `build/<configuration>/bin`；显式 `stage_release` 才在被忽略的 `releases/` 下生成正式文件。Debug 不能执行正式发布打包。**独立游戏请自行部署自己的 EXE 和资源包，不要改写引擎官方示例包。**
@@ -558,50 +549,24 @@ Workspace/
 
 パッケージ内は読み取り専用です。セーブデータは許可された実ディレクトリに書き込み、必要に応じて `File.CreateDirectory("save")` などで作成します。実ディレクトリとパッケージで同じ仮想ファイル名を使っても、自動的に上書きされることはありません。実際の秘密情報を含む JSON を公開 Git にコミットしないでください。
 
-##### 現在の v2.1.0 で使える CLI 手順
+##### 現在の develop の GUI／CLI 手順
 
-v2.2.x の GUI と JSON 自動連携が完成するまでは、**既存の Python CLI** で同じパッケージと専用 EXE を用意できます。ただし v2.1.0 では `launch.h` を一度生成する操作が必要です。
-
-`Workspace/Selen2D` と `Workspace/MyGame` を兄弟ディレクトリに置き、`MyGame/content/main.lua` と `MyGame/config/launch.json` を作成してください。**最初の `git clone` は `Workspace/` で実行し、その後 Selen2D のルートで残りのコマンドを実行します。**
+エンジンのルートで実行します。MyGame はリポジトリの外に置けます。GUI はインストール済みの専用 tools-venv を自動選択し、ヘッダーを手作業で生成する必要はありません。
 
 ```powershell
-# 初回だけエンジンを取得
-git clone https://github.com/phsonh/Selen2D.git
-cd Selen2D
-
-# 開発専用の Python 依存ライブラリ
 python -m venv build/tools-venv
-$py = ".\build\tools-venv\Scripts\python.exe"
-& $py -m pip install -r tools/pack/requirements-tools.txt
-New-Item -ItemType Directory -Force build/launch, ../MyGame/dist | Out-Null
-
-# ゲーム専用 JSON から内部 launch.h を生成
-& $py tools/pack/make_launch.py build `
-  --config ../MyGame/config/launch.json `
-  --output build/launch/launch.h
-
-# VS x64 Developer PowerShell で CMake に指定してビルド
-cmake --preset selen2d-release -DENGINE_LAUNCH_HEADER=build/launch/launch.h
-.\tools\build.ps1 -Configuration Release
-
-# 同じ JSON を使用して暗号化パッケージを作成・検証
-& $py tools/pack/pack_resources.py pack `
-  --source ../MyGame/content `
-  --output ../MyGame/dist/data.bin `
-  --encrypt --config ../MyGame/config/launch.json
-& $py tools/pack/pack_resources.py verify `
-  --input ../MyGame/dist/data.bin `
-  --config ../MyGame/config/launch.json
-
-# 自分のゲームの配布用ディレクトリへ EXE をコピー
+$py = "./build/tools-venv/Scripts/python.exe"
+& $py -m pip install -r tools/pack/requirements-gui.txt
+python tools/pack/main.py
+# GUI: open/save/activate the current project, or explicitly select JSON:
+./tools/build.ps1 -Configuration Release -LaunchConfig ../MyGame/config/launch.json
+New-Item -ItemType Directory -Force ../MyGame/dist | Out-Null
+& $py tools/pack/main.py pack --source ../MyGame/content --output ../MyGame/dist/data.bin --encrypt --config ../MyGame/config/launch.json
+& $py tools/pack/main.py verify --input ../MyGame/dist/data.bin --config ../MyGame/config/launch.json
 Copy-Item build/release/bin/Selen2D.exe ../MyGame/dist/Selen2D.exe
 ```
 
-平文パッケージを使う場合は JSON の `encrypted` を `false` にし、不要な `secret` を取り除き、`pack` に `--encrypt --config` を指定しないでください。起動先やマウントを変更したら EXE を再ビルドします。秘密情報を変更したら暗号化パッケージも再生成してください。GUI 完成後も CLI ツールは自動化・CI 用として残します。
-
-**バージョンに注意：** 現在の v2.1.0 の `build.ps1` は、任意のゲーム用 JSON を直接読み取る機能がまだありません。`make_launch.py` と `ENGINE_LAUNCH_HEADER` の手順が必要です。実装前の PyQt6 起動コマンドや JSON 自動ビルド機能を、すでに利用可能なものとして扱わないでください。
-
-公式の `stage_release` は**エンジンの標準サンプル ZIP** 用であり、外部ゲームの素材を自動収集しません。秘密設定を使用したビルドディレクトリから公式配布物を作らず、公開のデフォルト設定を使ったクリーンなビルドで行ってください。公式ビルドとプライベートビルドの自動分離は v2.2.x の開発目標です。
+GUI で現在のプロジェクトを有効にすると、同じ JSON が非公開の launch/launch.json に保存され、通常の build.ps1 が使用します。CI では -LaunchConfig で明示的に指定できます。秘密情報を変更したら EXE と暗号化パッケージを両方作り直します。標準配布には独立した -PublicRelease ビルドを使用します。
 
 ### エンジン本体のビルド
 
@@ -615,7 +580,7 @@ Windows x64 では Visual Studio C++ ツール（現行ドキュメントの対�
 エンジンの管理者が**公開の標準起動設定**で公式のサンプル ZIP を作成する場合のみ、次のターゲットを使用します。
 
 ```powershell
-cmake --build --preset selen2d-release --target stage_release
+./tools/build.ps1 -Configuration Release -PublicRelease -StageRelease
 ```
 
 通常ビルドは `build/<configuration>/bin` を更新し、明示的な `stage_release` のみが無視対象の `releases/` に ZIP を作ります。Debug では公式 Release を作成できません。**個々のゲームの配布物は、エンジンの公式サンプル ZIP とは分けて管理してください。**
