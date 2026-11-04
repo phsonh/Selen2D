@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHeaderView, QAbstractItemView)
 from .launch_common import load_launch_config, secret_bytes
 from .resource_package import Package, pack, derive_key, OperationCancelled
-from .tools_gui_editor import ConfigEditor, load_project_config, save_config
+from .tools_gui_editor import ConfigEditor, MigrationDeclined, load_project_config, save_config
 from .tools_gui_process import BuildJob
 
 
@@ -110,7 +110,9 @@ class ToolsWindow(QMainWindow):
         super().__init__()
         self.root = Path(root or Path(__file__).resolve().parents[3]).resolve()
         self.canonical = self.root / 'launch/launch.json'
-        config = load_project_config(self.root)
+        self.migration_backup = None
+        config = load_project_config(self.root, self.confirm_base_migration,
+                                     lambda backup: setattr(self, 'migration_backup', backup))
         self.dirty = False
         self.requests = []
         self.worker = None
@@ -150,6 +152,17 @@ class ToolsWindow(QMainWindow):
         self.remember_secret(config)
         self.editor.set_config(config)
         self.refresh_status()
+        if self.migration_backup is not None:
+            self.statusBar().showMessage('目录类型已迁移；原配置私有备份：' + str(self.migration_backup))
+
+    def confirm_base_migration(self, path):
+        return QMessageBox.question(self, '启动配置需要迁移',
+            '此 launch/launch.json 使用旧目录类型。\n'
+            'deployment → root；user_data → local_app_data。\n'
+            '确认后仅修改 base 字段，保留 secret、入口和挂载，并在 launch/ 内保存原文件备份。\n'
+            '拒绝则保持文件不变并退出。现在迁移？',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
 
     def refresh_status(self):
         state = '有未保存修改' if self.dirty else '已保存'
@@ -625,6 +638,8 @@ def run(argv):
     app.setStyle('Fusion')
     try:
         window = ToolsWindow()
+    except MigrationDeclined:
+        return 0
     except (OSError, ValueError) as error:
         QMessageBox.critical(None, '无法打开项目配置',
             'launch/launch.json 无法读取或初始化，未用默认配置覆盖已有文件。\n' + str(error))

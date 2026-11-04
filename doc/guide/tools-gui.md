@@ -20,9 +20,13 @@ GUI 使用 PyQt6 6.11.0；普通引擎构建不需要这份 GUI/打包依赖。P
 
 GUI 只编辑本仓库的 `launch/launch.json`。工具栏只有“保存配置”（Ctrl+S）和“验证配置”，不提供新建、打开、另存为或多配置切换。
 
-首次启动时，如果私有 JSON 不存在，工具严格验证 `src/res/development/launch.json` 后原子创建私有文件。默认入口是 `main.lua`，目录规则是 `deployment / . → .`，对应 EXE 所在目录。若私有文件已经存在但无效，工具显示错误并停止打开，保留原文件，不拿默认模板覆盖它。
+首次启动时，如果私有 JSON 不存在，工具严格验证 `src/res/development/launch.json` 后原子创建私有文件。默认入口是 `main.lua`，目录规则是 `root / . → .`，对应 EXE 所在目录。若私有文件已经存在但无效，工具显示错误并停止打开，保留原文件，不拿默认模板覆盖它。
 
-可以修改 `entry`、资源包挂载与目录映射。实际目录的下拉显示为 `.（Root）` 和 `%APPDATA%（User Data）`，保存的 JSON `base` 仍分别是 `deployment` 与 `user_data`。这些只是界面标签；User Data 在 Windows 仍由系统 LocalAppData 解析，不改为 Roaming AppData，例如 `LonelyOwl/THKTNT` 映射到 `save`。`.` 是完整默认根映射的专用写法，不是允许任意路径穿越或扩大 Lua 文件 API。
+可以修改 `entry`、资源包挂载与目录映射。实际目录下拉显示为 `root（EXE Directory）` 和 `local_app_data（Local AppData）`，JSON `base` 对应为 `root` 与 `local_app_data`。Windows 的后者通过系统 Known Folder API 解析 LocalAppData，不是 Roaming AppData，例如 `LonelyOwl/THKTNT` 映射到 `save`。其他平台沿用其平台数据目录，名称不要求系统存在 Windows 环境变量。`.` 只适用于完整的 `root / . → .`；不能以 `local_app_data / . → .` 授权整个用户数据根，也不放宽普通 Lua 路径校验。
+
+已有私有 JSON 若使用旧值 `deployment` / `user_data`，GUI 明确询问是否分别迁移到 `root` / `local_app_data`。默认拒绝；拒绝后退出且不改文件。确认后只替换目录 `base` 值，保留 secret、挂载顺序、入口与其他字段，验证通过后原子写入。原始文件的逐字节备份保存在同一个被忽略的 `launch/` 内，名字类似 `.launch.json.before-base-migration.*.bak`；它含有私密配置，应和 launch.json 一样保密。若确认期间文件已被其他程序修改，迁移拒绝覆盖，需重新打开工具。
+
+这是一次明确的迁移操作，不是永久兼容别名。CLI 遇到旧值会失败并提示迁移，不会改写文件或悄悄改用默认配置；以后保存的配置只含新值。
 
 标题中的星号表示未保存修改，关闭时会提醒保存。保存、包操作和构建均先使用同一验证器，再原子保存到唯一私有 JSON；失败不覆盖旧文件。“保存配置并构建”调用 `tools/build.ps1 -Configuration Debug` 或 `Release`，不传隐藏的配置路径。GUI 与终端无参数构建使用同一文件。
 

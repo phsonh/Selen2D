@@ -4,11 +4,24 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QLockFile
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QCheckBox, QPushButton, QTableWidget, QTableWidgetItem,
     QComboBox, QLabel, QHeaderView, QAbstractItemView, QGroupBox)
-from .launch_common import ConfigError, load_launch_config, validate_launch
+from .launch_common import (ConfigError, LegacyDirectoryBaseError, decode_json,
+    directory_base_migration, load_launch_config, validate_launch)
+
+
+class MigrationDeclined(ConfigError):
+    pass
+
+
+def config_lock(path):
+    lock = QLockFile(str(path.with_name('.' + path.name + '.lock')))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(0):
+        raise ConfigError('another Selen2D Tools process is saving the project configuration')
+    return lock
 
 
 def save_config(path, config, *, replace_existing=True):
@@ -19,6 +32,7 @@ def save_config(path, config, *, replace_existing=True):
         raise ConfigError('configuration exceeds 8 MiB')
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    lock = config_lock(path)
     temporary = None
     try:
         fd, name = tempfile.mkstemp(prefix='.' + path.name + '.', suffix='.tmp', dir=path.parent)
@@ -38,10 +52,11 @@ def save_config(path, config, *, replace_existing=True):
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+        lock.unlock()
     return normalized
 
 
-def load_project_config(root):
+def load_project_config(root, confirm_migration=None, migration_finished=None):
     path = Path(root) / 'launch/launch.json'
     if not path.exists():
         template = load_launch_config(Path(root) / 'src/res/development/launch.json')
@@ -49,7 +64,47 @@ def load_project_config(root):
             save_config(path, template, replace_existing=False)
         except FileExistsError:
             pass  # Another process won creation; validate its file below.
-    return load_launch_config(path)
+    with path.open('rb') as stream:
+        original = stream.read(8 * 1024 * 1024 + 1)
+    raw = decode_json(original)
+    candidate = directory_base_migration(raw)
+    if candidate is None:
+        return validate_launch(raw)
+    if confirm_migration is None:
+        raise LegacyDirectoryBaseError()
+    if not confirm_migration(path):
+        raise MigrationDeclined('directory base migration declined; configuration unchanged')
+    lock = config_lock(path)
+    temporary = None
+    try:
+        if path.read_bytes() != original:
+            raise ConfigError('configuration changed while migration was awaiting confirmation; reopen Tools to retry')
+        # Keep a byte-for-byte private backup; only base values change in output.
+        fd, backup_name = tempfile.mkstemp(prefix='.launch.json.before-base-migration.', suffix='.bak', dir=path.parent)
+        with os.fdopen(fd, 'wb') as backup:
+            backup.write(original)
+            backup.flush()
+            os.fsync(backup.fileno())
+        encoded = (json.dumps(candidate, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        if len(encoded) > 8 * 1024 * 1024:
+            raise ConfigError('migrated configuration exceeds 8 MiB; original preserved')
+        fd, name = tempfile.mkstemp(prefix='.launch.json.migrate.', suffix='.tmp', dir=path.parent)
+        temporary = Path(name)
+        with os.fdopen(fd, 'wb') as output:
+            output.write(encoded)
+            output.flush()
+            os.fsync(output.fileno())
+        if path.read_bytes() != original:
+            raise ConfigError('configuration changed during migration; original backup retained, no replacement performed')
+        os.replace(temporary, path)
+        temporary = None
+        if migration_finished is not None:
+            migration_finished(Path(backup_name))
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        lock.unlock()
+    return validate_launch(candidate)
 
 
 class ConfigEditor(QWidget):
@@ -104,8 +159,8 @@ class ConfigEditor(QWidget):
             buttons.addStretch()
             layout.addLayout(buttons)
             outer.addWidget(box)
-        note = QLabel('deployment：EXE 所在目录下的相对路径。user_data：Windows LocalAppData 下的相对路径。\n'
-                      '例如 user_data / LonelyOwl/THKTNT → save，Lua 通过 save/... 访问。secret 只保存在私有 JSON 中。')
+        note = QLabel('root：EXE 所在目录下的相对路径。local_app_data：Windows LocalAppData 下的相对路径。\n'
+                      '例如 local_app_data / LonelyOwl/THKTNT → save，Lua 通过 save/... 访问。secret 只保存在私有 JSON 中。')
         note.setWordWrap(True)
         outer.addWidget(note)
         outer.addStretch(1)
@@ -146,14 +201,14 @@ class ConfigEditor(QWidget):
         self._changed()
 
     def add_directory(self, record=None):
-        record = record or dict(base='deployment', path='.', target='.')
+        record = record or dict(base='root', path='.', target='.')
         if isinstance(record, str):
-            record = dict(base='deployment', path=record, target=record)
+            record = dict(base='root', path=record, target=record)
         row = self.directories.rowCount()
         self.directories.insertRow(row)
         combo = QComboBox()
-        combo.addItem('.（Root）', 'deployment')
-        combo.addItem('%APPDATA%（User Data）', 'user_data')
+        combo.addItem('root（EXE Directory）', 'root')
+        combo.addItem('local_app_data（Local AppData）', 'local_app_data')
         combo.setCurrentIndex(combo.findData(record['base']))
         combo.currentIndexChanged.connect(self._changed)
         self.directories.setCellWidget(row, 0, combo)
