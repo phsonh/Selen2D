@@ -1,7 +1,8 @@
 # Selen2D
 
-![Selen2D Banner](src/res/image/selen2d-banner.png)
 A lightweight 2D game engine.
+![Selen2D Banner](src/res/image/Selen2D_banner_2048x1024.png)
+
 The `v2-development` branch implements the frozen second API revision. Its
 development version is 2.0.1, not a newly published release. Windows x64/D3D12
 validation and remaining platform limits are recorded separately from API coverage. `v2.0.0` remains the published first-revision baseline.
