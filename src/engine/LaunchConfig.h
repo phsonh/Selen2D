@@ -10,7 +10,7 @@ struct Mount {
     std::uint32_t parts;
     bool encrypted;
 };
-enum class Base { Deployment, UserData };
+enum class Base { Root, LocalAppData };
 struct Directory {
     Base base;
     std::string_view path, target;

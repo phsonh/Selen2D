@@ -1,7 +1,11 @@
 {
   "mounts": [],
   "directories": [
-    { "base": "deployment", "path": ".", "target": "." }
+    {
+      "base": "root",
+      "path": ".",
+      "target": "."
+    }
   ],
   "entry": "main.lua"
 }

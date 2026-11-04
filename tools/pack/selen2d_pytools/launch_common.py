@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import math
+import copy
 from pathlib import Path
 from functools import lru_cache
 
@@ -17,6 +18,13 @@ class ConfigError(ValueError):
     pass
 
 
+class LegacyDirectoryBaseError(ConfigError):
+    def __init__(self):
+        super().__init__("legacy directory base deployment/user_data requires explicit migration to "
+                         "root/local_app_data; open Selen2D Tools and confirm migration, "
+                         "or update only the directory base fields in the private JSON")
+
+
 def _pairs(items):
     result = {}
     for name, value in items:
@@ -29,9 +37,14 @@ def _pairs(items):
 
 def read_json(path) -> dict:
     """Strict bounded JSON object. Diagnostics never quote source contents."""
+    with Path(path).open("rb") as stream:
+        raw = stream.read(8 * 1024 * 1024 + 1)
+    return decode_json(raw)
+
+
+def decode_json(raw: bytes) -> dict:
+    """Parse one already-read snapshot using the same rules as file input."""
     try:
-        with Path(path).open("rb") as stream:
-            raw = stream.read(8 * 1024 * 1024 + 1)
         if len(raw) > 8 * 1024 * 1024:
             raise ConfigError("configuration exceeds 8 MiB")
         text = raw.decode("utf-8", errors="strict")
@@ -105,7 +118,7 @@ def _keys(value, expected, label):
 
 
 def _inside(parent, child):
-    # Only validated deployment-root directory records may contain this marker.
+    # Only validated root-directory records may contain this marker.
     # normalize_path remains strict for entry, mounts and all ordinary paths.
     return parent == "." or child == parent or child.startswith(parent + "/")
 
@@ -135,7 +148,7 @@ def validate_launch(config: dict) -> dict:
     if type(config["directories"]) is not list or len(config["directories"]) > 4096:
         raise ConfigError("directories must be an array of at most 4096 records")
     mounts, parts = [], set()
-    virtual_names, deployment_names, user_names = {}, {}, {}
+    virtual_names, root_names, local_names = {}, {}, {}
     for record in config["mounts"]:
         _keys(record, ("source", "target", "parts", "encrypted"), "mount")
         part = record["parts"]
@@ -144,23 +157,25 @@ def validate_launch(config: dict) -> dict:
         if type(record["encrypted"]) is not bool:
             raise ConfigError("encrypted must be a boolean")
         _record_names(virtual_names, record["target"])
-        _record_names(deployment_names, record["source"])
+        _record_names(root_names, record["source"])
         parts.add(part)
         mounts.append(dict(source=normalize_path(record["source"], "source"), target=normalize_path(record["target"], "target"), parts=part, encrypted=record["encrypted"]))
     mounts.sort(key=lambda m: m["parts"])
     directories = []
     for record in config["directories"]:
         if type(record) is str:
-            record = dict(base="deployment", path=record, target=record)
+            record = dict(base="root", path=record, target=record)
         _keys(record, ("base", "path", "target"), "directory")
-        if record["base"] not in ("deployment", "user_data"):
-            raise ConfigError("directory base must be deployment or user_data")
-        root_mapping = record == dict(base="deployment", path=".", target=".")
+        if record["base"] in ("deployment", "user_data"):
+            raise LegacyDirectoryBaseError()
+        if record["base"] not in ("root", "local_app_data"):
+            raise ConfigError("directory base must be root or local_app_data")
+        root_mapping = record == dict(base="root", path=".", target=".")
         if root_mapping:
             current = dict(record)
         else:
             _record_names(virtual_names, record["target"])
-            _record_names(deployment_names if record["base"] == "deployment" else user_names, record["path"])
+            _record_names(root_names if record["base"] == "root" else local_names, record["path"])
             current = dict(base=record["base"], path=normalize_path(record["path"], "directory path"), target=normalize_path(record["target"], "directory target"))
         if current not in directories:
             directories.append(current)
@@ -189,3 +204,25 @@ def validate_launch(config: dict) -> dict:
 
 def load_launch_config(path) -> dict:
     return validate_launch(read_json(path))
+
+
+def directory_base_migration(config: dict) -> dict | None:
+    """Prepare an explicit migration only; normal validation never calls this.
+
+    Keep original values/order/Unicode, including the secret and mounts. The
+    validator's normalized return is deliberately discarded here.
+    """
+    records = config.get("directories")
+    if type(records) is not list:
+        validate_launch(config)
+        return None
+    old_names = {"deployment": "root", "user_data": "local_app_data"}
+    if not any(type(record) is dict and type(record.get("base")) is str and record["base"] in old_names
+               for record in records):
+        return None
+    result = copy.deepcopy(config)
+    for record in result["directories"]:
+        if type(record) is dict and type(record.get("base")) is str and record["base"] in old_names:
+            record["base"] = old_names[record["base"]]
+    validate_launch(result)
+    return result

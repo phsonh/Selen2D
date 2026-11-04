@@ -80,22 +80,22 @@ Config Load(const std::filesystem::path& directory, const launch::Config& declar
         // Never relax File::Normalize: Lua, package entries and resource paths
         // still require ordinary nonempty relative names without dot components.
         if(record.path == "." || record.target == ".") {
-            if(record.base != launch::Base::Deployment || record.path != "." || record.target != ".")
-                throw std::invalid_argument("The root directory marker requires deployment with path and target both '.'");
+            if(record.base != launch::Base::Root || record.path != "." || record.target != ".")
+                throw std::invalid_argument("The root directory marker requires base 'root' with path and target both '.'");
             directories.push_back({config.directory, {}, {}});
             continue;
         }
         std::filesystem::path base;
         switch(record.base) {
-        case launch::Base::Deployment: base = config.directory; break;
-        case launch::Base::UserData:
+        case launch::Base::Root: base = config.directory; break;
+        case launch::Base::LocalAppData:
             if(!userRoot) userRoot = ResolveUserDataRoot();
             base = *userRoot;
             break;
         default: throw std::invalid_argument("Unknown base in compiled directory rule");
         }
         RecordNames(virtualNames, record.target);
-        RecordNames(record.base == launch::Base::Deployment ? deploymentNames : userNames, record.path);
+        RecordNames(record.base == launch::Base::Root ? deploymentNames : userNames, record.path);
         directories.push_back({std::move(base), Path(record.path), Path(record.target)});
     }
     config.files = std::make_shared<File::FileSystem>(config.directory, std::move(mounts), std::move(directories), key);

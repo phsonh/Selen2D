@@ -29,7 +29,7 @@ def render(config: dict) -> bytes:
     lines.append('}};')
     lines.append(f'inline constexpr std::array<launch::Directory, {len(config["directories"])}> directories{{{{')
     for directory in config['directories']:
-        base = 'Deployment' if directory['base'] == 'deployment' else 'UserData'
+        base = {'root': 'Root', 'local_app_data': 'LocalAppData'}[directory['base']]
         lines.append(f'    {{launch::Base::{base}, {_text(directory["path"])}, {_text(directory["target"])} }},')
     lines.append('}};')
     secret_ref = 'std::span<const std::uint8_t>{secret}' if secret is not None else 'std::nullopt'
@@ -72,7 +72,7 @@ def main(argv=None):
         config = load_launch_config(args.config)
         if args.public_default:
             expected = dict(entry='main.lua', mounts=[], directories=[
-                dict(base='deployment', path='.', target='.')])
+                dict(base='root', path='.', target='.')])
             if config != expected:
                 raise ConfigError('public release requires the exact secret-free example configuration')
         if args.command == 'build':
