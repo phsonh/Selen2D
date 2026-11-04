@@ -2,6 +2,7 @@
 param(
     [ValidateSet('Release', 'Debug')][string]$Configuration = 'Release',
     [ValidateRange(1, 64)][int]$Jobs = 8,
+    [ValidateRange(1, 4)][int]$DxcJobs = 4,
     [switch]$Test,
     [switch]$ConfigureOnly,
     [string]$LaunchConfig,
@@ -56,7 +57,7 @@ try {
     $taskPublic = if ($PublicRelease) { 'ON' } else { 'OFF' }
     $taskCMakeJson = if ($LaunchConfig -or $DefaultLaunch -or $PublicRelease) { $taskJson } else { '' }
     & $taskCMake --preset $taskPreset "-DBUILD_TESTING=$taskBuildTesting" "-DPython3_EXECUTABLE=$Python" `
-        "-DENGINE_LAUNCH_CONFIG=$taskCMakeJson" '-DENGINE_LAUNCH_HEADER=' "-DENGINE_PUBLIC_RELEASE=$taskPublic"
+        "-DENGINE_LAUNCH_CONFIG=$taskCMakeJson" '-DENGINE_LAUNCH_HEADER=' "-DENGINE_PUBLIC_RELEASE=$taskPublic" "-DENGINE_DXC_JOBS=$DxcJobs"
     if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
     if (-not $ConfigureOnly) {
         & $taskCMake --build --preset $taskPreset --parallel $Jobs
