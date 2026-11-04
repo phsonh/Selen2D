@@ -141,8 +141,10 @@ R::Image Image(lua_State* L,int index,Token& host) {
     result.textureLevels=asset->texture->Levels();
     result.x=asset->content.x; result.y=asset->content.y;
     result.width=asset->content.width; result.height=asset->content.height;
+    result.insetX=asset->image.x-std::floor(asset->image.x); result.insetY=asset->image.y-std::floor(asset->image.y);
+    result.logicalWidth=asset->image.width; result.logicalHeight=asset->image.height;
     const auto& options=asset->image.options;
-    const auto anchor=options.anchor.value_or(A::Vec2{double(result.width)/2,double(result.height)/2});
+    const auto anchor=options.anchor.value_or(A::Vec2{result.LogicalWidth()/2,result.LogicalHeight()/2});
     result.anchorX=anchor.x; result.anchorY=anchor.y;
     result.scaleX=options.scale.x; result.scaleY=options.scale.y;
     result.filter=options.filter==A::Filter::Point ? R::Filter::Point:R::Filter::Linear;

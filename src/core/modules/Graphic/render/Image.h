@@ -29,6 +29,11 @@ struct Image {
     SDL_GPUTexture* texture{};
     std::shared_ptr<const void> lifetime;
     std::uint32_t textureWidth{}, textureHeight{}, x{}, y{}, width{}, height{};
+    // Integer coverage is storage/copy metadata. Fractional logical crops do
+    // not change it; zero logical extent means the full coverage (native Canvas).
+    double insetX{}, insetY{}, logicalWidth{}, logicalHeight{};
+    double LogicalWidth() const noexcept { return logicalWidth > 0 ? logicalWidth : width; }
+    double LogicalHeight() const noexcept { return logicalHeight > 0 ? logicalHeight : height; }
     std::uint32_t textureLevels{1}; // Physical backing levels; packed Atlas strips always have one.
     double anchorX{}, anchorY{}, scaleX{1}, scaleY{1};
     Filter filter{Filter::Linear};
@@ -56,9 +61,13 @@ struct Vertex {
     float minU{}, minV{}, maxU{}, maxV{};
     // sampling: 0=local clamp, 1=whole-texture repeat, 2=local point repeat,
     // 3=local linear repeat; packed logical mips use 4/5=point clamp/repeat
-    // and 6/7=linear clamp/repeat. These four floats are one shader attribute.
+    // and 6/7=linear clamp/repeat; 8..11 use those modes on physical mip chains
+    // with a fractional logical crop. These floats are one shader attribute.
     float premultiplied{}, sampling{}, mipLevels{}, mipExtrusion{};
     float relativeX{}, relativeY{}, relativeZ{};
+    // Coverage-relative source-pixel inset and extent. Separate floats avoid
+    // subtracting nearly equal Atlas UV bounds for crops smaller than a texel.
+    float logicalX{}, logicalY{}, logicalWidth{}, logicalHeight{};
 };
 void Validate(const Image&, Paint);
 std::array<std::array<double,2>,4> ImageCorners(const Image&, Transform);

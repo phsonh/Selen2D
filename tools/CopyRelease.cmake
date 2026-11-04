@@ -38,7 +38,8 @@ require_exact_path("${DESTINATION}" "${releases_root}/${RELEASE_NAME}")
 require_exact_path("${releases_root}/${RELEASE_NAME}.zip" "${releases_root}/${RELEASE_NAME}.zip")
 
 set(shell_files example/main.lua example/effect.hlsl example/palette.hlsl)
-set(guide_files README.md getting-started.md shader.md runtime.md input-window.md file-launch.md)
+set(guide_files README.md getting-started.md shader.md runtime.md input-window.md file-launch.md
+    resource.md audio.md fractional-images.md)
 set(api_modules Audio Debug File Graphic Input Math Object Resource Text Time Window)
 set(api_files runtime/Runtime.lua)
 set(legacy_api_files doc/api/Runtime.d.lua)

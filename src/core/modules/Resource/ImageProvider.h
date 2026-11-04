@@ -12,10 +12,14 @@ namespace Upload = core::modules::Graphic::Upload;
 namespace Jobs = core::runtime::Jobs;
 
 enum class Storage { Atlas, Standalone };
+struct ResolvedImage {
+    double x{}, y{}, width{}, height{}; // Exact logical source rectangle, including fractional pixels.
+    ImageOptions options;
+};
 struct ImageAsset final : Asset {
     std::shared_ptr<const Upload::Texture> texture;
     Atlas::Rect content; // Effective pixels in backing, top-left; excludes extrusion.
-    ImageRequest image; // Resolved dimensions/default center; wholeSource=false. Scale is not baked into pixels.
+    ResolvedImage image; // Resolved dimensions/default center. Scale is not baked into pixels.
     std::uint32_t sourceWidth{}, sourceHeight{};
     Storage storage{Storage::Atlas};
     // Logical levels packed vertically into physical level 0, each with its

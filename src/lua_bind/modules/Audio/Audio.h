@@ -10,6 +10,8 @@ public:
     ~Context();
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
+    // Call while the Lua state is alive, before lua_close. Releases the current
+    // userdata root and revokes all binding tokens; native drain is host-owned.
     void Shutdown() noexcept;
 private:
     struct Impl;

@@ -30,7 +30,7 @@ struct Vec2 {
 enum class Filter { Point, Linear };
 enum class Address { Clamp, Repeat };
 struct ImageOptions {
-    std::optional<Vec2> anchor; // Normalized to the region's pixel center on Add.
+    std::optional<Vec2> anchor; // Resolved asset center; native helpers translate it to request axes.
     Vec2 scale{1, 1};
     Filter filter{Filter::Linear};
     Address address{Address::Clamp};
@@ -38,9 +38,10 @@ struct ImageOptions {
     bool operator==(const ImageOptions&) const = default;
 };
 struct ImageRequest {
-    std::uint32_t x{}, y{}, width{}, height{}; // Source pixels, top-left origin.
+    double x{}, y{}; // Exact source coordinates; independent omitted sizes resolve after decode.
+    std::optional<double> width, height;
+    std::optional<double> centerX, centerY;
     ImageOptions options;
-    bool wholeSource{}; // Resolve dimensions/default center after source decode.
     bool operator==(const ImageRequest&) const = default;
 };
 enum class AudioMode { Decoded, Stream };
@@ -126,6 +127,8 @@ namespace detail { struct Core; struct ManifestState; struct Transaction; }
 class Service;
 class Manifest {
 public:
+    // Canonical declaration. Values and omission markers are copied, never Lua state.
+    Manifest& LoadImage(std::string path, std::string name, ImageRequest request);
     Manifest& LoadImage(std::string path, std::string name, std::uint32_t x,
         std::uint32_t y, std::uint32_t width, std::uint32_t height,
         ImageOptions options = {});
@@ -172,6 +175,8 @@ public:
     void Tick(Budget = {});
     std::optional<Handle> Find(const Id&);
     std::optional<Handle> Find(const std::string& name);
+    // Observation only: pending/reserved, failed, retired and unknown names are absent.
+    std::optional<Kind> PublishedKind(const std::string& name) const;
     bool IsResident(Handle);
     std::shared_ptr<const Asset> Acquire(Handle); // Throws on stale/nonresident.
     Request GetInfo(Handle); // Detached normalized declaration; no GPU identity.

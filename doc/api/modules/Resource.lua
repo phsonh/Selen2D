@@ -1,179 +1,174 @@
 ---@meta
 
----Selen2D 2.0.0 一号机资源接口，依据基线 42585671780bca75692550685e49dcb824e2d36e 绑定及实现核对。
----名称跨 Image/Sound/Music/Shader/Font 全局唯一；name 是 1..512 字节且不含 NUL 的字符串。
----path 是 1..4096 字节且不含 NUL 的 VFS 逻辑路径；相对虚拟根、使用 /，遵循 launch 挂载覆盖和路径权限规则。
----参数个数/类型错误、重复名、未知名、正在加载或资源类型不符均抛 Lua 错误；不返回伪默认值。
----同步 LoadXXX 成功返回时全部准备已完成，可能阻塞读取/解码/编译和必要 GPU Fence；不执行 Lua 回调或推进 Object。
----每个资源驻留到 Unload 或退出；Canvas 属于 Graphic，普通字节/JSON 文件由 File/Text 处理。
----本文件仅为编辑器声明，不应执行；没有公开 Image userdata、Manifest、Atlas、Job 或 Cancel API。
+---资源名称跨 Image/Sound/Music/Font/Shader 全局唯一，1..512 字节且不含 NUL。
+---path 是编译期授权的 VFS 路径；登记即检查语法和权限。非法参数、重名、未就绪及类型错误抛错。
+---同步加载可能等待 I/O、解码、编译及 GPU Fence，不执行 Lua 游戏回调。资源存活至 Unload 或退出。
+---本文件仅为编辑器声明，不应执行；没有公开 Texture、Group、Job 或 Cancel API。
 ---@class Resource
 Resource = {}
 
+---@alias ResourceType 'Image'|'Sound'|'Music'|'Font'|'Shader'
 ---@alias ImageSampler 'point+clamp'|'linear+clamp'|'point+wrap'|'linear+wrap'
 
----增量收集器，可跨帧登记；不是资源所有者。GC 不卸载已完成资源，也不取消已提交任务。
+---只读表自身字段，不执行元方法、不补写默认值；未知键、数字键、数字字符串、scale 别名均报错。
+---@class ResourceImageOptions
+---@field u? number 有限且 >=0，默认 0；源图左上原点向右。
+---@field v? number 有限且 >=0，默认 0；源图左上原点向下。
+---@field w? number 有限且 >0，默认源宽-u；保留小数，不取整。
+---@field h? number 有限且 >0，默认源高-v；各轴独立缺省。
+---@field centerX? number 有限数，默认最终 w/2；相对切片，可在图外。
+---@field centerY? number 有限数，默认最终 h/2；与 centerX 独立缺省。
+---@field hscale? number 有限数，默认 1，允许正、负、0。
+---@field vscale? number 有限数，默认最终 hscale，允许正、负、0。
+---@field mipmap? boolean 默认 false；不改变逻辑尺寸、中心及缩放。
+
+---@class ResourceMusicOptions
+---@field loopStart? number 有限且 >=0，默认 0 秒。
+---@field loopEnd? number 有限数，默认源时长；要求 loopStart < loopEnd <= 源时长。
+
+---增量收集器，可跨帧登记；GC 不卸载资源、不取消已提交任务。
 ---@class ResourceLoader
 local Loader = {}
 
----创建空 Loader，立即返回，不读取文件。只可成功提交一次。
+---创建空 Loader，立即返回，不读文件。
 ---@return ResourceLoader loader
 function Resource.CreateLoader() end
 
----同步加载 PNG；裁剪坐标以源图左上为原点、右/下为正，裁剪范围须完整落在源图内。
----u/v/w/h 全部省略或 nil 表示整图，否则四项必须一起提供。centerX/centerY 也必须成对给出。
----默认中心为裁剪图几何中心，scale=1、mipmap=false、sampler='linear+clamp'；不开始绘制，无返回值。
----非法裁剪、图片格式/读取/解码/上传失败报错且不残留名称。固有缩放允许负数和 0，不改变逻辑像素尺寸。
----@param name string 全局唯一名称。
----@param path string PNG 的 VFS 路径。
----@param u? integer 非负整数像素，最大 4294967295。
----@param v? integer 非负整数像素，最大 4294967295。
----@param w? integer 正整数像素，最大 4294967295。
----@param h? integer 正整数像素，最大 4294967295。
----@param centerX? number 相对裁剪图左上角的有限像素坐标，可在图外；默认 w/2。
----@param centerY? number 相对裁剪图左上角的有限像素坐标，可在图外；默认 h/2。
----@param scale? number 有限的初始等比固有缩放，默认 1。
----@param mipmap? boolean 默认 false；只接受布尔值。
-function Resource.LoadImage(name, path, u, v, w, h, centerX, centerY, scale, mipmap) end
-
----只登记图片请求，不读文件；参数、裁剪规则与 Resource.LoadImage 相同，默认整图、几何中心、scale=1、mipmap=false。
----本批重复名/非法参数立即报错；读取、源图边界、解码和 GPU 失败通过提交后的 IsFinished 报错。无返回值。
+---同步加载 PNG；省略/nil/空 options 均采用缺省。不接受第四参数或旧长位置参数。
+---各裁剪/中心字段独立可选，区域必须位于源图内；固有缩放不改变裁剪尺寸、中心或 UV。
+---静态参数立即验证，实际边界/解码/Atlas/GPU 失败抛错，不公开半成品。
 ---@param name string
 ---@param path string
----@param u? integer 非负整像素，须与 v/w/h 同时提供。
----@param v? integer 非负整像素。
----@param w? integer 正整像素。
----@param h? integer 正整像素。
----@param centerX? number 有限数，与 centerY 成对；默认裁剪图中心。
----@param centerY? number 有限数。
----@param scale? number 默认 1，允许负值或 0。
----@param mipmap? boolean 默认 false。
-function Loader:LoadImage(name, path, u, v, w, h, centerX, centerY, scale, mipmap) end
+---@param options? ResourceImageOptions
+function Resource.LoadImage(name, path, options) end
 
----同步加载短音效并完整解码到共享 PCM；支持按文件头识别的 WAV/Vorbis，初始资源音量为 1。
----成功后可供 Audio.PlaySound 使用，不自动播放；读取/解码失败报错。无返回值。
+---登记即复制 options 字段和值及缺省标记；之后改表、清空或 GC 不影响请求。
+---静态参数、路径、本批重名立即报错，不占失败请求的名字；内容错误由提交后查询报告。
+---@param name string
+---@param path string
+---@param options? ResourceImageOptions
+function Loader:LoadImage(name, path, options) end
+
+---完整解码 WAV/Vorbis 音效，不自动播放；资源音量初始 1。只接受两个参数。
 ---@param name string
 ---@param path string
 function Resource.LoadSound(name, path) end
 
----登记完整解码音效请求，格式与默认音量同 Resource.LoadSound；提交前不读文件、不播放。
----重复名或提交后继续登记报错；后台失败由 IsFinished 报告。无返回值。
+---登记完整解码音效；只接受 name/path，提交前不读文件。
 ---@param name string
 ---@param path string
 function Loader:LoadSound(name, path) end
 
----同步准备流式音乐；不要求整首 PCM 常驻，不自动播放，初始资源音量为 1。
----循环点单位为源音频秒，默认 [0,源结尾)；必须 0<=loopStart<loopEnd<=源时长，内部转换为 PCM 帧。
----读取/格式/循环区间无效时抛错；成功后 Audio.PlayMusic 默认按此区间循环。无返回值。
----@param name string
----@param path string WAV/Vorbis VFS 路径，按文件头识别。
----@param loopStart? number 有限非负数，默认 0。
----@param loopEnd? number 有限数，默认源音频结尾。
-function Resource.LoadMusic(name, path, loopStart, loopEnd) end
-
----登记流式音乐，默认循环起点 0、终点源结尾、音量 1；不立即读取或播放。
----提交后异步校验源时长与循环区间，失败在 IsFinished 报错；提交后禁止添加。无返回值。
+---准备流式 WAV/Vorbis 音乐，不自动播放，不保存整首 PCM；资源音量初始 1。
+---默认整段循环；首次从 0 播至 loopEnd，后续重复 [loopStart,loopEnd)，内部换算为源 PCM 帧。
+---起点/终点独立缺省，时长越界在加载时抛错；不接受第四参数。
 ---@param name string
 ---@param path string
----@param loopStart? number 有限非负秒数，默认 0。
----@param loopEnd? number 有限秒数，默认源结尾，须大于 loopStart 且不超过源时长。
-function Loader:LoadMusic(name, path, loopStart, loopEnd) end
+---@param options? ResourceMusicOptions
+function Resource.LoadMusic(name, path, options) end
 
----同步读取并校验 TTF/OTF 字体，成功后注册名称；不支持 .fnt，也不提供字形绘制/排版接口。
----加载完成只表示文件和格式准备好，不隐式栅格化文本。格式/读取失败报错，无返回值。
+---登记流式音乐并复制 options 快照；不读取元方法，内容错误由提交后查询报告。
+---@param name string
+---@param path string
+---@param options? ResourceMusicOptions
+function Loader:LoadMusic(name, path, options) end
+
+---同步准备独立可缩放 TTF/OTF 字体，不接受集合、位图字库、WOFF 或 options 重载。
+---完成时字体字节和解析已验证，不预栅格化整个 Unicode 字库。
 ---@param name string
 ---@param path string
 function Resource.LoadFont(name, path) end
 
----登记 TTF/OTF 请求，提交前不读文件；无字体绘制副作用，后台格式/读取失败由 IsFinished 报错。
----提交后继续登记或本批重复名报错。无返回值。
+---登记 TTF/OTF，解析失败由提交后查询报告。
 ---@param name string
 ---@param path string
 function Loader:LoadFont(name, path) end
 
----同步加载 HLSL，经 VFS 解析文件及相对 include；须 include "Solongo.hlsl" 并定义 PSMain，可选 VSMain。
----编译、反射、GPU Shader 和基础管线准备均成功才发布名称；失败包含资源诊断且不留下半成品。
----此基线采用 Windows DXIL，HLSL 编译器静态链接在引擎内，运行不需要外部 DXC DLL 或 SDK。
----这里只准备 Shader；绘制与参数类型由 Graphic.Render 定义。无返回值。
+---HLSL 和相对 include 统一经 VFS；编译、反射、GPU 程序准备成功才发布。
+---公开 ABI 由当前 Graphic 声明和 Shader 指南确定；不定义另一套 Shader ABI。
+---编译器静态链接，运行无需外部 DXC DLL、Python 或 SDK。错误含名称、路径和诊断。
 ---@param name string
 ---@param path string
 function Resource.LoadShader(name, path) end
 
----登记 HLSL 请求；ABI、VFS include 和平台限制同 Resource.LoadShader，不在登记时编译。
----编译/反射/GPU 准备失败通过 IsFinished 报错；单次 DXC 调用不能被中断。无返回值。
+---登记 HLSL，不立即编译；后台编译/反射/GPU 错误由提交后查询报告。
 ---@param name string
 ---@param path string
 function Loader:LoadShader(name, path) end
 
----原子检查并预留本批全部名称，开始异步处理，不等待读取、解码或 GPU 完成。无返回值。
----成功后封存，继续添加/重复提交报错；同步名称冲突不封存，可解决外部冲突后重试。
----与已就绪资源或其他批次的预留名称冲突会立即报错；批内重复名在登记时即已报错。
----全部准备成功才一次性公开本批资源；任何后台失败都撤销预留且不发布部分资源，失败批次不能再提交。
+---原子预留本批名字，非阻塞开始准备；接受后封存，只可接受一次 Submit。
+---同步名字冲突不接受该次提交，可解决冲突后重试。空批次接受时立即完成。
+---非空批次全部成功才原子公开；失败释放预留、不公开任何资源，重试必须使用新 Loader。
 function Loader:Submit() end
 
----非阻塞查询；未提交或仍处理中为 false，整批准备及必要 GPU 同步成功后为 true。
----失败终态每次查询都抛相同的名称、路径及原因；失败重试须新建 Loader。服务已关闭/句柄非法报错。
+---未提交或处理中 false；整批公开且必要 GPU Fence/字体准备已完成才 true。
+---失败终态每次抛同一名称/路径/原因。非阻塞查询，不推进工作、不等待 GPU。
 ---@return boolean finished
 function Loader:IsFinished() end
 
----立即返回已就绪 Image 的裁剪像素尺寸，与固有缩放、中心和 Atlas 物理位置无关。
----未知、未就绪或非 Image 名称抛错；不改变绘制状态。
+---未提交为 0；N 项请求中 C 项真正准备完成但未发布时 C/(N+1)，严格小于 1。
+---整批发布成功为 1（包括空批次），失败与 IsFinished 一样重复抛错。
+---不是耗时/字节比例或可用资源数；仅观察完成记录，不要求窗口 Present。
+---@return number progress 有限值 [0,1]。
+function Loader:GetProgress() end
+
+---返回未缩放的精确逻辑裁剪宽高，可为小数；不是 Atlas 像素覆盖尺寸。
+---未知、未就绪或非 Image 名称抛错。
 ---@param name string
----@return integer width
----@return integer height
+---@return number width
+---@return number height
 function Resource.GetImageSize(name) end
 
----立即更新当前 Image 中心；只影响之后提交的绘制，已提交命令保留旧快照。
----允许图外/负坐标；非有限数、未知/未就绪/非 Image 报错，无返回值。
----@param name string
----@param centerX number 相对裁剪图左上角的像素坐标。
----@param centerY number 相对裁剪图左上角的像素坐标。
+---更新中心，允许图外坐标；只影响之后提交的命令，旧 Draw 保留快照。
+---@param name string 已就绪 Image。
+---@param centerX number 有限数，相对切片左上。
+---@param centerY number 有限数。
 function Resource.SetImageCenter(name, centerX, centerY) end
 
----返回当前中心元数据，加载时未指定则为裁剪图几何中心；不代表历史命令的快照。
----未知、未就绪或非 Image 报错。
----@param name string
+---@param name string 已就绪 Image；未知/类型错误/未就绪抛错。
 ---@return number centerX
 ---@return number centerY
 function Resource.GetImageCenter(name) end
 
----立即更新 Image 两轴固有缩放，只影响后续提交；允许负值镜像或 0 退化，禁止 NaN/Inf。
----RenderImage 将其与绘制缩放各乘一次，显式几何及 Shader 采样不使用它；不改变图像像素宽高。无返回值。
----@param name string 已就绪 Image 名称，否则报错。
+---更新固有缩放，负数镜像、0 退化；不改尺寸/中心/UV，只影响后续 Draw。
+---RenderImage 与本次 sx/sy 各乘一次；RenderRect 显式边界不使用固有中心/缩放。
+---@param name string 已就绪 Image。
 ---@param hscale number 有限数。
----@param vscale? number 省略/nil 时等于 hscale。
+---@param vscale? number 有限数，省略/nil 时等于 hscale。
 function Resource.SetImageScale(name, hscale, vscale) end
 
----返回当前横、纵缩放，始终两个值；默认均 1，加载时 scale 可覆盖。未知/未就绪/非 Image 报错。
----@param name string
+---@param name string 已就绪 Image。
 ---@return number hscale
 ---@return number vscale
 function Resource.GetImageScale(name) end
 
----立即设置逻辑 Image 的过滤/寻址；默认 linear+clamp，仅影响后续绘制，已排队命令保留原采样快照。
----Atlas 子图及其 Mipmap 的 wrap 只重复逻辑切片，不采样整页邻图。未知枚举/未就绪/非 Image 报错，无返回值。
+---设置逻辑 Image 采样器，默认 linear+clamp；旧 Draw 保留旧值，不改变其他 Image。
+---错误枚举、未知/未就绪名称或类型不符抛错。
 ---@param name string
 ---@param sampler ImageSampler
 function Resource.SetImageSampler(name, sampler) end
 
----立即返回当前采样器枚举，默认 linear+clamp；不返回 GPU 句柄。未知/未就绪/非 Image 报错。
----@param name string
+---@param name string 已就绪 Image。
 ---@return ImageSampler sampler
 function Resource.GetImageSampler(name) end
 
----立即修改 Sound/Music 的资源音量，同时影响已有和未来播放实例；最终增益另乘 Audio 对应分类音量。
----不接受 Image/Shader/Font 或未知/未就绪名称；越界/非有限 volume 报错。无返回值。
+---Sound/Music 资源音量立即影响所有已有和未来播放器，最终增益另乘播放器音量。
+---越界、非有限数、未知/未就绪或非音频资源抛错。
 ---@param name string
----@param volume number 有限数，范围 [0,1]，加载默认 1。
+---@param volume number 有限数 [0,1]，加载默认 1。
 function Resource.SetVolume(name, volume) end
 
----返回音频资源自身配置的增益（默认 1），不乘分类音量。非 Sound/Music、未知或未就绪名称报错。
----@param name string
----@return number volume [0,1]。
+---@param name string 已就绪 Sound/Music。
+---@return number volume 资源音量，不乘播放器音量。
 function Resource.GetVolume(name) end
 
----立即撤销资源名并停止关联音频；此后按名使用报错，同名可以重新加载。
----已接受的 GPU 命令保活旧 Image/Shader 到安全完成，不被新同名资源替换；没有返回值。
----不存在或正在加载的名称报错；不接受 Loader、Canvas 或磁盘路径。
----@param name string 已就绪资源的名称。
+---只查已发布资源；未知、未提交、预留未发布、失败、卸载名称返回 nil。
+---不读文件、不推进工作、不发布；非法 name 类型仍抛错。
+---@param name string
+---@return ResourceType? type
+function Resource.GetType(name) end
+
+---立即撤销已就绪名称；不存在/正在加载时报错。同名重载属于新代次。
+---旧 Draw 保活原资源至 GPU 安全完成；音频停止全部播放器的该代次并清除去重记录。
+---@param name string
 function Resource.Unload(name) end

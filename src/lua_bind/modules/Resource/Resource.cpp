@@ -3,8 +3,10 @@
 #include "core/modules/Resource/AudioAsset.h"
 #include "core/modules/Resource/ImageProvider.h"
 #include "lua_bind/Guard.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <new>
 #include <optional>
@@ -77,11 +79,56 @@ double Number(lua_State* L,int index) {
     return lua_tonumber(L,index);
 }
 double Optional(lua_State* L,int index,double fallback) { return lua_isnoneornil(L,index)?fallback:Number(L,index); }
-std::uint32_t Pixel(lua_State* L,int index,bool positive) {
-    const auto number=Number(L,index);
-    if(number<(positive?1.0:0.0) || number>std::numeric_limits<std::uint32_t>::max() || std::floor(number)!=number)
-        throw std::invalid_argument("Image crop must use complete integer pixels and positive sizes");
-    return static_cast<std::uint32_t>(number);
+bool Options(lua_State* L,int index,std::initializer_list<std::string_view> fields) {
+    if(lua_isnoneornil(L,index)) return false;
+    if(lua_type(L,index)!=LUA_TTABLE) throw std::invalid_argument("Resource options must be a table or nil");
+    // lua_next/rawget deliberately avoid __pairs, __index and __newindex.
+    // Never coerce a numeric key in place while traversing the caller's table.
+    lua_pushnil(L);
+    while(lua_next(L,index)) {
+        if(lua_type(L,-2)!=LUA_TSTRING) throw std::invalid_argument("Resource options keys must be strings");
+        const auto key=CheckString(L,-2);
+        if(std::find(fields.begin(),fields.end(),key)==fields.end())
+            throw std::invalid_argument("unknown Resource option: "+std::string(key));
+        lua_pop(L,1);
+    }
+    return true;
+}
+std::optional<double> OptionNumber(lua_State* L,int table,const char* key) {
+    lua_pushstring(L,key); lua_rawget(L,table);
+    std::optional<double> value;
+    if(!lua_isnil(L,-1)) value=Number(L,-1);
+    lua_pop(L,1);
+    return value;
+}
+N::ImageRequest ImageOptions(lua_State* L,int index) {
+    N::ImageRequest result;
+    if(!Options(L,index,{"u","v","w","h","centerX","centerY","hscale","vscale","mipmap"})) return result;
+    result.x=OptionNumber(L,index,"u").value_or(0);
+    result.y=OptionNumber(L,index,"v").value_or(0);
+    result.width=OptionNumber(L,index,"w"); result.height=OptionNumber(L,index,"h");
+    result.centerX=OptionNumber(L,index,"centerX"); result.centerY=OptionNumber(L,index,"centerY");
+    result.options.scale.x=OptionNumber(L,index,"hscale").value_or(1);
+    result.options.scale.y=OptionNumber(L,index,"vscale").value_or(result.options.scale.x);
+    lua_pushliteral(L,"mipmap"); lua_rawget(L,index);
+    if(!lua_isnil(L,-1)) {
+        if(lua_type(L,-1)!=LUA_TBOOLEAN) throw std::invalid_argument("mipmap must be a boolean");
+        result.options.mipmap=lua_toboolean(L,-1)!=0;
+    }
+    lua_pop(L,1);
+    return result;
+}
+N::AudioRequest AudioOptions(lua_State* L,int index,N::Kind kind) {
+    N::AudioRequest result;
+    if(kind==N::Kind::Music) {
+        result.mode=N::AudioMode::Stream;
+        result.loop=N::Loop{0,{}}; // A Music resource defaults to its entire source.
+        if(Options(L,index,{"loopStart","loopEnd"})) {
+            result.loop->start=OptionNumber(L,index,"loopStart").value_or(0);
+            result.loop->finish=OptionNumber(L,index,"loopEnd");
+        }
+    }
+    return result;
 }
 N::Service& Service(const std::shared_ptr<Token>& token) {
     if(!token || !token->service) throw std::runtime_error("Resource service has shut down");
@@ -111,35 +158,15 @@ void Add(lua_State* L,N::Manifest& manifest,N::Kind kind,int offset,const Token&
     // Actual I/O still happens asynchronously and rechecks the fixed VFS gate.
     const auto path=*token.files->NormalizePath(Text(L,offset+2,4096,"source path"));
     if(kind==N::Kind::Image) {
-        int supplied{};
-        for(int i=3;i<=6;++i) supplied+=!lua_isnoneornil(L,offset+i);
-        if(supplied!=0 && supplied!=4) throw std::invalid_argument("Image crop requires all of u, v, w and h");
-        N::ImageOptions options;
-        const bool cx=!lua_isnoneornil(L,offset+7),cy=!lua_isnoneornil(L,offset+8);
-        if(cx!=cy) throw std::invalid_argument("Image center requires both centerX and centerY");
-        if(cx) options.anchor=N::Vec2{Number(L,offset+7),Number(L,offset+8)};
-        const auto scale=Optional(L,offset+9,1); options.scale={scale,scale};
-        if(!lua_isnoneornil(L,offset+10)) {
-            if(lua_type(L,offset+10)!=LUA_TBOOLEAN) throw std::invalid_argument("mipmap must be a boolean");
-            options.mipmap=lua_toboolean(L,offset+10)!=0;
-        }
-        if(supplied) manifest.LoadImage(std::string(path),std::string(name),Pixel(L,offset+3,false),Pixel(L,offset+4,false),
-            Pixel(L,offset+5,true),Pixel(L,offset+6,true),options);
-        else manifest.LoadImage(std::string(path),std::string(name),options);
+        manifest.LoadImage(std::string(path),std::string(name),ImageOptions(L,offset+3));
     } else if(kind==N::Kind::Sound || kind==N::Kind::Music) {
-        N::AudioRequest options;
-        options.mode=kind==N::Kind::Sound?N::AudioMode::Decoded:N::AudioMode::Stream;
-        if(kind==N::Kind::Music) {
-            options.loop=N::Loop{Optional(L,offset+3,0),{}};
-            if(!lua_isnoneornil(L,offset+4)) options.loop->finish=Number(L,offset+4);
-        }
-        manifest.LoadAudio(std::string(path),std::string(name),options);
+        manifest.LoadAudio(std::string(path),std::string(name),AudioOptions(L,offset+3,kind));
     } else if(kind==N::Kind::Font) manifest.LoadFont(std::string(path),std::string(name));
     else manifest.LoadShader(std::string(path),std::string(name));
 }
 template<N::Kind Kind,bool Async> int Load(lua_State* L) {
     constexpr int offset=Async?1:0;
-    Count(L,offset+2,offset+(Kind==N::Kind::Image?10:Kind==N::Kind::Music?4:2));
+    Count(L,offset+2,offset+((Kind==N::Kind::Image || Kind==N::Kind::Music)?3:2));
     if constexpr(Async) {
         auto& box=RequireBox<LoaderBox>(L,1,LoaderType); (void)Service(box.token);
         if(box.job) throw std::logic_error("Loader has already been submitted");
@@ -172,6 +199,33 @@ int IsFinished(lua_State* L) {
     const bool finished=box.job && box.job->IsFinished();
     if(finished) box.job->CheckResult();
     lua_pushboolean(L,finished); return 1;
+}
+int GetProgress(lua_State* L) {
+    Count(L,1,1);
+    auto& box=RequireBox<LoaderBox>(L,1,LoaderType); (void)Service(box.token);
+    double progress{};
+    if(box.job) {
+        if(box.job->IsFinished()) { box.job->CheckResult(); progress=1; }
+        else {
+            const auto state=box.job->GetProgress();
+            progress=static_cast<double>(state.prepared)/(static_cast<double>(state.requests)+1.0);
+            progress=std::min(progress,std::nextafter(1.0,0.0));
+        }
+    }
+    lua_pushnumber(L,progress); return 1;
+}
+int GetType(lua_State* L) {
+    Count(L,1,1);
+    const auto kind=Service(L).PublishedKind(std::string(Name(L,1)));
+    if(!kind) { lua_pushnil(L); return 1; }
+    switch(*kind) {
+    case N::Kind::Image: lua_pushliteral(L,"Image"); break;
+    case N::Kind::Sound: lua_pushliteral(L,"Sound"); break;
+    case N::Kind::Music: lua_pushliteral(L,"Music"); break;
+    case N::Kind::Font: lua_pushliteral(L,"Font"); break;
+    case N::Kind::Shader: lua_pushliteral(L,"Shader"); break;
+    }
+    return 1;
 }
 enum class Property { Size,Center,Scale,Sampler };
 template<Property P> int GetImage(lua_State* L) {
@@ -253,7 +307,8 @@ void Register(lua_State* L,Context& context) {
     const luaL_Reg methods[]={
         {"LoadImage",Guard<Load<N::Kind::Image,true>>},{"LoadSound",Guard<Load<N::Kind::Sound,true>>},
         {"LoadMusic",Guard<Load<N::Kind::Music,true>>},{"LoadFont",Guard<Load<N::Kind::Font,true>>},
-        {"LoadShader",Guard<Load<N::Kind::Shader,true>>},{"Submit",Guard<Submit>},{"IsFinished",Guard<IsFinished>},{nullptr,nullptr}};
+        {"LoadShader",Guard<Load<N::Kind::Shader,true>>},{"Submit",Guard<Submit>},
+        {"IsFinished",Guard<IsFinished>},{"GetProgress",Guard<GetProgress>},{nullptr,nullptr}};
     Metatable(L,ServiceType,Guard<CollectService>,nullptr);
     Metatable(L,LoaderType,Guard<CollectLoader>,methods);
     auto** slot=NewSlot<ServiceBox>(L,ServiceType); *slot=new ServiceBox{context.impl_->token};
@@ -268,7 +323,8 @@ void Register(lua_State* L,Context& context) {
         {"GetImageCenter",Guard<GetImage<Property::Center>>},{"SetImageCenter",Guard<SetImage<Property::Center>>},
         {"GetImageScale",Guard<GetImage<Property::Scale>>},{"SetImageScale",Guard<SetImage<Property::Scale>>},
         {"GetImageSampler",Guard<GetImage<Property::Sampler>>},{"SetImageSampler",Guard<SetImage<Property::Sampler>>},
-        {"GetVolume",Guard<GetVolume>},{"SetVolume",Guard<SetVolume>},{"Unload",Guard<Unload>},{nullptr,nullptr}};
+        {"GetVolume",Guard<GetVolume>},{"SetVolume",Guard<SetVolume>},
+        {"GetType",Guard<GetType>},{"Unload",Guard<Unload>},{nullptr,nullptr}};
     lua_newtable(L); const int module=lua_gettop(L);
     for(const auto* f=functions;f->name;++f) {
         lua_pushvalue(L,serviceSlot); lua_pushcclosure(L,f->func,1); lua_setfield(L,module,f->name);

@@ -255,6 +255,9 @@ struct Core {
             } else if (result.stage == Stage::Prepared) {
                 if (!result.asset) throw std::runtime_error("provider Prepared without payload");
                 record->asset = std::move(result.asset);
+                // Count each request exactly once, only after its provider's
+                // CPU preparation and any GPU fences have actually completed.
+                ++record->transaction->progress.prepared;
             } else if (result.asset) {
                 throw std::runtime_error("provider supplied payload before Prepared");
             }
@@ -293,7 +296,6 @@ struct Core {
                 else if (record->asset) ++work.preparedInPass;
             }
             if (!Terminal(transaction.state) && work.scan == work.resources.end()) {
-                transaction.progress.prepared = work.preparedInPass;
                 if (work.preparedInPass == work.resources.size())
                     transaction.state = State::Publishing;
                 work.scanning = false;
@@ -366,16 +368,33 @@ using namespace detail;
 
 Manifest& Manifest::LoadImage(std::string path, std::string name, std::uint32_t x,
     std::uint32_t y, std::uint32_t width, std::uint32_t height, ImageOptions options) {
+    ImageRequest request;
+    request.x = x; request.y = y; request.width = width; request.height = height;
+    request.options = options;
+    return LoadImage(std::move(path), std::move(name), std::move(request));
+}
+Manifest& Manifest::LoadImage(std::string path, std::string name, ImageRequest request) {
     auto core = Require(owner);
     if (!state) throw std::logic_error("invalid manifest");
-    if (!width || !height || x > std::numeric_limits<std::uint32_t>::max() - width ||
-        y > std::numeric_limits<std::uint32_t>::max() - height || !Finite(options.scale) ||
+    auto& options = request.options;
+    const auto finite = [](const std::optional<double>& value) { return !value || std::isfinite(*value); };
+    if (!std::isfinite(request.x) || !std::isfinite(request.y) || request.x < 0 || request.y < 0 ||
+        !finite(request.width) || !finite(request.height) ||
+        (request.width && (*request.width <= 0 || !std::isfinite(request.x + *request.width))) ||
+        (request.height && (*request.height <= 0 || !std::isfinite(request.y + *request.height))) ||
+        !finite(request.centerX) || !finite(request.centerY) || !Finite(options.scale) ||
         (options.anchor && !Finite(*options.anchor)) ||
         (options.filter != Filter::Linear && options.filter != Filter::Point) ||
         (options.address != Address::Clamp && options.address != Address::Repeat))
         throw std::invalid_argument("invalid image region/options");
-    if (!options.anchor) options.anchor = Vec2{width * 0.5, height * 0.5};
-    core->Append(*state, {{Kind::Image, std::move(name)}, std::move(path), ImageRequest{x,y,width,height,options}});
+    // Native helper centers use the same independent axes as the Lua request.
+    // Omission stays explicit until source dimensions are known; no rounding.
+    if (options.anchor) {
+        if (!request.centerX) request.centerX = options.anchor->x;
+        if (!request.centerY) request.centerY = options.anchor->y;
+        options.anchor.reset();
+    }
+    core->Append(*state, {{Kind::Image, std::move(name)}, std::move(path), std::move(request)});
     return *this;
 }
 Manifest& Manifest::LoadAudio(std::string path, std::string name, AudioRequest options) {
@@ -390,15 +409,9 @@ Manifest& Manifest::LoadAudio(std::string path, std::string name, AudioRequest o
     return *this;
 }
 Manifest& Manifest::LoadImage(std::string path, std::string name, ImageOptions options) {
-    auto core = Require(owner);
-    if (!state) throw std::logic_error("invalid manifest");
-    if (!Finite(options.scale) || (options.anchor && !Finite(*options.anchor)) ||
-        (options.filter != Filter::Linear && options.filter != Filter::Point) ||
-        (options.address != Address::Clamp && options.address != Address::Repeat))
-        throw std::invalid_argument("invalid image options");
-    core->Append(*state, {{Kind::Image, std::move(name)}, std::move(path),
-        ImageRequest{0, 0, 0, 0, options, true}});
-    return *this;
+    ImageRequest request;
+    request.options = options;
+    return LoadImage(std::move(path), std::move(name), std::move(request));
 }
 bool Manifest::IsSealed() const {
     auto core = Require(owner);
@@ -477,6 +490,18 @@ Job Service::Submit(Manifest& manifest) {
     if (manifest.owner.lock() != core || !manifest.state)
         throw std::invalid_argument("manifest belongs to a different resource service");
     if (manifest.state->sealed) throw std::logic_error("resource manifest is sealed");
+    // Empty accepted batches have nothing to prepare or retire, and must not
+    // wait for a host Tick or consume the work queue just to publish no names.
+    if (manifest.state->entries.empty()) {
+        auto transaction = std::make_shared<Transaction>();
+        transaction->committedEver = true;
+        transaction->state = State::Ready;
+        manifest.state->sealed = true;
+        ++core->stats.commits;
+        Job result;
+        result.owner = core; result.state = std::move(transaction);
+        return result;
+    }
     // Check before seal, so a full queue is retryable with the same manifest.
     if (core->stats.activeJobs >= core->limits.activeJobs || core->jobs.size() >= core->limits.activeJobs * 2)
         throw std::length_error("resource_queue_full");
@@ -563,6 +588,16 @@ std::optional<Handle> Service::Find(const std::string& name) {
     if (!record) return {};
     if (!core->Refresh(*record)) throw std::logic_error("resource is still loading: " + name);
     return record->handle;
+}
+std::optional<Kind> Service::PublishedKind(const std::string& name) const {
+    core->Running();
+    const auto found = core->index.find(name);
+    if (found == core->index.end()) return {};
+    const auto* record = core->Get(found->second);
+    // Do not use Lookup/Refresh: this public observation must neither advance
+    // a batch nor retire its private resources as a side effect of querying.
+    if (!record || record->retired || !record->transaction->committedEver || !record->asset) return {};
+    return record->request.id.kind;
 }
 bool Service::IsResident(Handle handle) {
     core->Running();

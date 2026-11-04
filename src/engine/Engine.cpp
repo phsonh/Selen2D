@@ -152,6 +152,7 @@ bool Run(std::uint64_t frameLimit) {
             Event::EndFrame();
             if(quitRequested) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             clock.BeginFrame(SDL_GetTicksNS(),Lua::HasFrameFunction());
+            audio.SetRuntimeFrame(clock.FrameCount());
             std::string error;
             if(!Lua::CallFrameFunction(error)) {
                 Report("Lua frame callback failed",error); succeeded=false;
@@ -196,6 +197,7 @@ bool Shutdown() {
     // Exit can still use File, Audio and initialized resources. Ordinary drawing
     // is illegal here because no frame is recording. Revoke bindings afterwards.
     graphicBindings.reset(); resourceBindings.reset(); audioBindings.reset();
+    audio.StopAllPlayersAndDrain();
     objects.reset(); resources.reset();
     Lua::Shutdown();
     startupArguments.clear();

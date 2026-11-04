@@ -25,7 +25,9 @@ struct Node {
     Request request;
     // Owner-thread normalization happens only while this node is still pending.
     // Once admitted to a Wave this is immutable, including for CPU workers.
-    ImageRequest image;
+    ResolvedImage image;
+    Atlas::Rect coverage; // Integer source pixels containing the exact logical region.
+    bool dimensionsResolved{};
     std::optional<SourceTicket> dimensions;
     std::atomic_bool cancelled{}; // The ONLY mutable field read by CPU workers.
     Stage stage{Stage::Queued};
@@ -125,7 +127,7 @@ void Layout(const std::vector<std::shared_ptr<Node>>& nodes, const std::shared_p
     std::vector<Mip::Layout> chains;
     items.reserve(nodes.size());
     for (const auto& node : nodes) {
-        const auto& image = node->image;
+        const auto& image = node->coverage;
         if (kind == WaveKind::MipAtlas) {
             chains.push_back(Mip::Describe(image.width, image.height, config.atlas.extrusion));
             items.push_back({chains.back().width, chains.back().height});
@@ -168,8 +170,11 @@ void Layout(const std::vector<std::shared_ptr<Node>>& nodes, const std::shared_p
     for (const auto& page : data->plan.pages)
         data->pages.push_back(Allocate(page.width, page.height, memory, config.maxWaveBytes, stop));
 }
-void ValidateRegion(const ImageRequest& image, const SourcePixels& source) {
-    if (!image.width || !image.height || image.width > source.image.width || image.height > source.image.height ||
+void ValidateRegion(const ResolvedImage& image, const SourcePixels& source) {
+    if (!std::isfinite(image.x) || !std::isfinite(image.y) || !std::isfinite(image.width) || !std::isfinite(image.height) ||
+        image.x < 0 || image.y < 0 || image.width <= 0 || image.height <= 0 ||
+        image.x >= source.image.width || image.y >= source.image.height ||
+        image.width > source.image.width || image.height > source.image.height ||
         image.x > source.image.width - image.width || image.y > source.image.height - image.height)
         throw std::invalid_argument("image region is outside the decoded source");
 }
@@ -193,7 +198,7 @@ void CopySource(const std::vector<std::shared_ptr<Node>>& nodes, const std::vect
         if (nodes[index]->cancelled.load(std::memory_order_acquire)) continue;
         auto& entry = data->entries[index];
         if (!entry.error.empty()) continue;
-        const auto& image = nodes[index]->image;
+        const auto& image = nodes[index]->coverage;
         const Atlas::Rect region{image.x, image.y, image.width, image.height};
         if (!Packed(kind)) {
             const Atlas::Rect crop{0, 0, image.width, image.height};
@@ -258,8 +263,8 @@ struct Provider::Impl {
         for (auto& node : wave.nodes) if (Live(*node)) node->stage = stage;
     }
     WaveKind KindOf(const Node& node) const {
-        const auto& image = node.image;
-        if (image.options.mipmap) {
+        const auto& image = node.coverage;
+        if (node.image.options.mipmap) {
             if (std::uint64_t(image.width) + config.atlas.extrusion * 2ULL > config.atlas.maxSide ||
                 std::uint64_t(image.height) + config.atlas.extrusion * 2ULL > config.atlas.maxSide)
                 return WaveKind::MipCrop;
@@ -272,7 +277,7 @@ struct Provider::Impl {
         return WaveKind::Atlas;
     }
     bool ResolveDimensions(Node& node) {
-        if (!node.image.wholeSource) return true;
+        if (node.dimensionsResolved) return true;
         try {
             // TryRequest only schedules work or joins the shared source cache.
             // File access and PNG decode never run in Start or this owner tick.
@@ -291,12 +296,24 @@ struct Provider::Impl {
                 return false;
             }
             const auto source = node.dimensions->GetPixels();
-            node.image.x = node.image.y = 0;
-            node.image.width = source->image.width;
-            node.image.height = source->image.height;
-            if (!node.image.options.anchor)
-                node.image.options.anchor = Vec2{node.image.width * 0.5, node.image.height * 0.5};
-            node.image.wholeSource = false;
+            const auto& request = std::get<ImageRequest>(node.request.data);
+            node.image = {request.x, request.y,
+                request.width.value_or(source->image.width - request.x),
+                request.height.value_or(source->image.height - request.y), request.options};
+            ValidateRegion(node.image, *source);
+            node.image.options.anchor = Vec2{
+                request.centerX.value_or(node.image.width * 0.5),
+                request.centerY.value_or(node.image.height * 0.5)};
+            const auto left = static_cast<std::uint32_t>(std::floor(node.image.x));
+            const auto top = static_cast<std::uint32_t>(std::floor(node.image.y));
+            // A positive sub-pixel extent can be smaller than the ULP of its
+            // origin. It still covers the origin pixel, even if x+w rounds to x.
+            const auto right = std::max(left + 1,
+                static_cast<std::uint32_t>(std::ceil(node.image.x + node.image.width)));
+            const auto bottom = std::max(top + 1,
+                static_cast<std::uint32_t>(std::ceil(node.image.y + node.image.height)));
+            node.coverage = {left, top, right - left, bottom - top};
+            node.dimensionsResolved = true;
             node.stage = Stage::CpuReady;
             // Do not pin every decoded source while gathering a Wave: that can
             // exhaust decode credit before layout/copy starts. ImageSources may
@@ -378,8 +395,8 @@ struct Provider::Impl {
             if (!pending.empty() && !ResolveDimensions(*pending.front())) return;
             const bool compatible = !pending.empty() && KindOf(*pending.front()) == wave.kind;
             if (compatible && wave.nodes.size() < config.waveItems && (wave.nodes.empty() || wave.pixels < config.wavePixels)) {
-                const auto& image = pending.front()->image;
-                const auto area = std::uint64_t(image.width) * image.height;
+                const auto& coverage = pending.front()->coverage;
+                const auto area = std::uint64_t(coverage.width) * coverage.height;
                 wave.nodes.push_back(std::move(pending.front())); pending.pop_front(); wave.pixels += area;
                 if (!Packed(wave.kind) || wave.nodes.size() == config.waveItems || wave.pixels >= config.wavePixels) Seal(wave);
                 return;
@@ -559,8 +576,8 @@ struct Provider::Impl {
 Vec2 ImageAsset::MapUV(Vec2 local) const {
     if (!texture || !texture->Width() || !texture->Height() || !std::isfinite(local.x) || !std::isfinite(local.y))
         throw std::invalid_argument("invalid Image UV mapping");
-    return {(content.x + local.x * content.width) / texture->Width(),
-        (content.y + local.y * content.height) / texture->Height()};
+    return {(content.x + image.x - std::floor(image.x) + local.x * image.width) / texture->Width(),
+        (content.y + image.y - std::floor(image.y) + local.y * image.height) / texture->Height()};
 }
 Provider::Provider(Jobs::Executor& executor, ImageSources& sources, Upload::Queue& uploads, Jobs::MemoryBudget pages, Config config)
     : impl(std::make_unique<Impl>(executor, sources, uploads, std::move(pages), config)) {}
@@ -570,11 +587,8 @@ std::unique_ptr<Operation> Provider::Start(Handle handle, const Request& request
     if (impl->nodes.size() >= impl->config.capacity) throw std::length_error("ImageProvider request capacity exhausted");
     if (request.id.kind != Kind::Image || !std::holds_alternative<ImageRequest>(request.data))
         throw std::invalid_argument("ImageProvider accepts only Image requests");
-    const auto& image = std::get<ImageRequest>(request.data);
-    if (!image.wholeSource && (!image.width || !image.height))
-        throw std::invalid_argument("Image dimensions must be positive");
     auto node = std::make_shared<Node>();
-    node->handle = handle; node->request = request; node->image = image;
+    node->handle = handle; node->request = request;
     auto operation = std::make_unique<ImageOperation>(impl->gate, node);
     impl->nodes.push_back(node);
     try { impl->pending.push_back(std::move(node)); }

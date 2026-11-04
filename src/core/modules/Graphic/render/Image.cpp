@@ -30,6 +30,10 @@ void Validate(const Image& i, Paint p) {
     if (!i.texture || !i.lifetime || !i.width || !i.height || !i.textureWidth || !i.textureHeight ||
         std::uint64_t(i.x)+i.width>i.textureWidth || std::uint64_t(i.y)+i.height>i.textureHeight)
         throw std::invalid_argument("RenderImage requires a live backing and valid Image region");
+    if (!std::isfinite(i.insetX) || !std::isfinite(i.insetY) || !std::isfinite(i.logicalWidth) ||
+        !std::isfinite(i.logicalHeight) || i.insetX < 0 || i.insetY < 0 || i.logicalWidth < 0 || i.logicalHeight < 0 ||
+        i.insetX + i.LogicalWidth() > i.width || i.insetY + i.LogicalHeight() > i.height)
+        throw std::invalid_argument("RenderImage logical region exceeds its physical pixel coverage");
     if(!i.textureLevels || i.textureLevels>static_cast<std::uint32_t>(std::bit_width(std::max(i.textureWidth,i.textureHeight))) ||
         (i.mipLevels && i.textureLevels!=1))
         throw std::invalid_argument("RenderImage has invalid physical mip metadata");
@@ -62,8 +66,8 @@ std::array<std::array<double,2>,4> ImageCorners(const Image& i, Transform t) {
         throw std::invalid_argument("RenderImage transform must be finite");
     const double angle=std::remainder(t.rotation,360.0)*(std::numbers::pi/180.0);
     const double c=std::cos(angle),s=std::sin(angle);
-    const double left=-i.anchorX*i.scaleX*t.scaleX, right=(i.width-i.anchorX)*i.scaleX*t.scaleX;
-    const double top=i.anchorY*i.scaleY*t.scaleY, bottom=(i.anchorY-i.height)*i.scaleY*t.scaleY;
+    const double left=-i.anchorX*i.scaleX*t.scaleX, right=(i.LogicalWidth()-i.anchorX)*i.scaleX*t.scaleX;
+    const double top=i.anchorY*i.scaleY*t.scaleY, bottom=(i.anchorY-i.LogicalHeight())*i.scaleY*t.scaleY;
     std::array<std::array<double,2>,4> result{{{right,top},{left,top},{left,bottom},{right,bottom}}};
     for (auto& p:result) { const auto x=p[0],y=p[1]; p={t.x+c*x-s*y,t.y+s*x+c*y}; }
     return result;

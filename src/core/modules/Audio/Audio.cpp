@@ -9,6 +9,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -25,7 +26,7 @@ void Check(bool success,const char* operation) {
 void GainValue(double value) {
     if(!std::isfinite(value)||value<0||value>1) throw std::invalid_argument("audio gain must be finite and between 0 and 1");
 }
-void PanValue(float value) {
+void PanValue(double value) {
     if(!std::isfinite(value)||value < -1||value>1) throw std::invalid_argument("audio pan must be finite and between -1 and 1");
 }
 void Name(const std::string& value,const char* kind) {
@@ -33,12 +34,6 @@ void Name(const std::string& value,const char* kind) {
 }
 bool Terminal(PlaybackState value) {
     return value==PlaybackState::Stopped||value==PlaybackState::Finished||value==PlaybackState::Failed||value==PlaybackState::Destroyed;
-}
-std::uint64_t FrameAt(double seconds,const ResourceInfo& info,bool loop) {
-    if(!std::isfinite(seconds)||seconds<0||seconds>info.duration) throw std::invalid_argument("audio position is outside the source duration");
-    const auto frame=static_cast<std::uint64_t>(std::round(seconds*info.sampleRate));
-    if(frame>info.frames||(loop&&frame>=info.loopEndFrame)) throw std::invalid_argument("audio position is outside the enabled loop range");
-    return frame;
 }
 std::uint64_t Advance(std::uint64_t position,std::size_t count,const ResourceInfo& info,bool loop) noexcept {
     if(!loop) return std::min(info.frames,position+count);
@@ -87,10 +82,22 @@ struct Voice {
     std::atomic<std::uint64_t> generation{1},submitted{};
     std::atomic<float> volume{1},pan{};
     ResourceInfo info;
-    std::string bus,error;
+    std::string error;
     std::uint64_t target{};
+    std::uint64_t identity{};
     bool pausedIntent{};
     std::unique_ptr<Transport> transport;
+};
+struct PlayerEntry {
+    std::string name;
+    std::shared_ptr<Voice> voice;
+    std::optional<std::uint64_t> playedFrame;
+};
+struct PlayerState {
+    std::weak_ptr<System> system;
+    std::atomic<bool> destroyed{};
+    double volume{1},pan{}; // System control lock, preserve the Lua number.
+    std::unordered_map<std::uint64_t,PlayerEntry> entries;
 };
 struct System {
     const std::thread::id owner{std::this_thread::get_id()};
@@ -99,9 +106,8 @@ struct System {
     SDL_AudioDeviceID device{};
     SDL_AudioSpec output{};
     bool alive{},exit{},decoderPaused{};
-    float master{1};
-    std::uint64_t nextResourceGeneration{1};
-    std::unordered_map<std::string,double> buses;
+    std::uint64_t nextResourceGeneration{1},nextVoiceIdentity{1},runtimeFrame{};
+    std::vector<std::weak_ptr<PlayerState>> players;
     std::vector<std::shared_ptr<Voice>> active;
     std::thread worker;
     std::size_t nextVoice{};
@@ -110,11 +116,10 @@ struct System {
     std::array<std::array<char,2048>,32> errors{};
     std::size_t errorHead{},errorCount{},droppedErrors{};
 
-    double BusGain(const std::string& bus) const { const auto it=buses.find(bus); return it==buses.end()?1:it->second; }
-    void RequireAlive() const { if(!alive) throw std::runtime_error("audio subsystem is shut down"); }
+    void RequireAlive() const { if(!alive||exit) throw std::runtime_error("audio subsystem is shut down"); }
     void ApplyGain(Voice& voice) {
         if(voice.transport&&voice.transport->stream)
-            Check(SDL_SetAudioStreamGain(voice.transport->stream,static_cast<float>(master*BusGain(voice.bus)*voice.volume.load()
+            Check(SDL_SetAudioStreamGain(voice.transport->stream,static_cast<float>(voice.volume.load()
                 *voice.transport->record->volume.load())),"set audio playback gain");
     }
     void Unbind(Transport& value) {
@@ -133,7 +138,8 @@ struct System {
     }
     void Stop(Voice& voice,PlaybackState state=PlaybackState::Stopped) {
         if(Terminal(voice.state.load())) return;
-        Invalidate(voice);
+        try { Invalidate(voice); }
+        catch(...) { voice.state.store(state,std::memory_order_release); changed.notify_all(); throw; }
         voice.state.store(state,std::memory_order_release);
         changed.notify_all();
     }
@@ -156,6 +162,28 @@ struct System {
         }
     }
     void Refresh(Voice& voice) {
+        Complete(voice);
+        if(!voice.transport||Terminal(voice.state.load())) return;
+        auto& value=*voice.transport;
+        const auto generation=voice.generation.load(std::memory_order_acquire);
+        if(value.readyGeneration.load(std::memory_order_acquire)==generation&&value.appliedGeneration!=generation) {
+            if(voice.state.load()==PlaybackState::Starting||voice.state.load()==PlaybackState::Paused) {
+                voice.submitted.store(voice.target,std::memory_order_release);
+                value.appliedGeneration=generation;
+                if(voice.pausedIntent) voice.state.store(PlaybackState::Paused);
+                else {
+                    voice.state.store(PlaybackState::Playing,std::memory_order_release);
+                    if(!value.bound) {
+                        if(!SDL_BindAudioStream(device,value.stream)) { Fail(voice,std::string("bind audio playback: ")+SDL_GetError()); return; }
+                        value.bound=true;
+                    }
+                }
+            }
+        }
+    }
+    // Queries may observe natural completion/faults, but must never prime,
+    // bind, resume, decode, or wait for an entire sound to finish.
+    void Complete(Voice& voice) {
         if(!voice.transport||Terminal(voice.state.load())) return;
         auto& value=*voice.transport;
         if(value.record->retired.load(std::memory_order_acquire)) { Stop(voice); return; }
@@ -168,21 +196,6 @@ struct System {
             return;
         }
         const auto generation=voice.generation.load(std::memory_order_acquire);
-        if(value.readyGeneration.load(std::memory_order_acquire)==generation&&value.appliedGeneration!=generation) {
-            if(voice.state.load()==PlaybackState::Starting||voice.state.load()==PlaybackState::Paused) {
-                voice.submitted.store(voice.target,std::memory_order_release);
-                value.appliedGeneration=generation;
-                if(voice.pausedIntent) voice.state.store(PlaybackState::Paused);
-                else {
-                    // Publish Playing before Bind, so the first SDL pull can supply PCM.
-                    voice.state.store(PlaybackState::Playing,std::memory_order_release);
-                    if(!value.bound) {
-                        if(!SDL_BindAudioStream(device,value.stream)) { Fail(voice,std::string("bind audio playback: ")+SDL_GetError()); return; }
-                        value.bound=true;
-                    }
-                }
-            }
-        }
         if(value.flushedGeneration.load(std::memory_order_acquire)==generation
             && value.read.load(std::memory_order_acquire)==value.write.load(std::memory_order_acquire)) {
             const auto queued=SDL_GetAudioStreamQueued(value.stream);
@@ -230,6 +243,26 @@ struct System {
                 it=active.erase(it);
             } else ++it;
         }
+        for(auto it=players.begin();it!=players.end();) {
+            if(auto player=it->lock()) {
+                for(auto& [generation,entry]:player->entries)
+                    if(entry.voice&&Terminal(entry.voice->state.load())) entry.voice.reset();
+                ++it;
+            } else it=players.erase(it);
+        }
+    }
+    void RetirePlayers(std::uint64_t generation) {
+        for(const auto& weak:players) if(auto player=weak.lock()) player->entries.erase(generation);
+    }
+    void DestroyPlayer(PlayerState& player) noexcept {
+        player.destroyed.store(true,std::memory_order_release);
+        for(auto& [generation,entry]:player.entries) if(entry.voice) {
+            try { Stop(*entry.voice); }
+            catch(const std::exception& error) { Report(entry.voice.get(),error.what()); }
+            catch(...) { Report(entry.voice.get(),"unknown error while destroying audio player"); }
+        }
+        player.entries.clear();
+        changed.notify_all();
     }
     void Run() noexcept;
     void RunWorker();
@@ -298,13 +331,72 @@ void SDLCALL Supply(void* userdata,SDL_AudioStream* stream,int additional,int) n
         value.flushedGeneration.store(generation,std::memory_order_release);
     }
 }
-struct LockedVoice {
+struct LockedPlayer {
     std::shared_ptr<System> system;
     std::unique_lock<std::mutex> lock;
-    explicit LockedVoice(const Voice& voice) : system(voice.system.lock()),lock(system?std::unique_lock(system->control):std::unique_lock<std::mutex>()) {}
+    explicit LockedPlayer(const PlayerState& player)
+        : system(player.system.lock()),lock(system?std::unique_lock(system->control):std::unique_lock<std::mutex>()) {
+        if(player.destroyed.load()) throw std::runtime_error("audio player has been destroyed");
+        if(!system) throw std::runtime_error("audio player service no longer exists");
+        system->RequireAlive();
+    }
 };
-void RequireControl(const Voice& voice) {
-    if(voice.state.load()==PlaybackState::Destroyed) throw std::runtime_error("audio Playback has been destroyed");
+void CheckRecord(const std::shared_ptr<System>& system,const std::shared_ptr<Record>& record) {
+    if(!record||record->system.lock()!=system) throw std::invalid_argument("audio source belongs to another service");
+    if(record->retired.load(std::memory_order_acquire)) throw std::runtime_error("audio source has been retired");
+}
+bool Playing(System& system,const std::shared_ptr<Voice>& voice) {
+    if(!voice) return false;
+    system.Complete(*voice);
+    const auto state=voice->state.load(std::memory_order_acquire);
+    return state==PlaybackState::Playing||state==PlaybackState::Starting;
+}
+std::shared_ptr<Voice> CreateVoice(const std::shared_ptr<System>& system,const std::shared_ptr<Record>& record,
+    double volume,double pan) {
+    auto voice=std::make_shared<Voice>();
+    if(system->nextVoiceIdentity==std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("audio instance identity exhausted");
+    voice->identity=system->nextVoiceIdentity++;
+    voice->system=system; voice->info=record->data->info;
+    voice->volume.store(static_cast<float>(volume)); voice->pan.store(static_cast<float>(pan));
+    voice->transport=std::make_unique<Transport>(record,voice->info.mode==StorageMode::Stream);
+    auto& value=*voice->transport;
+    value.owner=voice.get();
+    const SDL_AudioSpec sourceFormat{SDL_AUDIO_F32,2,voice->info.sampleRate};
+    value.stream=SDL_CreateAudioStream(&sourceFormat,&system->output);
+    Check(value.stream!=nullptr,"create audio player stream");
+    struct Rollback {
+        System& system;
+        const std::shared_ptr<Voice>& voice;
+        bool committed{};
+        ~Rollback() noexcept {
+            if(committed) return;
+            voice->generation.fetch_add(1,std::memory_order_acq_rel);
+            voice->state.store(PlaybackState::Stopped,std::memory_order_release);
+            auto& transport=*voice->transport;
+            system.Unbind(transport);
+            SDL_SetAudioStreamGetCallback(transport.stream,nullptr,nullptr);
+            SDL_DestroyAudioStream(transport.stream);
+            transport.stream=nullptr;
+            std::erase(system.active,voice);
+            voice->transport.reset();
+        }
+    } rollback{*system,voice};
+    Check(SDL_SetAudioStreamGetCallback(value.stream,Supply,&value),"attach audio callback");
+    system->ApplyGain(*voice);
+    system->active.push_back(voice);
+    if(voice->info.mode==StorageMode::Decoded) {
+        const auto generation=voice->generation.load();
+        value.readyGeneration.store(generation);
+        value.appliedGeneration=generation;
+        voice->state.store(PlaybackState::Playing,std::memory_order_release);
+        // Initial setup is a synchronous Play error. Do not also enqueue it as
+        // a later uncaught asynchronous failure after Lua handled this error.
+        Check(SDL_BindAudioStream(system->device,value.stream),"start audio player");
+        value.bound=true;
+    }
+    system->changed.notify_all();
+    rollback.committed=true;
+    return voice;
 }
 }
 
@@ -440,58 +532,98 @@ void Source::Retire() noexcept {
                 voice->state.store(PlaybackState::Stopped,std::memory_order_release);
             }
         }
+        system->RetirePlayers(record_->generation);
         system->changed.notify_all();
     } catch(...) { /* Retired is already visible to the callback/worker. */ }
 }
-Playback::Playback(std::shared_ptr<detail::Voice> voice) : voice_(std::move(voice)) {}
-void Playback::Pause() {
-    detail::LockedVoice locked(*voice_); detail::RequireControl(*voice_);
-    if(locked.system) locked.system->Pause(*voice_);
+Player::Player(std::shared_ptr<detail::PlayerState> state) : state_(std::move(state)) {}
+Player::~Player() { Destroy(); }
+void Player::Play(const std::string& name,const std::shared_ptr<Source>& source) {
+    detail::Name(name,"audio resource");
+    detail::LockedPlayer locked(*state_);
+    if(!source) throw std::invalid_argument("audio source cannot be null");
+    detail::CheckRecord(locked.system,source->record_);
+    auto& entry=state_->entries.try_emplace(source->record_->generation,detail::PlayerEntry{name}).first->second;
+    if(entry.playedFrame==locked.system->runtimeFrame) return;
+    if(entry.voice) locked.system->Stop(*entry.voice);
+    entry.voice.reset();
+    entry.voice=detail::CreateVoice(locked.system,source->record_,state_->volume,state_->pan);
+    entry.playedFrame=locked.system->runtimeFrame;
 }
-void Playback::Resume() {
-    detail::LockedVoice locked(*voice_); detail::RequireControl(*voice_);
-    if(locked.system) locked.system->Resume(*voice_);
-}
-void Playback::Stop() {
-    detail::LockedVoice locked(*voice_); detail::RequireControl(*voice_);
-    if(locked.system) locked.system->Stop(*voice_);
-}
-void Playback::Destroy() {
-    detail::LockedVoice locked(*voice_);
-    if(voice_->state.load()==PlaybackState::Destroyed) return;
-    if(locked.system) locked.system->Stop(*voice_);
-    voice_->state.store(PlaybackState::Destroyed,std::memory_order_release);
-}
-void Playback::Seek(double seconds) {
-    detail::LockedVoice locked(*voice_); detail::RequireControl(*voice_);
-    if(!locked.system||detail::Terminal(voice_->state.load())) throw std::runtime_error("cannot Seek a terminal audio Playback");
-    auto& value=*voice_->transport;
-    const auto target=detail::FrameAt(seconds,voice_->info,value.loop);
-    const bool paused=voice_->pausedIntent||voice_->state.load()==PlaybackState::Paused;
-    locked.system->Invalidate(*voice_);
-    voice_->target=target; voice_->pausedIntent=paused;
-    voice_->state.store(paused?PlaybackState::Paused:PlaybackState::Starting,std::memory_order_release);
-    if(value.record->data->info.mode==StorageMode::Decoded) {
-        value.decodedCursor=target;
-        value.readyGeneration.store(voice_->generation.load(),std::memory_order_release);
+void Player::Stop(const std::shared_ptr<Source>& source) {
+    detail::LockedPlayer locked(*state_);
+    if(source) {
+        detail::CheckRecord(locked.system,source->record_);
+        const auto it=state_->entries.find(source->record_->generation);
+        if(it==state_->entries.end()) return;
+        auto voice=it->second.voice;
+        state_->entries.erase(it); // Even a fallible device clear revokes the marker.
+        if(voice) locked.system->Stop(*voice);
+    } else {
+        std::exception_ptr failure;
+        for(auto& [generation,entry]:state_->entries) if(entry.voice) {
+            try { locked.system->Stop(*entry.voice); }
+            catch(...) { if(!failure) failure=std::current_exception(); }
+        }
+        state_->entries.clear();
+        if(failure) std::rethrow_exception(failure);
     }
-    locked.system->changed.notify_all();
 }
-void Playback::SetVolume(float volume) {
-    detail::GainValue(volume); detail::LockedVoice locked(*voice_); detail::RequireControl(*voice_);
-    voice_->volume.store(volume);
-    if(locked.system) locked.system->ApplyGain(*voice_);
+void Player::Pause(const std::shared_ptr<Source>& source) {
+    detail::LockedPlayer locked(*state_);
+    if(source) detail::CheckRecord(locked.system,source->record_);
+    for(auto& [generation,entry]:state_->entries)
+        if((!source||source->record_->generation==generation)&&entry.voice) locked.system->Pause(*entry.voice);
 }
-float Playback::GetVolume() const { return voice_->volume.load(); }
-void Playback::SetPan(float pan) { detail::PanValue(pan); detail::LockedVoice locked(*voice_); detail::RequireControl(*voice_); voice_->pan.store(pan); }
-float Playback::GetPan() const { return voice_->pan.load(); }
-PlaybackState Playback::GetState() const {
-    return voice_->state.load();
+void Player::Resume(const std::shared_ptr<Source>& source) {
+    detail::LockedPlayer locked(*state_);
+    if(source) detail::CheckRecord(locked.system,source->record_);
+    for(auto& [generation,entry]:state_->entries)
+        if((!source||source->record_->generation==generation)&&entry.voice) locked.system->Resume(*entry.voice);
 }
-Position Playback::GetPosition() const {
-    return {static_cast<double>(voice_->submitted.load())/voice_->info.sampleRate,"submitted"};
+void Player::SetVolume(double volume) {
+    detail::GainValue(volume);
+    detail::LockedPlayer locked(*state_);
+    state_->volume=volume;
+    for(auto& [generation,entry]:state_->entries) if(entry.voice) {
+        entry.voice->volume.store(static_cast<float>(volume));
+        locked.system->ApplyGain(*entry.voice);
+    }
 }
-std::string Playback::GetError() const { detail::LockedVoice locked(*voice_); return voice_->error; }
+double Player::GetVolume() const { detail::LockedPlayer locked(*state_); return state_->volume; }
+void Player::SetPan(double pan) {
+    detail::PanValue(pan);
+    detail::LockedPlayer locked(*state_);
+    state_->pan=pan;
+    for(auto& [generation,entry]:state_->entries) if(entry.voice) entry.voice->pan.store(static_cast<float>(pan));
+}
+double Player::GetPan() const { detail::LockedPlayer locked(*state_); return state_->pan; }
+std::vector<std::string> Player::GetPlaying() const {
+    detail::LockedPlayer locked(*state_);
+    std::vector<std::string> names;
+    for(const auto& [generation,entry]:state_->entries)
+        if(detail::Playing(*locked.system,entry.voice)) names.push_back(entry.name);
+    std::sort(names.begin(),names.end());
+    names.erase(std::unique(names.begin(),names.end()),names.end());
+    return names;
+}
+bool Player::IsPlaying(const std::shared_ptr<Source>& source) const {
+    detail::LockedPlayer locked(*state_);
+    if(!source) throw std::invalid_argument("audio source cannot be null");
+    detail::CheckRecord(locked.system,source->record_);
+    const auto it=state_->entries.find(source->record_->generation);
+    return it!=state_->entries.end()&&detail::Playing(*locked.system,it->second.voice);
+}
+void Player::Destroy() noexcept {
+    if(state_->destroyed.load()) return;
+    try {
+        if(auto system=state_->system.lock()) {
+            std::lock_guard lock(system->control);
+            system->DestroyPlayer(*state_);
+        } else state_->destroyed.store(true,std::memory_order_release);
+    } catch(...) { state_->destroyed.store(true,std::memory_order_release); }
+}
+bool Player::IsDestroyed() const noexcept { return state_->destroyed.load(std::memory_order_acquire); }
 
 AudioSystem::AudioSystem() : system_(std::make_shared<detail::System>()) {}
 AudioSystem::~AudioSystem() { Shutdown(); }
@@ -521,26 +653,11 @@ void AudioSystem::Initialize() {
 bool AudioSystem::IsInitialized() const { std::lock_guard lock(system_->control); return system_->alive; }
 void AudioSystem::Shutdown() {
     auto system=system_;
+    StopAllPlayersAndDrain();
     {
         std::lock_guard lock(system->control);
         if(!system->alive) { files_.reset(); return; }
-        system->alive=false; system->exit=true;
-        for(const auto& voice:system->active) {
-            try { system->Stop(*voice); }
-            catch(const std::exception& error) {
-                system->Report(voice.get(),error.what());
-                voice->state.store(PlaybackState::Stopped,std::memory_order_release);
-            } catch(...) {
-                system->Report(voice.get(),"unknown error while shutting down audio");
-                voice->state.store(PlaybackState::Stopped,std::memory_order_release);
-            }
-        }
-    }
-    system->changed.notify_all();
-    if(system->worker.joinable()) system->worker.join();
-    {
-        std::lock_guard lock(system->control);
-        system->Reclaim();
+        system->alive=false;
         SDL_CloseAudioDevice(system->device); system->device=0;
     }
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
@@ -560,98 +677,41 @@ std::shared_ptr<Source> AudioSystem::CreateSource(const PreparedAudio& prepared)
     std::lock_guard lock(system_->control); system_->RequireAlive();
     auto record=std::make_shared<detail::Record>();
     record->data=prepared.data_; record->system=system_;
+    if(system_->nextResourceGeneration==std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("audio resource generation exhausted");
     record->generation=system_->nextResourceGeneration++;
     return std::shared_ptr<Source>(new Source(std::move(record)));
 }
-void AudioSystem::CheckSource(const std::shared_ptr<Source>& source) const {
-    if(!source) throw std::invalid_argument("audio source cannot be null");
-    if(source->record_->system.lock()!=system_) throw std::invalid_argument("audio source belongs to another service");
-}
-void AudioSystem::StopSource(const std::shared_ptr<Source>& source) {
-    CheckSource(source);
-    std::lock_guard lock(system_->control);
-    for(const auto& voice:system_->active)
-        if(voice->transport&&voice->transport->record==source->record_) system_->Stop(*voice);
-}
-void AudioSystem::PauseSource(const std::shared_ptr<Source>& source) {
-    CheckSource(source);
-    std::lock_guard lock(system_->control);
-    for(const auto& voice:system_->active)
-        if(voice->transport&&voice->transport->record==source->record_) system_->Pause(*voice);
-}
-void AudioSystem::ResumeSource(const std::shared_ptr<Source>& source) {
-    CheckSource(source);
-    std::lock_guard lock(system_->control);
-    for(const auto& voice:system_->active)
-        if(voice->transport&&voice->transport->record==source->record_) system_->Resume(*voice);
-}
-std::shared_ptr<Playback> AudioSystem::Play(const std::shared_ptr<Source>& source,const PlayOptions& options) {
-    CheckSource(source);
-    detail::GainValue(options.volume); detail::PanValue(options.pan); detail::Name(options.bus,"audio bus");
-    if(options.policy!=PlayPolicy::Restart&&options.policy!=PlayPolicy::Overlap) throw std::invalid_argument("invalid audio play policy");
+std::shared_ptr<Player> AudioSystem::CreatePlayer() {
+    auto state=std::make_shared<detail::PlayerState>();
+    auto result=std::shared_ptr<Player>(new Player(state));
     std::lock_guard lock(system_->control); system_->RequireAlive();
-    auto record=source->record_;
-    if(record->retired.load(std::memory_order_acquire)) throw std::runtime_error("audio source has been retired");
-    const auto target=detail::FrameAt(options.position,record->data->info,options.loop);
-    auto voice=std::make_shared<detail::Voice>();
-    voice->system=system_; voice->info=record->data->info;
-    voice->bus=options.bus; voice->target=target;
-    voice->volume.store(options.volume); voice->pan.store(options.pan); voice->submitted.store(target);
-    voice->transport=std::make_unique<detail::Transport>(record,options.loop);
-    auto& value=*voice->transport;
-    value.owner=voice.get();
-    const SDL_AudioSpec sourceFormat{SDL_AUDIO_F32,2,voice->info.sampleRate};
-    value.stream=SDL_CreateAudioStream(&sourceFormat,&system_->output);
-    detail::Check(value.stream!=nullptr,"create audio Playback stream");
-    struct CreationRollback {
-        detail::System& system;
-        const std::shared_ptr<detail::Voice>& voice;
-        bool committed{};
-        ~CreationRollback() noexcept {
-            if(committed) return;
-            // The outer control lock is still held: the worker cannot have
-            // picked this newly created transport for decoding. Detach a
-            // possible SDL callback before freeing its userdata. There is no
-            // reason to Clear a stream that is being destroyed; Stop/Clear may
-            // fail and must never replace the original construction exception.
-            voice->generation.fetch_add(1,std::memory_order_acq_rel);
-            voice->state.store(PlaybackState::Stopped,std::memory_order_release);
-            auto& transport=*voice->transport;
-            system.Unbind(transport);
-            SDL_SetAudioStreamGetCallback(transport.stream,nullptr,nullptr);
-            SDL_DestroyAudioStream(transport.stream);
-            transport.stream=nullptr;
-            std::erase(system.active,voice);
-            voice->transport.reset();
+    state->system=system_;
+    system_->players.emplace_back(state);
+    return result;
+}
+void AudioSystem::SetRuntimeFrame(std::uint64_t frame) {
+    std::lock_guard lock(system_->control); system_->RequireAlive();
+    if(frame<system_->runtimeFrame) throw std::logic_error("audio Runtime frame cannot move backwards");
+    system_->runtimeFrame=frame;
+}
+void AudioSystem::StopAllPlayersAndDrain() {
+    auto system=system_;
+    {
+        std::lock_guard lock(system->control);
+        if(!system->alive) return;
+        system->exit=true;
+        for(const auto& weak:system->players) if(auto player=weak.lock()) system->DestroyPlayer(*player);
+        for(const auto& voice:system->active) {
+            try { system->Stop(*voice); }
+            catch(const std::exception& error) { system->Report(voice.get(),error.what()); }
+            catch(...) { system->Report(voice.get(),"unknown error while stopping audio consumers"); }
         }
-    } rollback{*system_,voice};
-    detail::Check(SDL_SetAudioStreamGetCallback(value.stream,detail::Supply,&value),"attach audio callback");
-    system_->buses.try_emplace(options.bus,1.0);
-    system_->ApplyGain(*voice);
-    auto handle=std::shared_ptr<Playback>(new Playback(voice));
-    system_->active.push_back(voice);
-    if(options.policy==PlayPolicy::Restart)
-        for(const auto& old:system_->active)
-            if(old!=voice&&old->transport&&old->transport->record==record) system_->Stop(*old);
-    if(voice->info.mode==StorageMode::Decoded) {
-        value.decodedCursor=target; value.readyGeneration.store(voice->generation.load());
-        system_->Refresh(*voice);
     }
-    system_->changed.notify_all();
-    rollback.committed=true;
-    return handle;
+    system->changed.notify_all();
+    if(system->worker.joinable()) system->worker.join();
+    std::lock_guard lock(system->control);
+    system->Reclaim();
 }
-void AudioSystem::SetMasterVolume(float volume) {
-    detail::GainValue(volume); std::lock_guard lock(system_->control); system_->master=volume;
-    for(const auto& voice:system_->active) system_->ApplyGain(*voice);
-}
-float AudioSystem::GetMasterVolume() const { std::lock_guard lock(system_->control); return system_->master; }
-void AudioSystem::SetBusVolume(const std::string& bus,double volume) {
-    detail::Name(bus,"audio bus"); detail::GainValue(volume);
-    std::lock_guard lock(system_->control); system_->buses[bus]=volume;
-    for(const auto& voice:system_->active) if(voice->bus==bus) system_->ApplyGain(*voice);
-}
-double AudioSystem::GetBusVolume(const std::string& bus) const { detail::Name(bus,"audio bus"); std::lock_guard lock(system_->control); return system_->BusGain(bus); }
 void AudioSystem::Update() {
     std::lock_guard lock(system_->control);
     if(!system_->alive) return;
@@ -689,14 +749,24 @@ bool Access::HasDecoderWorker(const AudioSystem& audio) {
 void Access::PauseDecoder(AudioSystem& audio,bool pause) {
     std::lock_guard lock(audio.system_->control); audio.system_->decoderPaused=pause; audio.system_->changed.notify_all();
 }
-Snapshot Access::Inspect(const Playback& playback) {
-    detail::LockedVoice locked(*playback.voice_);
+Snapshot Access::Inspect(const Player& player,const Source& source) {
+    auto system=player.state_->system.lock();
+    if(!system) return {};
+    std::lock_guard lock(system->control);
     Snapshot result;
-    result.state=playback.voice_->state.load();
-    result.generation=playback.voice_->generation.load();
-    result.submittedFrame=playback.voice_->submitted.load();
-    result.hasTransport=playback.voice_->transport!=nullptr;
-    if(const auto* value=playback.voice_->transport.get()) {
+    const auto it=player.state_->entries.find(source.record_->generation);
+    if(it==player.state_->entries.end()) return result;
+    result.hasEntry=true;
+    result.hasPlayedFrame=it->second.playedFrame.has_value();
+    result.playedFrame=it->second.playedFrame.value_or(0);
+    if(!it->second.voice) { result.state=PlaybackState::Finished; return result; }
+    const auto& voice=*it->second.voice;
+    result.state=voice.state.load();
+    result.instance=voice.identity;
+    result.generation=voice.generation.load();
+    result.submittedFrame=voice.submitted.load();
+    result.hasTransport=voice.transport!=nullptr;
+    if(const auto* value=voice.transport.get()) {
         const auto write=value->write.load(std::memory_order_acquire);
         const auto read=value->read.load(std::memory_order_acquire);
         result.prefetchedFrames=write>=read?static_cast<std::size_t>(write-read):0;
@@ -707,6 +777,12 @@ Snapshot Access::Inspect(const Playback& playback) {
         }
     }
     return result;
+}
+std::size_t Access::PlayerCount(const AudioSystem& audio) {
+    std::lock_guard lock(audio.system_->control);
+    return static_cast<std::size_t>(std::count_if(audio.system_->players.begin(),audio.system_->players.end(),[](const auto& weak) {
+        const auto player=weak.lock(); return player&&!player->destroyed.load();
+    }));
 }
 }
 }

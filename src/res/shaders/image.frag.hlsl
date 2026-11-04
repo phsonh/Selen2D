@@ -6,108 +6,123 @@ cbuffer FogState : register(b0,space3) {
     float4 fogOperations; // Fog RGB enum, Fog Alpha enum, Image Add-prefix flag, reserved
 };
 
-// Non-mipmapped Atlas regions repeat in logical Image space. Texture sampler
-// Wrap only addresses a whole Texture, so it cannot provide this boundary.
-float4 SampleLocalRepeat(float2 uv, float4 region, bool linearFilter) {
-    uint width, height;
-    source.GetDimensions(width, height);
-    float2 textureSize=float2(width,height);
-    int2 origin=int2(round(region.xy*textureSize));
-    int2 extent=max(int2(round((region.zw-region.xy)*textureSize)),int2(1,1));
-    // Wrap before converting to integer pixels: negative UVs work, and a large
-    // repeat count cannot overflow the bounded per-region integer coordinates.
-    float2 wrapped=frac((uv-region.xy)/(region.zw-region.xy));
-    if(!linearFilter) {
-        int2 pixel=min(int2(floor(wrapped*float2(extent))),extent-1);
-        return source.Load(int3(origin+pixel,0));
+// A logical crop is a fractional rectangle over the copied integer pixel
+// coverage. Repeat extends that cropped point field periodically. Linear
+// filtering integrates a one-texel box over this field: for integer bounds it
+// is exactly ordinary bilinear interpolation, including the repeat seam.
+struct AxisFilter { int4 pixel; float4 weight; };
+AxisFilter RepeatAxis(float coordinate, float begin, float extent, int coverage) {
+    AxisFilter result;
+    result.pixel=int4(0,0,0,0); result.weight=float4(1,0,0,0);
+    int first=int(floor(begin));
+    if(extent<=0.0) { // A positive double may underflow a GPU float; its limit is one point.
+        result.pixel=int4(clamp(first,0,coverage-1),0,0,0); return result;
     }
-    // Texel centers lie at n+0.5. At u/v=0 the two neighboring texels must be
-    // the last and first Image texels, not its extruded edge or a neighbor tile.
-    float2 pixel=wrapped*float2(extent)-0.5;
-    int2 low=int2(floor(pixel));
-    float2 weight=frac(pixel);
-    int2 first=(low+extent)%extent;
-    int2 second=(first+1)%extent;
-    float4 a=source.Load(int3(origin+first,0));
-    float4 b=source.Load(int3(origin+int2(second.x,first.y),0));
-    float4 c=source.Load(int3(origin+int2(first.x,second.y),0));
-    float4 d=source.Load(int3(origin+second,0));
-    return lerp(lerp(a,b,weight.x),lerp(c,d,weight.x),weight.y);
-}
-
-// Logical mips are independently downsampled and extruded CPU images. Their
-// physical texture has only LOD 0: never ask the GPU to downsample an Atlas page.
-// Each strip keeps the same content X; its smaller levels follow downwards.
-void StripLevel(uint level, int2 baseOrigin, uint2 baseExtent, uint extrusion,
-    out int2 origin, out int2 extent) {
-    uint y=uint(baseOrigin.y);
-    uint height=baseExtent.y;
-    [loop] for(uint previous=0;previous<level;++previous) {
-        y+=height+2*extrusion;
-        height=max(1u,height>>1);
+    if(extent<1.0) {
+        // A sub-texel period spans at most two source pixels. Integrate complete
+        // periods analytically instead of looping 1/extent times.
+        float cut=clamp(float(first+1)-begin,0.0,extent);
+        float left;
+        if(extent<0.00001) left=cut/extent;
+        else {
+            float full=min(1.0,floor(1.0/extent)*extent);
+            float tail=max(0.0,1.0-full);
+            float start=frac(coordinate-0.5/extent)*extent;
+            float segment=min(tail,extent-start);
+            left=full*(cut/extent)+clamp(cut-start,0.0,segment)+min(tail-segment,cut);
+        }
+        result.pixel=clamp(int4(first,first+1,0,0),0,coverage-1);
+        result.weight=float4(saturate(left),1.0-saturate(left),0,0);
+        return result;
     }
-    origin=int2(baseOrigin.x,int(y));
-    extent=int2(max(uint2(1,1),baseExtent>>level));
+    // A unit footprint crosses at most one periodic seam, and each remaining
+    // segment crosses at most one source pixel boundary: four weights suffice.
+    float start=frac(coordinate-0.5/extent)*extent;
+    float segment=min(1.0,extent-start);
+    float absolute=begin+start;
+    int low=int(floor(absolute));
+    float firstWeight=clamp(float(low+1)-absolute,0.0,segment);
+    float remainder=1.0-segment;
+    float thirdWeight=clamp(float(first+1)-begin,0.0,remainder);
+    result.pixel=clamp(int4(low,low+1,first,first+1),0,coverage-1);
+    result.weight=float4(firstWeight,segment-firstWeight,thirdWeight,remainder-thirdWeight);
+    return result;
 }
-
-float4 SampleStripLevel(float2 local, uint level, int2 baseOrigin, uint2 baseExtent,
-    float2 textureSize, uint extrusion, bool linearFilter, bool wrap) {
-    int2 origin,extent;
-    StripLevel(level,baseOrigin,baseExtent,extrusion,origin,extent);
-    // Address the logical region before converting to bounded integer texels.
-    // In particular, a negative repeat coordinate wraps into this Image alone.
+float4 SampleRegion(float2 local, int2 origin, int2 coverage, float4 logical,
+    uint physicalLevel, float2 textureSize, bool linearFilter, bool wrap) {
     float2 addressed=wrap ? frac(local) : saturate(local);
+    float2 pixel=logical.xy+addressed*logical.zw;
     if(!linearFilter) {
-        int2 pixel=min(int2(floor(addressed*float2(extent))),extent-1);
-        return source.Load(int3(origin+pixel,0));
+        int2 texelIndex=clamp(int2(floor(pixel)),int2(0,0),coverage-1);
+        return source.Load(int3(origin+texelIndex,physicalLevel));
     }
     if(!wrap) {
-        // Explicit physical LOD 0 and texel-center clamp prevent interpolation
-        // into another level or Image, even at the final 1x1 logical mip.
-        float2 pixel=clamp(addressed*float2(extent),0.5,float2(extent)-0.5);
-        return source.SampleLevel(imageSampler,(float2(origin)+pixel)/textureSize,0);
+        pixel=clamp(pixel,0.5,float2(coverage)-0.5);
+        return source.SampleLevel(imageSampler,(float2(origin)+pixel)/textureSize,float(physicalLevel));
     }
-    // A clamped extrusion cannot represent a repeat seam. Interpolate the four
-    // neighbors with per-axis logical wrapping instead of sampling the gutter.
-    float2 pixel=addressed*float2(extent)-0.5;
-    int2 low=int2(floor(pixel));
-    float2 weight=frac(pixel);
-    int2 first=(low+extent)%extent;
-    int2 second=(first+1)%extent;
-    float4 a=source.Load(int3(origin+first,0));
-    float4 b=source.Load(int3(origin+int2(second.x,first.y),0));
-    float4 c=source.Load(int3(origin+int2(first.x,second.y),0));
-    float4 d=source.Load(int3(origin+second,0));
-    return lerp(lerp(a,b,weight.x),lerp(c,d,weight.x),weight.y);
+    if(all(logical.xy==floor(logical.xy))&&all(logical.zw==floor(logical.zw))&&all(logical.zw>=1)) {
+        // Keep the ordinary integer-region path at four texture loads.
+        int2 extent=int2(logical.zw),base=origin+int2(logical.xy);
+        float2 position=addressed*logical.zw-0.5;
+        int2 low=int2(floor(position)); float2 weight=frac(position);
+        int2 first=(low+extent)%extent,second=(first+1)%extent;
+        return lerp(lerp(source.Load(int3(base+first,physicalLevel)),
+                         source.Load(int3(base+int2(second.x,first.y),physicalLevel)),weight.x),
+                    lerp(source.Load(int3(base+int2(first.x,second.y),physicalLevel)),
+                         source.Load(int3(base+second,physicalLevel)),weight.x),weight.y);
+    }
+    AxisFilter x=RepeatAxis(addressed.x,logical.x,logical.z,coverage.x);
+    AxisFilter y=RepeatAxis(addressed.y,logical.y,logical.w,coverage.y);
+    float4 color=0;
+    [unroll] for(uint row=0;row<4;++row) {
+        [unroll] for(uint column=0;column<4;++column) {
+            float weight=x.weight[column]*y.weight[row];
+            if(weight>0.0) color+=source.Load(int3(origin+int2(x.pixel[column],y.pixel[row]),physicalLevel))*weight;
+        }
+    }
+    return color;
 }
-
-float4 SampleMipStrip(float2 uv, float2 uvDx, float2 uvDy, float4 region, float4 flags) {
-    uint width,height;
-    source.GetDimensions(width,height);
-    float2 textureSize=float2(width,height);
-    int2 baseOrigin=int2(round(region.xy*textureSize));
-    uint2 baseExtent=max(uint2(round((region.zw-region.xy)*textureSize)),uint2(1,1));
-    float2 local=(uv-region.xy)/(region.zw-region.xy);
-    // Derivatives belong to the unaddressed logical Image coordinates. Taking
-    // them after frac/clamp would create false LOD changes at a repeat boundary
-    // or return to LOD 0 outside a clamp boundary.
-    float2 texelDx=uvDx/(region.zw-region.xy)*float2(baseExtent);
-    float2 texelDy=uvDy/(region.zw-region.xy)*float2(baseExtent);
-    uint last=uint(flags.z)-1;
-    float lod=clamp(log2(max(1.0,max(length(texelDx),length(texelDy)))),0.0,float(last));
-    bool linearFilter=flags.y>=6.0;
-    bool wrap=(uint(flags.y)&1u)!=0;
-    uint extrusion=uint(flags.w);
-    if(!linearFilter) {
-        uint level=uint(floor(lod+0.5));
-        return SampleStripLevel(local,level,baseOrigin,baseExtent,textureSize,extrusion,false,wrap);
+void StripLevel(uint level, int2 baseOrigin, uint2 baseExtent, uint extrusion,
+    out int2 origin, out int2 extent) {
+    uint y=uint(baseOrigin.y),height=baseExtent.y;
+    [loop] for(uint previous=0;previous<level;++previous) {
+        y+=height+2*extrusion; height=max(1u,height>>1);
     }
+    origin=int2(baseOrigin.x,int(y)); extent=int2(max(uint2(1,1),baseExtent>>level));
+}
+float4 SampleImageLevel(float2 local,uint level,int2 baseOrigin,uint2 baseExtent,float4 logical,
+    float2 textureSize,uint extrusion,bool linearFilter,bool wrap,bool physicalMips) {
+    int2 origin,extent; uint physicalLevel=0;
+    if(physicalMips) {
+        physicalLevel=level;
+        uint width,height,levels; source.GetDimensions(level,width,height,levels);
+        textureSize=float2(width,height);
+        origin=baseOrigin>>level; extent=int2(max(uint2(1,1),baseExtent>>level));
+    } else StripLevel(level,baseOrigin,baseExtent,extrusion,origin,extent);
+    // SDL's physical mips and CPU strips both resample each full coverage level.
+    // Map the fractional rectangle by the same per-axis ratio, including odd sizes.
+    float2 ratio=float2(extent)/float2(baseExtent);
+    return SampleRegion(local,origin,extent,float4(logical.xy*ratio,logical.zw*ratio),
+        physicalLevel,textureSize,linearFilter,wrap);
+}
+float4 SampleImageMips(float2 local,float2 localDx,float2 localDy,float4 region,float4 logical,float4 flags) {
+    uint width,height; source.GetDimensions(width,height);
+    float2 textureSize=float2(width,height);
+    int2 origin=int2(round(region.xy*textureSize));
+    uint2 extent=max(uint2(round((region.zw-region.xy)*textureSize)),uint2(1,1));
+    // Derivatives precede frac/clamp and use the exact logical source extent.
+    float2 dx=localDx*logical.zw,dy=localDy*logical.zw;
+    uint last=uint(flags.z)-1,mode=uint(flags.y);
+    float lod=clamp(log2(max(1.0,max(length(dx),length(dy)))),0.0,float(last));
+    bool linearFilter=(mode&2u)!=0,wrap=(mode&1u)!=0,physicalMips=mode>=8;
+    uint extrusion=uint(flags.w);
+    if(!linearFilter) return SampleImageLevel(local,uint(floor(lod+0.5)),origin,extent,logical,
+        textureSize,extrusion,false,wrap,physicalMips);
     uint lower=uint(floor(lod)),upper=min(lower+1,last);
-    float4 first=SampleStripLevel(local,lower,baseOrigin,baseExtent,textureSize,extrusion,true,wrap);
+    float4 first=SampleImageLevel(local,lower,origin,extent,logical,textureSize,extrusion,true,wrap,physicalMips);
     float weight=lod-float(lower);
-    if(lower==upper || weight==0.0) return first;
-    float4 second=SampleStripLevel(local,upper,baseOrigin,baseExtent,textureSize,extrusion,true,wrap);
-    return lerp(first,second,weight);
+    if(lower==upper||weight==0) return first;
+    return lerp(first,SampleImageLevel(local,upper,origin,extent,logical,textureSize,extrusion,true,wrap,physicalMips),weight);
 }
 
 // Keep the full VS output signature, including SV_Position, even when unused.
@@ -127,23 +142,25 @@ float StableLength(float3 value) {
 }
 ImageOutput main(float4 position : SV_Position, float3 uvq : TEXCOORD0, float4 color : TEXCOORD1,
     nointerpolation float4 region : TEXCOORD2, nointerpolation float4 flags : TEXCOORD3,
-    float3 relative : TEXCOORD4) {
-    // Atlas Clamp is local to the Image region, not the entire backing texture.
-    // Extrusion supplies border pixels; this needs only one texture sample.
-    // Homogeneous UV has one shared rational mapping over both triangles.
-    // Ordinary Image/Rect uses q=1; 3D clip.w independently handles perspective.
-    float2 uv=uvq.xy/uvq.z;
-    float2 uvDx=ddx(uv),uvDy=ddy(uv);
+    float3 relative : TEXCOORD4, nointerpolation float4 logical : TEXCOORD5) {
+    // Homogeneous UV stays image-local. Physical allocation and fractional
+    // source bounds remain separate through projective quads and 3D clipping.
+    float2 local=uvq.xy/uvq.z;
+    float2 localDx=ddx(local),localDy=ddy(local);
+    uint width,height; source.GetDimensions(width,height);
+    float2 textureSize=float2(width,height);
+    int2 origin=int2(round(region.xy*textureSize));
+    int2 coverage=max(int2(round((region.zw-region.xy)*textureSize)),int2(1,1));
     float4 texel;
     [branch] if(flags.y>3.5) {
-        texel=SampleMipStrip(uv,uvDx,uvDy,region,flags);
+        texel=SampleImageMips(local,localDx,localDy,region,logical,flags);
     } else if(flags.y>1.5) {
-        texel=SampleLocalRepeat(uv,region,flags.y>2.5);
+        texel=SampleRegion(local,origin,coverage,logical,0,textureSize,flags.y>2.5,true);
     } else {
-        // Clamp remains one hardware sample. Full-image Repeat also keeps the
-        // existing sampler. Preserve pre-clamp derivatives for physical mips.
-        float2 sampleUV=flags.y>0.5 ? uv : clamp(uv,region.xy,region.zw);
-        texel=source.SampleGrad(imageSampler,sampleUV,uvDx,uvDy);
+        float2 pixel=logical.xy+(flags.y>0.5 ? local : saturate(local))*logical.zw;
+        if(flags.y<0.5) pixel=clamp(pixel,0.5,float2(coverage)-0.5);
+        float2 uv=(float2(origin)+pixel)/textureSize;
+        texel=source.SampleGrad(imageSampler,uv,localDx*logical.zw/textureSize,localDy*logical.zw/textureSize);
     }
     float alpha=texel.a*color.a;
     // Canvas is PMA in storage; image files are Straight. Fog operates on

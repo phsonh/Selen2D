@@ -44,6 +44,8 @@ public:
     // Metadata-only preparation + bounded GPU allocation, no copy submission,
     // pixel decoding, source readback or wait. Source must already be GPU-ready
     // Straight RGBA8; lifetime must identify the canonical immutable backing.
+    // Fractional logical crop bounds are explicitly rejected: a hardware view
+    // cannot preserve them without compiler-side sampling adaptation.
     Lease Acquire(const Render::Image&);
     // Caller owns a CB from this Store's device and guarantees no active pass.
     // Multiple calls in the same

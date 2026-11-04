@@ -48,6 +48,12 @@ namespace {
 using detail::Phase;
 detail::Key Key(const Render::Image& image) {
     Render::detail::Validate(image, {});
+    // A hardware Texture2D view alone cannot encode a fractional sampling
+    // period. Keep this unsupported case explicit until the shader compiler
+    // routes every supported sampling expression through logical metadata.
+    if (image.insetX != 0 || image.insetY != 0 || image.LogicalWidth() != image.width ||
+        image.LogicalHeight() != image.height)
+        throw std::invalid_argument("Custom Shader Image sampling currently requires integer crop bounds");
     if (image.alpha != Render::Alpha::Straight)
         throw std::invalid_argument("Image views require Straight RGBA8 Image data; Canvas uses a separate conversion path");
     if (image.textureWidth > 16384 || image.textureHeight > 16384 || !image.textureLevels ||

@@ -91,13 +91,14 @@ SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render:
     impl->pipelines.reserve(impl->pipelines.size()+1);
     using V=Render::detail::Vertex;
     SDL_GPUVertexBufferDescription buffer{0,sizeof(V),SDL_GPU_VERTEXINPUTRATE_VERTEX,0};
-    const std::array<SDL_GPUVertexAttribute,6> attributes{{
+    const std::array<SDL_GPUVertexAttribute,7> attributes{{
         {0,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,x)},
         {1,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(V,u)},
         {2,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,r)},
         {3,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,minU)},
         {4,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,premultiplied)},
-        {5,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(V,relativeX)}}};
+        {5,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(V,relativeX)},
+        {6,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,logicalX)}}};
     const bool threeD=depth!=SDL_GPU_TEXTUREFORMAT_INVALID;
     std::array<SDL_GPUColorTargetDescription,2> targets{};
     targets[0].format=format;

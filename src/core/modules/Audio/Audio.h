@@ -4,13 +4,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace core::modules::File { class FileSystem; }
 namespace core::runtime::Jobs { class MemoryBudget; class StopToken; }
 
 namespace core::modules::Audio {
 enum class StorageMode { Decoded, Stream };
-enum class PlayPolicy { Restart, Overlap };
 enum class PlaybackState { Starting, Playing, Paused, Stopped, Finished, Failed, Destroyed };
 struct LoopRange { std::uint64_t begin{}, end{}; }; // Source frames, end exclusive.
 struct LoopSeconds { double start{}; std::optional<double> finish; };
@@ -25,15 +25,7 @@ struct ResourceInfo {
     StorageMode mode{};
     std::uint64_t loopStartFrame{}, loopEndFrame{}, generation{};
 };
-struct PlayOptions {
-    float volume{1}, pan{};
-    std::string bus{"default"};
-    PlayPolicy policy{PlayPolicy::Restart};
-    bool loop{};
-    double position{};
-};
-struct Position { double seconds{}; const char* basis{"submitted"}; };
-namespace detail { struct System; struct ResourceData; struct Record; struct Voice; }
+namespace detail { struct System; struct ResourceData; struct Record; struct Voice; struct PlayerState; }
 namespace testing { struct Access; }
 
 // Immutable CPU-side preparation; Prepare needs no playback device or window.
@@ -58,25 +50,32 @@ private:
     explicit Source(std::shared_ptr<detail::Record> record);
     std::shared_ptr<detail::Record> record_;
     friend class AudioSystem;
+    friend class Player;
+    friend struct testing::Access;
 };
 
-class Playback final {
+// A player mixes independent resource generations. Lua resolves names through
+// Resource before these operations; no native method opens a path or re-loads.
+class Player final {
 public:
-    void Pause();
-    void Resume();
-    void Stop(); // Idempotent; does not overwrite natural Finished state.
-    void Destroy(); // Idempotent; control operations subsequently fail.
-    void Seek(double seconds); // Asynchronous prime; preserves paused intent.
-    void SetVolume(float volume);
-    float GetVolume() const;
-    void SetPan(float pan);
-    float GetPan() const;
-    PlaybackState GetState() const;
-    Position GetPosition() const; // Submitted source cursor, never a speaker clock.
-    std::string GetError() const; // Empty means no error.
+    ~Player();
+    Player(const Player&) = delete;
+    Player& operator=(const Player&) = delete;
+    void Play(const std::string& name, const std::shared_ptr<Source>& source);
+    void Stop(const std::shared_ptr<Source>& source = {});
+    void Pause(const std::shared_ptr<Source>& source = {});
+    void Resume(const std::shared_ptr<Source>& source = {});
+    void SetVolume(double volume);
+    double GetVolume() const;
+    void SetPan(double pan);
+    double GetPan() const;
+    std::vector<std::string> GetPlaying() const;
+    bool IsPlaying(const std::shared_ptr<Source>& source) const;
+    void Destroy() noexcept;
+    bool IsDestroyed() const noexcept;
 private:
-    explicit Playback(std::shared_ptr<detail::Voice> voice);
-    std::shared_ptr<detail::Voice> voice_;
+    explicit Player(std::shared_ptr<detail::PlayerState> state);
+    std::shared_ptr<detail::PlayerState> state_;
     friend class AudioSystem;
     friend struct testing::Access;
 };
@@ -103,14 +102,13 @@ public:
         const std::string& path, const LoadOptions& options,
         core::runtime::Jobs::MemoryBudget memory, const core::runtime::Jobs::StopToken& stop);
     std::shared_ptr<Source> CreateSource(const PreparedAudio& prepared);
-    std::shared_ptr<Playback> Play(const std::shared_ptr<Source>& source, const PlayOptions& options = {});
-    void StopSource(const std::shared_ptr<Source>& source);
-    void PauseSource(const std::shared_ptr<Source>& source);
-    void ResumeSource(const std::shared_ptr<Source>& source);
-    void SetMasterVolume(float volume);
-    float GetMasterVolume() const;
-    void SetBusVolume(const std::string& bus, double volume);
-    double GetBusVolume(const std::string& bus) const;
+    std::shared_ptr<Player> CreatePlayer();
+    // Entry uses zero. The host publishes Clock::FrameCount immediately before
+    // dispatching a frame callback; neither audio work nor queries advance it.
+    void SetRuntimeFrame(std::uint64_t frame);
+    // Revoke all players and join in-flight decoder work before Resource/VFS
+    // teardown. Device closure remains in Shutdown; this method is idempotent.
+    void StopAllPlayersAndDrain();
     // Optional native maintenance hint. Priming, refill, completion and reclaim
     // all advance on the service worker without a game-frame pump or Getter.
     void Update();
@@ -119,7 +117,6 @@ public:
     void CheckErrors();
     std::size_t GetActivePlaybackCount() const; // C++ diagnostic, not required Lua API.
 private:
-    void CheckSource(const std::shared_ptr<Source>& source) const;
     std::shared_ptr<const File::FileSystem> files_;
     std::shared_ptr<detail::System> system_;
     friend struct testing::Access;

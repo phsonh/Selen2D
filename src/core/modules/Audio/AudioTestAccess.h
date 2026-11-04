@@ -5,16 +5,17 @@
 namespace core::modules::Audio::testing {
 struct Snapshot {
     PlaybackState state{};
-    std::uint64_t generation{},submittedFrame{};
+    std::uint64_t generation{},submittedFrame{},instance{},playedFrame{};
     std::size_t prefetchedFrames{};
     int streamQueuedBytes{},streamAvailableBytes{};
-    bool hasTransport{};
+    bool hasTransport{},hasEntry{},hasPlayedFrame{};
     float effectiveGain{};
 };
 struct Access {
     static std::uint32_t DeviceId(const AudioSystem& audio);
     static bool HasDecoderWorker(const AudioSystem& audio);
     static void PauseDecoder(AudioSystem& audio,bool pause);
-    static Snapshot Inspect(const Playback& playback);
+    static Snapshot Inspect(const Player& player, const Source& source);
+    static std::size_t PlayerCount(const AudioSystem& audio);
 };
 }

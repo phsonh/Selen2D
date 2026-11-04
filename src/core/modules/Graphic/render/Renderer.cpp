@@ -207,20 +207,31 @@ struct Renderer::Impl {
         if(!std::isfinite(v.x) || !std::isfinite(v.y)) throw std::invalid_argument("Image projection exceeds GPU float range");
         const float u0=float(image.x)/image.textureWidth, v0=float(image.y)/image.textureHeight;
         const float u1=float(image.x+image.width)/image.textureWidth, v1=float(image.y+image.height)/image.textureHeight;
-        v.u=static_cast<float>((image.x+u*image.width)/image.textureWidth*q);
-        v.v=static_cast<float>((image.y+t*image.height)/image.textureHeight*q); v.q=static_cast<float>(q);
+        // Interpolate image-local UV before applying the logical source rect in
+        // the fragment shader. Tiny crops must not collapse a UV denominator.
+        v.u=static_cast<float>(u*q);
+        v.v=static_cast<float>(t*q); v.q=static_cast<float>(q);
         if(!std::isfinite(v.u) || !std::isfinite(v.v) || !std::isfinite(v.q) || v.q<=0)
             throw std::invalid_argument("Image UV exceeds GPU interpolation range");
         v.r=float((color>>16)&255)/255; v.g=float((color>>8)&255)/255;
         v.b=float(color&255)/255; v.a=float(color>>24)/255;
         v.minU=u0; v.minV=v0; v.maxU=u1; v.maxV=v1;
+        v.logicalX=static_cast<float>(image.insetX); v.logicalY=static_cast<float>(image.insetY);
+        v.logicalWidth=static_cast<float>(image.LogicalWidth()); v.logicalHeight=static_cast<float>(image.LogicalHeight());
         v.premultiplied=image.alpha==Alpha::Premultiplied ? 1.f:0.f;
         if (image.mipLevels) {
             v.sampling=4.f+(image.filter==Filter::Linear ? 2.f:0.f)+(image.address==Address::Repeat ? 1.f:0.f);
             v.mipLevels=static_cast<float>(image.mipLevels);
             v.mipExtrusion=static_cast<float>(image.mipExtrusion);
+        } else if (image.textureLevels>1 && (image.insetX!=0 || image.insetY!=0 ||
+            image.LogicalWidth()!=image.width || image.LogicalHeight()!=image.height)) {
+            // Large Images use ordinary physical mip chains; logical bounds
+            // still need to be mapped/addressed separately at every level.
+            v.sampling=8.f+(image.filter==Filter::Linear ? 2.f:0.f)+(image.address==Address::Repeat ? 1.f:0.f);
+            v.mipLevels=static_cast<float>(image.textureLevels);
         } else if (image.address==Address::Repeat) {
-            const bool whole=image.x==0 && image.y==0 && image.width==image.textureWidth && image.height==image.textureHeight;
+            const bool whole=image.x==0 && image.y==0 && image.insetX==0 && image.insetY==0 &&
+                image.LogicalWidth()==image.textureWidth && image.LogicalHeight()==image.textureHeight;
             // Full independent images retain hardware addressing and mip LOD.
             // Subregions wrap their own pixels, never the entire Atlas page.
             v.sampling=whole ? 1.f : (image.filter==Filter::Point ? 2.f : 3.f);
