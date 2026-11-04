@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 # This is the only maintained product-version value. Runtime, Windows resources
 # and distributable metadata are generated from it; revisions are developmental.
-project(Engine VERSION 2.1.1 LANGUAGES C CXX RC)
+project(Engine VERSION 2.2.0 LANGUAGES C CXX RC)
 # Distributable binaries use the static MSVC runtime, including all dependencies.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(ENGINE_PRODUCT_NAME "Selen2D")
