@@ -17,11 +17,22 @@
       "inherits": "selen2d-release",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "selen2d-public-release",
+      "inherits": "selen2d-release",
+      "binaryDir": "${sourceDir}/build/public-release",
+      "cacheVariables": {
+        "ENGINE_PUBLIC_RELEASE": "ON",
+        "ENGINE_LAUNCH_CONFIG": "${sourceDir}/src/res/development/launch.json",
+        "ENGINE_LAUNCH_HEADER": ""
+      }
     }
   ],
   "buildPresets": [
     { "name": "selen2d-release", "configurePreset": "selen2d-release" },
-    { "name": "selen2d-debug", "configurePreset": "selen2d-debug" }
+    { "name": "selen2d-debug", "configurePreset": "selen2d-debug" },
+    { "name": "selen2d-public-release", "configurePreset": "selen2d-public-release" }
   ],
   "testPresets": [
     { "name": "selen2d-release", "configurePreset": "selen2d-release", "output": { "outputOnFailure": true } },

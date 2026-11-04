@@ -1,7 +1,8 @@
 """SLPK v1/v2 format implementation. This module never executes launch config.
 
-Development tools require requirements-tools.txt; ordinary engine builds and
-runtime do not require Python. Cryptography is provided by PyNaCl/libsodium.
+Package tools require requirements-tools.txt; ordinary engine builds only need
+the separate launch dependencies. Runtime needs no Python. Cryptography uses
+PyNaCl/libsodium.
 """
 from __future__ import annotations
 import hashlib
@@ -17,7 +18,7 @@ import zstandard as zstd
 from nacl.bindings import (crypto_aead_xchacha20poly1305_ietf_encrypt as encrypt,
                            crypto_aead_xchacha20poly1305_ietf_decrypt as decrypt)
 from nacl.exceptions import CryptoError
-from launch_common import normalize_path, fold_path
+from .launch_common import normalize_path, fold_path
 
 MAX_POSITION = (1 << 53) - 1
 MAX_COUNT = 1048576
@@ -30,6 +31,18 @@ BLOCK = struct.Struct('<QIIIB3s')
 
 class PackageError(ValueError):
     pass
+
+class OperationCancelled(PackageError):
+    """Cooperative cancellation; an existing output package is left intact."""
+    pass
+
+def checkpoint(cancelled):
+    if cancelled is not None and cancelled():
+        raise OperationCancelled('operation cancelled')
+
+def report(progress, phase, done, total):
+    if progress is not None:
+        progress(phase, done, total)
 
 def require(condition, message):
     if not condition:
@@ -240,10 +253,18 @@ class Package:
         require(zlib.crc32(raw) == block.crc, 'CRC32 mismatch')
         return raw
 
-    def verify(self):
+    def verify(self, *, progress=None, cancelled=None):
         require(self.entries is not None, 'verification requires an explicit secret for encrypted packages')
+        total = sum(e.size for e in self.entries)
+        done = 0
+        report(progress, 'verify', 0, total)
         for entry in self.entries:
-            for n in range(len(entry.blocks)): self.read_block(entry, n)
+            checkpoint(cancelled)
+            for n in range(len(entry.blocks)):
+                checkpoint(cancelled)
+                done += len(self.read_block(entry, n))
+                report(progress, 'verify', done, total)
+        checkpoint(cancelled)
         return self.public_header
 
 @dataclass
@@ -297,13 +318,14 @@ def open_source(path):
         stream.close()
         raise
 
-def inventory(source: Path):
+def inventory(source: Path, *, cancelled=None):
     root_info = source.lstat()
     reject_link(source, root_info)
     require(stat.S_ISDIR(root_info.st_mode), 'source must be a directory')
     entries, paths, folded = [], set(), {}
     def visit(directory, components):
         for native in os.scandir(directory):
+            checkpoint(cancelled)
             physical = Path(native.path)
             # Windows DirEntry.stat uses enumeration metadata with zero file
             # identity fields. lstat obtains the actual volume/file identity.
@@ -344,14 +366,19 @@ def check_output(source, output):
         require(stat.S_ISREG(info.st_mode), 'existing output must be a regular file')
     return output_resolved
 
-def pack(source, output, *, block_size=262144, level=6, key=None):
+def pack(source, output, *, block_size=262144, level=6, key=None, progress=None, cancelled=None):
     """Build to a private sibling, verify all blocks, then atomically replace."""
     block_size_check(block_size)
     require(isinstance(level, int) and -131072 <= level <= zstd.MAX_COMPRESSION_LEVEL, 'unsupported Zstd level')
     require(key is None or isinstance(key, bytes) and len(key) == 32, 'key must contain 32 bytes')
     source, output = Path(source).absolute(), Path(output).absolute()
     output = check_output(source, output)
-    entries = inventory(source)
+    checkpoint(cancelled)
+    report(progress, 'scan', 0, 0)
+    entries = inventory(source, cancelled=cancelled)
+    total_bytes = sum(e.identity[3] for e in entries if not e.directory)
+    packed_bytes = 0
+    report(progress, 'pack', 0, total_bytes)
     encrypted = key is not None
     compressor = zstd.ZstdCompressor(level=level, write_content_size=True, write_checksum=False, write_dict_id=False)
     nonces = set()
@@ -371,6 +398,7 @@ def pack(source, output, *, block_size=262144, level=6, key=None):
             destination.write(header)
             index_data = bytearray(); total_blocks = 0
             for entry_index, item in enumerate(entries):
+                checkpoint(cancelled)
                 path = item.path.encode('utf-8')
                 size = 0 if item.directory else item.identity[3]
                 require(size <= MAX_POSITION, 'logical size exceeds exact-position limit: '+item.path)
@@ -384,6 +412,7 @@ def pack(source, output, *, block_size=262144, level=6, key=None):
                 with open_source(item.physical) as source_file:
                     require(identity(os.fstat(source_file.fileno())) == item.identity, 'source changed before opening: '+item.path)
                     for block_index in range(block_count):
+                        checkpoint(cancelled)
                         raw = source_file.read(min(block_size, size-block_index*block_size))
                         require(len(raw) == min(block_size, size-block_index*block_size), 'source truncated while packing: '+item.path)
                         compressed = compressor.compress(raw)
@@ -397,16 +426,20 @@ def pack(source, output, *, block_size=262144, level=6, key=None):
                             block_nonce = nonce(); descriptor += block_nonce
                             payload = encrypt(payload, block_aad(header, entry_index, block_index, descriptor), block_nonce, key)
                         destination.write(payload); index_data += descriptor
+                        packed_bytes += len(raw)
+                        report(progress, 'pack', packed_bytes, total_bytes)
                     require(not source_file.read(1) and identity(os.fstat(source_file.fileno())) == item.identity,
                             'source changed while packing: '+item.path)
-            require(unchanged(entries, inventory(source)), 'source tree changed while packing')
+            require(unchanged(entries, inventory(source, cancelled=cancelled)), 'source tree changed while packing')
             index_offset = destination.tell()
             header = header_v2(len(entries), block_size, index_offset, len(index_data), package_id, index_nonce) if encrypted else header_v1(len(entries), block_size, index_offset, len(index_data))
             payload = encrypt(bytes(index_data), INDEX_DOMAIN+header, index_nonce, key) if encrypted else index_data
             require(index_offset+len(payload) <= MAX_POSITION, 'output exceeds exact-position limit')
             destination.write(payload); destination.seek(0); destination.write(header)
             destination.flush(); os.fsync(destination.fileno())
-        with Package(temporary, key, encrypted=encrypted) as package: package.verify()
+        with Package(temporary, key, encrypted=encrypted) as package:
+            package.verify(progress=progress, cancelled=cancelled)
+        checkpoint(cancelled)
         os.replace(temporary, output)
         temporary = None
         return {'output': str(output), 'version': 2 if encrypted else 1, 'entries':len(entries), 'blocks':total_blocks}

@@ -60,7 +60,13 @@ std::string Parent(std::string_view path) {
     const auto slash=path.rfind('/'); return slash==std::string_view::npos?std::string{}:std::string(path.substr(0,slash));
 }
 std::string Leaf(std::string_view path) { return std::string(path.substr(path.rfind('/')==std::string_view::npos?0:path.rfind('/')+1)); }
+std::string Join(std::string_view parent,std::string_view child) {
+    if(parent.empty()) return std::string(child);
+    if(child.empty()) return std::string(parent);
+    return std::string(parent)+"/"+std::string(child);
+}
 std::string Tail(std::string_view parent,std::string_view path) {
+    if(parent.empty()) return std::string(path);
     return parent==path?std::string{}:std::string(path.substr(parent.size()+1));
 }
 void NativeName(std::string_view relative,std::string_view virtualPath) {
@@ -318,7 +324,12 @@ struct FileSystem::Impl {
         }
         void Insert(std::string path,Node node,bool packageOverlay=false) {
             const auto canonical=Normalize(path);
-            if(!canonical||*canonical!=path) throw ConflictError("mapped entry exceeds the canonical path contract");
+            // Only the internal deployment-root node may have an empty name.
+            // It is not addressable by an empty/dot Lua path.
+            if(path.empty()) {
+                if(node.info.type!=NodeType::Directory || node.mount)
+                    throw ConflictError("invalid internal root node");
+            } else if(!canonical||*canonical!=path) throw ConflictError("mapped entry exceeds the canonical path contract");
             if(node.identity&&node.directory) {
                 const auto [source,added]=identities.emplace(*node.identity,node.directory);
                 if(!added&&source->second!=node.directory)
@@ -402,7 +413,7 @@ struct FileSystem::Impl {
                 const auto child=Normalize(Utf8(it->path().filename()));
                 if(!child||child->find('/')!=std::string::npos) throw ConflictError("unaddressable directory entry at '"+name+"'");
                 if(!originals.insert(FoldPath(*child)).second) throw ConflictError("Unicode collision at '"+name+"'");
-                pending.emplace_back(it->path(),name+"/"+*child);
+                pending.emplace_back(it->path(),Join(name,*child));
                 it.increment(ec); Check(ec,"enumerate",name);
             }
         }
@@ -437,7 +448,7 @@ struct FileSystem::Impl {
         for(std::size_t start=0;start<relative.size();) {
             auto end=relative.find('/',start); if(end==std::string::npos) end=relative.size();
             const auto part=std::string_view(relative).substr(start,end-start);
-            current+='/'; current+=part;
+            current=Join(current,part);
             if(const auto* node=view.Find(current);node&&node->directory==&d) disk=node->disk;
             else disk/=NativePath(part);
             start=end+1;
@@ -498,7 +509,13 @@ FileSystem::FileSystem(fs::path installRoot,std::vector<MountSpec> specs,std::ve
         impl_->protectedCode=impl_->protectedCode||spec.encrypted;
     }
     for(const auto& rule:rules) {
-        const auto path=Strict(rule.path),target=Strict(rule.target); const auto base=BaseRoot(rule.baseRoot);
+        const auto base=BaseRoot(rule.baseRoot);
+        const bool deploymentRoot=rule.path.empty() && rule.target.empty();
+        if((rule.path.empty() || rule.target.empty()) &&
+            (!deploymentRoot || PhysicalKey(base)!=PhysicalKey(impl_->install)))
+            throw InvalidPath("empty directory mappings are reserved for the deployment root");
+        const auto path=deploymentRoot?std::string{}:Strict(rule.path);
+        const auto target=deploymentRoot?std::string{}:Strict(rule.target);
         const auto root=ProjectPath(base,path,target,guards);
         Impl::Directory candidate{base,root,path,target,std::make_shared<DirectoryAnchor>(base,target),{}};
         bool redundant=false;
@@ -572,7 +589,7 @@ bool FileSystem::CreateDirectory(std::string_view path) const {
     const auto disk=impl_->Destination(view,d,p); impl_->CheckBacking(disk,p,true);
     // Create each fixed project ancestor explicitly, never an arbitrary base.
     auto current=d.base;
-    const auto combined=d.path+(p==d.target?"":"/"+Tail(d.target,p));
+    const auto combined=Join(d.path,Tail(d.target,p));
     for(std::size_t start=0;start<combined.size();) {
         auto end=combined.find('/',start); if(end==std::string::npos) end=combined.size();
         const auto part=std::string_view(combined).substr(start,end-start);

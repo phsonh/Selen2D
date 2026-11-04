@@ -1,0 +1,2 @@
+# Compile-time JSON validation only. No GUI, compression or crypto packages.
+unicodedata2==18.0.0

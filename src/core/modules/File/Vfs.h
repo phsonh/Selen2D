@@ -24,8 +24,8 @@ struct MountSpec {
 };
 struct DirectorySpec {
     std::filesystem::path baseRoot; // Absolute system/deployment root from Startup.
-    std::string path;              // Nonempty strict relative project directory.
-    std::string target;            // Nonempty virtual directory alias.
+    std::string path;              // Strict relative directory; empty pair below is Startup's deployment-root sentinel.
+    std::string target;            // Strict virtual alias; both empty only when baseRoot is the installation root.
 };
 struct OpenMode {
     char base{};

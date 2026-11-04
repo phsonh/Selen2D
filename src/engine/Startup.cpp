@@ -76,6 +76,15 @@ Config Load(const std::filesystem::path& directory, const launch::Config& declar
     std::optional<std::filesystem::path> userRoot;
     std::vector<File::DirectorySpec> directories;
     for(const auto& record : declaration.directories) {
+        // The root marker belongs only to this build-time directory declaration.
+        // Never relax File::Normalize: Lua, package entries and resource paths
+        // still require ordinary nonempty relative names without dot components.
+        if(record.path == "." || record.target == ".") {
+            if(record.base != launch::Base::Deployment || record.path != "." || record.target != ".")
+                throw std::invalid_argument("The root directory marker requires deployment with path and target both '.'");
+            directories.push_back({config.directory, {}, {}});
+            continue;
+        }
         std::filesystem::path base;
         switch(record.base) {
         case launch::Base::Deployment: base = config.directory; break;

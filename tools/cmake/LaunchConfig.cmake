@@ -1,0 +1,86 @@
+include_guard(GLOBAL)
+
+function(engine_configure_launch target)
+    set(ENGINE_LAUNCH_CONFIG "" CACHE FILEPATH "Build-only JSON; empty selects launch/launch.json or the public development JSON")
+    set(ENGINE_LAUNCH_HEADER "" CACHE FILEPATH "Legacy explicit C++ header; mutually exclusive with ENGINE_LAUNCH_CONFIG")
+    option(ENGINE_PUBLIC_RELEASE "Build the public example only; required for stage_release" OFF)
+    set(default_json "${PROJECT_SOURCE_DIR}/src/res/development/launch.json")
+    set(generated "${CMAKE_CURRENT_BINARY_DIR}/generated/launch.h")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+    if(ENGINE_LAUNCH_CONFIG AND ENGINE_LAUNCH_HEADER)
+        message(FATAL_ERROR "Select only ENGINE_LAUNCH_CONFIG or ENGINE_LAUNCH_HEADER, never both")
+    endif()
+    if(ENGINE_PUBLIC_RELEASE AND ENGINE_LAUNCH_HEADER)
+        message(FATAL_ERROR "Public releases cannot use ENGINE_LAUNCH_HEADER")
+    endif()
+    if(ENGINE_LAUNCH_HEADER)
+        get_filename_component(source "${ENGINE_LAUNCH_HEADER}" ABSOLUTE BASE_DIR "${PROJECT_SOURCE_DIR}")
+        if(NOT EXISTS "${source}" OR IS_DIRECTORY "${source}")
+            message(FATAL_ERROR "The explicit legacy launch header does not exist: ${source}")
+        endif()
+        message(STATUS "Launch configuration: legacy explicit header ${source} (not a public release)")
+        configure_file("${source}" "${generated}" COPYONLY)
+        return()
+    endif()
+
+    if(ENGINE_LAUNCH_CONFIG)
+        get_filename_component(source "${ENGINE_LAUNCH_CONFIG}" ABSOLUTE BASE_DIR "${PROJECT_SOURCE_DIR}")
+        set(selection "explicit JSON")
+    elseif(ENGINE_PUBLIC_RELEASE)
+        set(source "${default_json}")
+        set(selection "public release JSON")
+    else()
+        # Watch both creation and deletion, including direct Ninja builds.
+        file(GLOB private_json CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/launch/launch.json")
+        if(private_json)
+            set(source "${PROJECT_SOURCE_DIR}/launch/launch.json")
+            set(selection "current private project JSON")
+        else()
+            set(source "${default_json}")
+            set(selection "default development JSON")
+        endif()
+    endif()
+    if(NOT EXISTS "${source}" OR IS_DIRECTORY "${source}")
+        message(FATAL_ERROR "The selected launch JSON does not exist: ${source}")
+    endif()
+    set(public_option)
+    if(ENGINE_PUBLIC_RELEASE)
+        file(REAL_PATH "${source}" selected_real)
+        file(REAL_PATH "${default_json}" default_real)
+        if(NOT selected_real STREQUAL default_real)
+            message(FATAL_ERROR "Public releases require src/res/development/launch.json; private configuration is forbidden")
+        endif()
+        set(public_option --public-default)
+    endif()
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    set(generator "${PROJECT_SOURCE_DIR}/tools/pack/main.py")
+    set(implementation "${PROJECT_SOURCE_DIR}/tools/pack/selen2d_pytools/make_launch.py")
+    set(validator "${PROJECT_SOURCE_DIR}/tools/pack/selen2d_pytools/launch_common.py")
+    set(package_init "${PROJECT_SOURCE_DIR}/tools/pack/selen2d_pytools/__init__.py")
+    set(unicode_table "${PROJECT_SOURCE_DIR}/tools/pack/selen2d_pytools/unicode/CaseFolding-18.0.0.txt")
+    message(STATUS "Launch configuration: ${selection}: ${source}")
+    message(STATUS "Launch generator interpreter: ${Python3_EXECUTABLE}")
+    # Do not print inspect's stdout: it is not needed in build logs. The tool
+    # never reports secret contents. Invalid JSON stops even an incremental
+    # build before any old generated data can be considered up-to-date.
+    execute_process(COMMAND "${Python3_EXECUTABLE}" -B "${generator}" launch inspect
+        --config "${source}" ${public_option}
+        RESULT_VARIABLE validation OUTPUT_QUIET ERROR_VARIABLE diagnostic)
+    if(NOT validation EQUAL 0)
+        message(FATAL_ERROR "Launch JSON validation failed. Install tools/pack/requirements-launch.txt in the selected Python if needed.\n${diagnostic}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${source}" "${generator}" "${implementation}" "${validator}" "${package_init}" "${unicode_table}")
+    add_custom_command(OUTPUT "${generated}"
+        COMMAND "${Python3_EXECUTABLE}" -B "${generator}" launch build
+            --config "${source}" --output "${generated}" ${public_option}
+        DEPENDS "${source}" "${generator}" "${implementation}" "${validator}" "${package_init}" "${unicode_table}"
+        COMMENT "Validating JSON and generating the compiled launch configuration"
+        VERBATIM)
+    add_custom_target(engine_launch_config DEPENDS "${generated}")
+    add_dependencies(${target} engine_launch_config)
+    target_sources(${target} PRIVATE "${generated}")
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/engine/Startup.cpp"
+        PROPERTIES OBJECT_DEPENDS "${generated}")
+endfunction()

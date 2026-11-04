@@ -3,8 +3,8 @@
 import argparse
 import json
 import sys
-from launch_common import ConfigError, read_json, secret_bytes
-from resource_package import Package, PackageError, derive_key, pack
+from .launch_common import ConfigError, read_json, secret_bytes
+from .resource_package import Package, PackageError, derive_key, pack
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)

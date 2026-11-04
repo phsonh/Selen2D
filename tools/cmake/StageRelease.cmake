@@ -19,6 +19,9 @@ function(engine_stage_release)
     # Ordinary builds prepare only their own runnable bin directory. They never
     # publish into the shared release directory or create a release ZIP.
     add_custom_target(stage_development ALL
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/src/res/development/main.lua"
+            "$<TARGET_FILE_DIR:engine_app>/main.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${PROJECT_SOURCE_DIR}/src/res/development/example"
             "$<TARGET_FILE_DIR:engine_app>/example"
@@ -33,6 +36,17 @@ function(engine_stage_release)
         add_custom_target(stage_release
             COMMAND "${CMAKE_COMMAND}" -E echo
                 "stage_release requires a Release build; this configuration cannot publish"
+            COMMAND "${CMAKE_COMMAND}" -E false
+            VERBATIM)
+        return()
+    endif()
+
+    # Never package the user's current project. Official packages require a
+    # separate public-release configuration validated by LaunchConfig.cmake.
+    if(NOT ENGINE_PUBLIC_RELEASE)
+        add_custom_target(stage_release
+            COMMAND "${CMAKE_COMMAND}" -E echo
+                "stage_release requires the isolated public build: tools/build.ps1 -Configuration Release -PublicRelease -StageRelease"
             COMMAND "${CMAKE_COMMAND}" -E false
             VERBATIM)
         return()

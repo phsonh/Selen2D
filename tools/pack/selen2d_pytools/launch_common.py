@@ -8,9 +8,9 @@ from functools import lru_cache
 try:
     import unicodedata2 as unicode
 except ImportError as exc:
-    raise RuntimeError("Install tools/pack/requirements-tools.txt before using the build tools") from exc
+    raise RuntimeError("Install tools/pack/requirements-launch.txt for JSON launch validation") from exc
 if unicode.unidata_version != "18.0.0":
-    raise RuntimeError("Build tools require Unicode 18.0.0; install the pinned requirements")
+    raise RuntimeError("Build tools require Unicode 18.0.0; install tools/pack/requirements-launch.txt")
 
 
 class ConfigError(ValueError):
@@ -105,7 +105,15 @@ def _keys(value, expected, label):
 
 
 def _inside(parent, child):
-    return child == parent or child.startswith(parent + "/")
+    # Only validated deployment-root directory records may contain this marker.
+    # normalize_path remains strict for entry, mounts and all ordinary paths.
+    return parent == "." or child == parent or child.startswith(parent + "/")
+
+
+def _tail(parent, child):
+    if parent == child:
+        return ""
+    return child if parent == "." else child[len(parent) + 1:]
 
 
 def _record_names(names, value):
@@ -147,9 +155,13 @@ def validate_launch(config: dict) -> dict:
         _keys(record, ("base", "path", "target"), "directory")
         if record["base"] not in ("deployment", "user_data"):
             raise ConfigError("directory base must be deployment or user_data")
-        _record_names(virtual_names, record["target"])
-        _record_names(deployment_names if record["base"] == "deployment" else user_names, record["path"])
-        current = dict(base=record["base"], path=normalize_path(record["path"], "directory path"), target=normalize_path(record["target"], "directory target"))
+        root_mapping = record == dict(base="deployment", path=".", target=".")
+        if root_mapping:
+            current = dict(record)
+        else:
+            _record_names(virtual_names, record["target"])
+            _record_names(deployment_names if record["base"] == "deployment" else user_names, record["path"])
+            current = dict(base=record["base"], path=normalize_path(record["path"], "directory path"), target=normalize_path(record["target"], "directory target"))
         if current not in directories:
             directories.append(current)
     # Parent-child rules may only repeat the same physical-to-virtual suffix.
@@ -159,7 +171,7 @@ def validate_launch(config: dict) -> dict:
                 virtual_overlap = _inside(a["target"], b["target"])
                 physical_overlap = a["base"] == b["base"] and _inside(a["path"], b["path"])
                 if virtual_overlap or physical_overlap:
-                    equivalent = virtual_overlap and physical_overlap and b["target"][len(a["target"]):] == b["path"][len(a["path"]):]
+                    equivalent = virtual_overlap and physical_overlap and _tail(a["target"], b["target"]) == _tail(a["path"], b["path"])
                     if not equivalent:
                         raise ConfigError("directory mappings overlap or alias different sources")
     entry = normalize_path(config["entry"], "entry")

@@ -37,10 +37,10 @@ require_exact_path("${work_root}" "${work_root}")
 require_exact_path("${DESTINATION}" "${releases_root}/${RELEASE_NAME}")
 require_exact_path("${releases_root}/${RELEASE_NAME}.zip" "${releases_root}/${RELEASE_NAME}.zip")
 
-set(shell_files example/main.lua example/effect.hlsl example/palette.hlsl
+set(shell_files main.lua example/main.lua example/effect.hlsl example/palette.hlsl
     example/assets/NotoSans-Regular.ttf example/assets/OFL.txt example/assets/SOURCE.md
     example/assets/pixel.png example/assets/sprite.png example/assets/bell.wav)
-set(guide_files README.md getting-started.md shader.md runtime.md input-window.md file-launch.md
+set(guide_files README.md getting-started.md shader.md runtime.md input-window.md file-launch.md debug-console.md
     resource.md audio.md fractional-images.md text.md example.md)
 set(api_modules Audio Debug File Graphic Input Math Object Resource Text Time Window)
 set(api_files runtime/Runtime.lua)
@@ -195,7 +195,7 @@ endforeach()
 # directory. No lock, build metadata, tool executable or runtime log is present.
 set(archive "${workspace}/${RELEASE_NAME}.zip")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E tar cf "${archive}" --format=zip --
-        "${runtime_filename}" example doc
+        "${runtime_filename}" main.lua example doc
     WORKING_DIRECTORY "${staging}"
     RESULT_VARIABLE archive_result ERROR_VARIABLE archive_error)
 if(NOT archive_result EQUAL 0)

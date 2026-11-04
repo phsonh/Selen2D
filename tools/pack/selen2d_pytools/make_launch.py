@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-from launch_common import ConfigError, load_launch_config, secret_bytes
+from .launch_common import ConfigError, load_launch_config, secret_bytes
 
 
 def _text(value: str) -> str:
@@ -61,6 +61,8 @@ def main(argv=None):
     for command in ('build', 'inspect', 'verify'):
         option = sub.add_parser(command)
         option.add_argument('--config', required=True)
+        option.add_argument('--public-default', action='store_true',
+                            help='Require the secret-free example layout used by the standard release')
         if command == 'build':
             option.add_argument('--output', required=True)
         elif command == 'verify':
@@ -68,6 +70,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         config = load_launch_config(args.config)
+        if args.public_default:
+            expected = dict(entry='main.lua', mounts=[], directories=[
+                dict(base='deployment', path='.', target='.')])
+            if config != expected:
+                raise ConfigError('public release requires the exact secret-free example configuration')
         if args.command == 'build':
             build(config, Path(args.output))
             print('Header generated; configuration-only validation, deployment and package data not checked.')

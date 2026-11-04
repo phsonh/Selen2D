@@ -41,7 +41,7 @@ retain their own license files and dependency notices, including PyNaCl's
 libsodium notice. These Python packages are not included in the runtime package.
 The source tools also include the Unicode 18.0.0 CaseFolding data, copyright
 (c) 1991-2026 Unicode, Inc., under Unicode License V3. Its complete notice is
-tools/pack/unicode/LICENSE.txt in the source checkout. This build-time data is not
+tools/pack/selen2d_pytools/unicode/LICENSE.txt in the source checkout. This build-time data is not
 required by the running engine.
 
 DXC notices come from the pinned compiler source, including its LICENSE.TXT,

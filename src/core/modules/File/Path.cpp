@@ -51,6 +51,6 @@ std::string FoldPath(std::string_view path) {
     return std::move(*result);
 }
 bool PathContains(std::string_view parent,std::string_view child) noexcept {
-    return parent==child || (child.size()>parent.size()&&child.starts_with(parent)&&child[parent.size()]=='/');
+    return parent.empty() || parent==child || (child.size()>parent.size()&&child.starts_with(parent)&&child[parent.size()]=='/');
 }
 }
