@@ -1,0 +1,3 @@
+# Optional developer desktop tool; never part of engine/runtime dependencies.
+-r requirements-tools.txt
+PyQt6==6.11.0

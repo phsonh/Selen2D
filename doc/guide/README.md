@@ -1,6 +1,6 @@
 # Selen2D 入门
 
-这个示例由 EXE 内编译的启动配置直接执行 `example/main.lua`。默认只接入部署目录中的 `example/` 和 `output/`，不读取外部启动文件。Orbit Garden 展示菜单、异步加载、对象更新、暂停与返回菜单：Enter 开始，WASD 或方向键移动，P / 空格暂停，游戏中 Esc 返回菜单、菜单中 Esc 退出。随包包含原创图片/铃声和附 OFL 许可的 Noto Sans 字体；普通运行不会写入截图或测试结果。
+默认 EXE 执行部署根的 `main.lua`，其中用 `File.RunLuaFile("example/main.lua")` 引导 Orbit Garden。默认授权安全部署根路径；运行时不读取外部 JSON 或启动头文件。Orbit Garden 展示菜单、异步加载、对象更新、暂停与返回菜单：Enter 开始，WASD 或方向键移动，P / 空格暂停，游戏中 Esc 返回菜单、菜单中 Esc 退出。随包包含原创图片/铃声和附 OFL 许可的 Noto Sans 字体；普通运行不会写入截图或测试结果。
 
 - [开始运行与修改 Lua](getting-started.md)：目录、入口、固定项目根和常用修改。
 - [完整 Lua 示例](example.md)：资源加载、显式 Object 提交、独立 RNG、播放器、Canvas、释放与两轮自动流程。

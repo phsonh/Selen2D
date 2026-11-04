@@ -40,7 +40,7 @@ require_exact_path("${releases_root}/${RELEASE_NAME}.zip" "${releases_root}/${RE
 set(shell_files main.lua example/main.lua example/effect.hlsl example/palette.hlsl
     example/assets/NotoSans-Regular.ttf example/assets/OFL.txt example/assets/SOURCE.md
     example/assets/pixel.png example/assets/sprite.png example/assets/bell.wav)
-set(guide_files README.md getting-started.md shader.md runtime.md input-window.md file-launch.md debug-console.md
+set(guide_files README.md getting-started.md shader.md runtime.md input-window.md file-launch.md debug-console.md tools-gui.md
     resource.md audio.md fractional-images.md text.md example.md)
 set(api_modules Audio Debug File Graphic Input Math Object Resource Text Time Window)
 set(api_files runtime/Runtime.lua)
