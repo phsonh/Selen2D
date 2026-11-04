@@ -19,6 +19,9 @@ struct Dialog {
 bool Init();
 void Shutdown();
 
+void SetConsoleVisible(bool visible);
+bool IsConsoleVisible();
+
 // The optional native call is a narrow test seam, not a Lua API or a backend
 // selector. Production always uses SDL_ShowMessageBox. Return -1 for window
 // close, otherwise the zero-based button index; throw on SDL failure.

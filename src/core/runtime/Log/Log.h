@@ -1,10 +1,11 @@
 #pragma once
 
 #include <string_view>
+#include <filesystem>
 
 namespace core::runtime::Log
 {
-    bool Init();
+    bool Init(const std::filesystem::path& path = "engine.log");
     void Shutdown();
 
     void Debug(std::string_view message);

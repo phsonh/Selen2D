@@ -1,9 +1,11 @@
 #include "Log.h"
+#include "Console.h"
 
 #include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 
@@ -18,6 +20,7 @@ namespace core::runtime::Log
         bool Initialized = false;
 
         std::ofstream LogFile;
+        std::mutex WriteMutex;
 
         constexpr const char* COLOR_RESET =
             "\x1b[0m";
@@ -30,43 +33,14 @@ namespace core::runtime::Log
 
 
 #ifdef _WIN32
-        void EnableVirtualTerminal(
-            DWORD outputHandle
-        )
+        bool SupportsColor(const std::ostream& stream)
         {
-            HANDLE handle =
-                GetStdHandle(outputHandle);
-
-            if (
-                handle == INVALID_HANDLE_VALUE ||
-                handle == nullptr
-                )
-            {
-                return;
-            }
-
+            const HANDLE handle = GetStdHandle(&stream == &std::cerr ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
             DWORD mode = 0;
-
-            if (!GetConsoleMode(handle, &mode))
-                return;
-
-            SetConsoleMode(
-                handle,
-                mode |
-                ENABLE_VIRTUAL_TERMINAL_PROCESSING
-            );
-        }
-
-
-        void EnableConsoleColor()
-        {
-            EnableVirtualTerminal(
-                STD_OUTPUT_HANDLE
-            );
-
-            EnableVirtualTerminal(
-                STD_ERROR_HANDLE
-            );
+            // Do not enable modes on a caller-owned terminal. Pipes/files do
+            // not receive ANSI escapes, either.
+            return handle && handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode)
+                && (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         }
 #endif
 
@@ -125,8 +99,12 @@ namespace core::runtime::Log
             const char* color = nullptr
         )
         {
+            std::lock_guard lock(WriteMutex);
             const std::string timestamp =
                 GetTimestamp();
+#ifdef _WIN32
+            if (!SupportsColor(console)) color = nullptr;
+#endif
 
             // 控制台
             if (color)
@@ -144,6 +122,15 @@ namespace core::runtime::Log
                 console << COLOR_RESET;
 
             console << '\n';
+            console.flush();
+
+            const std::string line = '[' + timestamp + "] [" + level + "] " + std::string(message) + '\n';
+            Console::Write(line);
+#ifdef _WIN32
+            // Useful even for a GUI-subsystem startup failure without a terminal
+            // or writable log directory. This does not create or attach a console.
+            OutputDebugStringA(line.c_str());
+#endif
 
 
             // engine.log 不写颜色控制字符
@@ -164,17 +151,13 @@ namespace core::runtime::Log
     }
 
 
-    bool Init()
+    bool Init(const std::filesystem::path& path)
     {
         if (Initialized)
             return true;
 
-#ifdef _WIN32
-        EnableConsoleColor();
-#endif
-
         LogFile.open(
-            "engine.log",
+            path,
             std::ios::out |
             std::ios::trunc
         );

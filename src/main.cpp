@@ -1,6 +1,8 @@
 #include "engine/Engine.h"
 #include "engine/Startup.h"
 #include "BuildInfo.h"
+#include "core/runtime/Log/Console.h"
+#include "core/runtime/Log/Log.h"
 #include <SDL3/SDL.h>
 #include <charconv>
 #include <iostream>
@@ -19,6 +21,8 @@ namespace {
 std::vector<std::string> Arguments(int argc,char* argv[]) {
     std::vector<std::string> result;
 #ifdef _WIN32
+    (void)argc;
+    (void)argv;
     // The CRT narrow argv uses the system code page. Take the native Unicode
     // argv once and convert each argument without losing empty strings/boundaries.
     int count{};
@@ -44,7 +48,23 @@ std::vector<std::string> Arguments(int argc,char* argv[]) {
 }
 }
 
-int main(int argc, char* argv[]) {
+int RunApplication(int argc, char* argv[]) {
+    // engine_app is a GUI-subsystem executable on Windows: the OS never opens
+    // an initial console to hide later. This guard releases only our optional
+    // console, after Engine and the persistent logger finish their cleanup.
+    struct DiagnosticsLifetime {
+        ~DiagnosticsLifetime() {
+            core::runtime::Log::Shutdown();
+            core::runtime::Console::Shutdown();
+        }
+    } diagnostics;
+    core::runtime::Console::SetTitle(engine::build::Title);
+    // Internal diagnostics are always adjacent to the EXE, independently of
+    // launch mappings and the process working directory. File's Lua VFS is not
+    // given access to this native path.
+    const auto* directory = SDL_GetBasePath();
+    const auto deployment = directory ? std::filesystem::u8path(directory) : std::filesystem::path{};
+    core::runtime::Log::Init(deployment.empty() ? std::filesystem::path("engine.log") : deployment / "engine.log");
     engine::Startup::Config config;
     std::uint64_t frame_limit{};
     std::vector<std::string> arguments;
@@ -61,15 +81,24 @@ int main(int argc, char* argv[]) {
                 throw std::invalid_argument("--frames requires a positive integer");
             }
         }
-        const auto* directory=SDL_GetBasePath();
         if(!directory) throw std::runtime_error(std::string("Cannot locate executable directory: ")+SDL_GetError());
-        config=engine::Startup::Load(std::filesystem::path(
-            std::u8string(directory, directory + std::char_traits<char>::length(directory))));
+        config=engine::Startup::Load(deployment);
     } catch(const std::exception& error) {
-        std::cerr<<"Startup error: "<<error.what()<<'\n'; return 2;
+        core::runtime::Log::Error(std::string("Startup error: ") + error.what());
+        return 2;
     }
     const bool initialized = engine::Init(config.entry,config.files,arguments);
     const bool ran = initialized && engine::Run(frame_limit);
     const bool closed = engine::Shutdown();
     return initialized && ran && closed ? 0 : 1;
 }
+
+#ifdef _WIN32
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    return RunApplication(0, nullptr); // Arguments() reads the Unicode command line.
+}
+#else
+int main(int argc, char* argv[]) {
+    return RunApplication(argc, argv);
+}
+#endif

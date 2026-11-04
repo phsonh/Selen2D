@@ -44,6 +44,20 @@ int Warn(lua_State* L) {
     return 0;
 }
 
+int SetConsoleVisible(lua_State* L) {
+    Count(L, 1, 1);
+    if (lua_type(L, 1) != LUA_TBOOLEAN)
+        throw std::invalid_argument("Debug.SetConsoleVisible requires a boolean");
+    Native::SetConsoleVisible(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+int IsConsoleVisible(lua_State* L) {
+    Count(L, 0, 0);
+    lua_pushboolean(L, Native::IsConsoleVisible());
+    return 1;
+}
+
 int RecordError(lua_State* L) {
     Count(L, 1, 1);
     const auto message = CheckString(L, 1);
@@ -130,6 +144,7 @@ void Register(lua_State* L) {
     const luaL_Reg functions[] = {
         {"Log", Guard<Log>}, {"Warn", Guard<Warn>}, {"Error", Error},
         {"MessageBox", Guard<MessageBox>}, {"ButtonBox", Guard<ButtonBox>},
+        {"SetConsoleVisible", Guard<SetConsoleVisible>}, {"IsConsoleVisible", Guard<IsConsoleVisible>},
         {nullptr, nullptr}
     };
     luaL_openlib(L, "Debug", functions, 0);

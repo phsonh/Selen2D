@@ -1,5 +1,6 @@
 #include "Debug.h"
 #include "core/runtime/Log/Log.h"
+#include "core/runtime/Log/Console.h"
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_init.h>
 #include <limits>
@@ -23,6 +24,16 @@ void Shutdown() {
         initialized = false;
         core::runtime::Log::Debug("Debug module shutdown");
     }
+}
+
+void SetConsoleVisible(bool visible) {
+    if (!SDL_IsMainThread()) throw std::runtime_error("Debug console operations must run on the SDL main thread");
+    core::runtime::Console::SetVisible(visible);
+}
+
+bool IsConsoleVisible() {
+    if (!SDL_IsMainThread()) throw std::runtime_error("Debug console operations must run on the SDL main thread");
+    return core::runtime::Console::IsVisible();
 }
 
 int ShowDialog(const Dialog& dialog, MessageBoxFunction show) {

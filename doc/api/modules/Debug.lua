@@ -7,7 +7,7 @@
 ---@class DebugModule
 Debug = {}
 
----同步记录 Info 日志，无返回值。沿用宿主日志输出，engine.log 在启动时覆盖；不请求退出。
+---同步记录 Info 日志，无返回值。EXE 同目录 engine.log 在启动时覆盖；不请求退出。
 ---@param message string 允许包含 NUL 的 Lua 字符串。
 function Debug.Log(message) end
 
@@ -20,6 +20,19 @@ function Debug.Warn(message) end
 ---未捕获错误到达宿主边界才安全关闭；不会取消此前独立的 Runtime.Quit 请求。
 ---@param message string
 function Debug.Error(message) end
+
+---Windows 显示或隐藏引擎独立调试控制台；正常 GUI 子系统启动时默认不存在控制台，不闪黑框。
+---true 在必要时创建，false 不创建；重复调用安全，无返回值。只操作引擎创建的窗口。
+---不附着调用者终端，不重绑定 stdin/stdout/stderr；重定向与 engine.log 继续有效。
+---必须在 SDL 主线程。非布尔参数、创建失败或已附着外部控制台时抛错，不操作外部窗口。
+---非 Windows：false 安全空操作，true 抛“不支持”错误；日志 API 仍正常工作。
+---@param visible boolean
+function Debug.SetConsoleVisible(visible) end
+
+---查询引擎自己创建的控制台窗口当前是否可见，不表示调用者的终端是否存在。
+---不接受参数；必须在 SDL 主线程。尚未创建、已隐藏及非 Windows 均为 false。
+---@return boolean visible
+function Debug.IsConsoleVisible() end
 
 ---显示独立系统消息框，唯一按钮为“确定”；阻塞到用户选择/关闭，不在 Canvas 内绘制。
 ---正文/标题为 UTF-8 字符串，不得含 NUL。类型只影响图标，不请求退出。
