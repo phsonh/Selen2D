@@ -10,14 +10,14 @@
 |---|---|
 | entry | `main.lua`，引导 `example/main.lua` |
 | mounts | 空，没有资源包 |
-| directories | 部署根 `deployment / . → .` |
+| directories | 部署根 `root / . → .` |
 | secret | 未提供 |
 
 运行时不读外部 JSON 或启动头文件，也不能用命令行、CWD 或自定义环境变量替换规则。仅平台规定的用户数据位置按系统规则解析。授权项目目录不存在时不自动创建；Lua 可用 `File.CreateDirectory('save')` 创建所需子目录，`File.Open` 不自动建立父目录。
 
-`source` 是相对 EXE 部署目录的物理包路径；`target` 是 Lua 看到的虚拟目录，两者可不同名。真实目录规则由 `{base,path,target}` 组成：`base` 选择 `deployment` 或 `user_data`，`path` 是基础根下非空项目子目录，`target` 是其虚拟别名。唯一根标记是完整记录 `{base="deployment",path=".",target="."}`，表示 EXE 部署根；其他位置的点、混合根记录和 user_data 根都无效。此规则不放宽 Lua 文件路径验证。字符串 `"output"` 等价于 `{ "base": "deployment", "path": "output", "target": "output" }`。
+`source` 是相对 EXE 部署目录的物理包路径；`target` 是 Lua 看到的虚拟目录，两者可不同名。真实目录规则由 `{base,path,target}` 组成：`base` 选择 `root` 或 `local_app_data`，`path` 是基础根下非空项目子目录，`target` 是其虚拟别名。唯一根标记是完整记录 `{base="root",path=".",target="."}`，表示 EXE 部署根；其他位置的点、混合根记录和 local_app_data 根都无效。此规则不放宽 Lua 文件路径验证。字符串 `"output"` 等价于 `{ "base": "root", "path": "output", "target": "output" }`。
 
-Windows 的 `user_data` 通过 Known Folder API 查询 LocalAppData，不把用户名或盘符写进配置。源码中的 macOS 实现使用用户域 Application Support，Linux 使用有效绝对 XDG_DATA_HOME 或 home 下的 `.local/share`；这些平台仍需独立验收。映射只授权最终项目子目录，不授权整个系统数据根；`userdata`、`save` 等名字没有额外权限。
+Windows 的 `local_app_data` 通过 Known Folder API 查询 LocalAppData，不把用户名或盘符写进配置。源码中的 macOS 实现使用用户域 Application Support，Linux 使用有效绝对 XDG_DATA_HOME 或 home 下的 `.local/share`；`local_app_data` 是跨平台的逻辑目录类型，不表示其他系统存在 Windows 环境变量；这些平台仍需独立验收。映射只授权最终项目子目录，不授权整个系统数据根；`userdata`、`save` 等名字没有额外权限。
 
 ## 路径、读写和错误
 
@@ -46,7 +46,7 @@ if not written then error(writeError.message) end
 if not closed then error(closeError.message) end
 ```
 
-包内文件只读。`Copy` 可从包复制到获准真实目录中的新路径；不会借写模式在原虚拟路径建立覆盖副本。`Move/Replace` 要求同一实际文件系统，跨设备失败保留源。映射根与合并来源的目录不能作为普通目录整体搬移或卸载。根授权与 user_data→save 等另一真实源会形成重叠，不能组合；受保护游戏应改用明确的非根映射。包与真实文件同一完整虚拟路径仍报冲突。
+包内文件只读。`Copy` 可从包复制到获准真实目录中的新路径；不会借写模式在原虚拟路径建立覆盖副本。`Move/Replace` 要求同一实际文件系统，跨设备失败保留源。映射根与合并来源的目录不能作为普通目录整体搬移或卸载。根授权与 local_app_data→save 等另一真实源会形成重叠，不能组合；受保护游戏应改用明确的非根映射。包与真实文件同一完整虚拟路径仍报冲突。
 
 ## JSON 驱动的源码开发构建
 
@@ -63,7 +63,7 @@ GUI 只编辑被忽略的 `launch/launch.json`。不存在时由公开默认模�
 ```json
 {
   "mounts": [],
-  "directories": [{"base": "deployment", "path": ".", "target": "."}],
+  "directories": [{"base": "root", "path": ".", "target": "."}],
   "entry": "main.lua"
 }
 ```
@@ -84,11 +84,21 @@ cmake --build --preset selen2d-release
 
 JSON、校验器和 Unicode 表均属于生成依赖。修改 JSON 后，增量构建重新校验、生成头文件、编译 Startup.cpp 并链接；生成失败中止构建，旧产物不会被当作本次成功结果。生成器原子替换头文件，文件只位于 build 目录。运行时不会读取 JSON 或头文件。配置校验不会冒充部署文件存在性或包认证检查，这些仍在打包验证与引擎启动时执行。
 
+静态 DXC 使用各构建目录自己的缓存，Debug 与 Release 不共享产物。普通 JSON 或引擎源码修改不会重编 DXC；固定源码、集成脚本或工具链变更则进入其子构建更新。每轮只做轻量的库完整性检查，库变化时才校验摘要，缺失或损坏时重建。`build.ps1 -DxcJobs 1` 可降低 LLVM 编译内存压力；默认 4，可选 1～4，与普通引擎的 `-Jobs` 分开。首次编译仍从仓库内固定源码构建，不下载或部署 DXC DLL。
+
 仅为已有自动化保留显式 `ENGINE_LAUNCH_HEADER`；它与 `ENGINE_LAUNCH_CONFIG` 同时非空时配置失败。build.ps1 始终清空旧头文件入口，GUI 不提供手写头文件选项。直接运行 CMake 会遵循自己显式设置的 cache；恢复自动选择须清空两个变量。
+
+## 旧配置迁移
+
+目录类型只接受 `root` 和 `local_app_data`。旧开发配置中的 `deployment` / `user_data` 不再被构建校验器接受；CLI 会明确报告需要迁移，不会静默选用默认配置。
+
+打开 GUI 后，若唯一私有 `launch/launch.json` 使用旧名称，会先询问是否迁移。确认后只转换这两种 `base` 值，保留 secret、挂载、入口及其他字段；验证成功后备份原文件并原子保存。拒绝或校验失败不会覆盖原配置。备份同样含私有数据，留在被忽略的 `launch/` 下，不加入仓库或发行包。新保存的 JSON 一律使用新名称。
+
+`root` 是 EXE 目录，不是磁盘根。`local_app_data` 在 Windows 使用系统 Known Folder LocalAppData（`%LOCALAPPDATA%`），不是 Roaming `%APPDATA%`。`.` 只对完整的 `root / . → .` 目录声明有效。
 
 ## 与标准 Release 隔离
 
-正式通用包必须使用独立 `build/public-release`，强制选择公开默认 JSON，即使私有 launch/launch.json 存在也不会采用。标准配置还验证无 secret、无资源包且保持根 main.lua 入口与 deployment 根映射。
+正式通用包必须使用独立 `build/public-release`，强制选择公开默认 JSON，即使私有 launch/launch.json 存在也不会采用。标准配置还验证无 secret、无资源包且保持根 main.lua 入口与 root 根映射。
 
 ```powershell
 .\tools\build.ps1 -Configuration Release -PublicRelease -StageRelease
@@ -126,7 +136,7 @@ New-Item -ItemType Directory -Force ../MyGame/dist
     {"source": "data.bin", "target": "data", "parts": 0, "encrypted": true}
   ],
   "directories": [
-    {"base": "user_data", "path": "ExampleStudio/ExampleGame", "target": "profile"}
+    {"base": "local_app_data", "path": "ExampleStudio/ExampleGame", "target": "profile"}
   ],
   "entry": "data/scripts/main.lua"
 }

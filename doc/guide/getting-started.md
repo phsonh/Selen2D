@@ -20,7 +20,7 @@ doc/
     licenses/
 ```
 
-启动配置已编译在 EXE 内。标准配置来自源码 `src/res/development/launch.json`，入口是根目录 `main.lua`，没有资源包或 secret。目录声明 `deployment / . → .` 授权 EXE 所在部署根及其安全子目录。运行时不读取外部 JSON 或 `launch.h`，没有失败回退配置。普通用户不需要 Python 或编译步骤。
+启动配置已编译在 EXE 内。标准配置来自源码 `src/res/development/launch.json`，入口是根目录 `main.lua`，没有资源包或 secret。目录声明 `root / . → .` 授权 EXE 所在部署根及其安全子目录。运行时不读取外部 JSON 或 `launch.h`，没有失败回退配置。普通用户不需要 Python 或编译步骤。
 
 根目录 `main.lua` 仅引导示例；Orbit Garden 的实际逻辑和全部资源仍在 `example/`：
 

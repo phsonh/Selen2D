@@ -174,7 +174,7 @@ python -m venv build/tools-venv
 .\tools\build.ps1 -Configuration Release
 ```
 
-**Target JSON schema for v2.2.0** (directory type names are undergoing final review on `develop`; use the matching branch documentation when actually building):
+**Current development JSON schema (2.1.1)**: directory types are `root` (EXE directory) and `local_app_data` (Windows LocalAppData, not Roaming AppData). The GUI asks before migrating old `deployment` / `user_data` configurations and preserves a private backup.
 
 ```json
 {
@@ -356,7 +356,7 @@ python -m venv build/tools-venv
 .\tools\build.ps1 -Configuration Release
 ```
 
-**计划用于 v2.2.0 的 JSON 类型名称**（该目录类型改名正在 `develop` 中最终收口，实际构建时请以对应提交的指南为准）：
+**当前开发版 2.1.1 的 JSON 格式**：目录类型为 `root`（EXE 目录）和 `local_app_data`（Windows LocalAppData，不是 Roaming AppData）。旧 `deployment` / `user_data` 配置由 GUI 询问确认后迁移，并保留私有备份。
 
 ```json
 {
@@ -538,7 +538,7 @@ python -m venv build/tools-venv
 .\tools\build.ps1 -Configuration Release
 ```
 
-**v2.2.0 向けの JSON 仕様案**（ディレクトリ種別名は `develop` で最終調整中です。実際のビルド時は使用するコミットのガイドを参照してください）：
+**開発版 2.1.1 の JSON 形式**：ディレクトリ種別は `root`（EXE のディレクトリ）と `local_app_data`（Windows LocalAppData、Roaming AppData ではありません）です。旧 `deployment` / `user_data` 設定は GUI で確認後に移行し、非公開のバックアップを保存します。
 
 ```json
 {
