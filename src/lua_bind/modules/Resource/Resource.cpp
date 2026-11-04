@@ -1,4 +1,5 @@
 #include "Resource.h"
+#include "core/modules/File/Vfs.h"
 #include "core/modules/Resource/AudioAsset.h"
 #include "core/modules/Resource/ImageProvider.h"
 #include "lua_bind/Guard.h"
@@ -17,7 +18,11 @@ namespace N=core::modules::Resource;
 constexpr const char* ServiceType="Solongo.Resource.Service";
 constexpr const char* LoaderType="Solongo.Resource.Loader";
 char ContextKey;
-struct Token { N::Service* service{}; std::function<void(N::Job&)> wait; };
+struct Token {
+    N::Service* service{};
+    std::function<void(N::Job&)> wait;
+    std::shared_ptr<const core::modules::File::FileSystem> files;
+};
 struct ServiceBox {
     static constexpr std::uint64_t tag=0x5352455353455256ULL;
     std::shared_ptr<Token> token;
@@ -100,8 +105,11 @@ std::shared_ptr<const N::AudioAsset> AudioAsset(lua_State* L) {
     if(!asset) throw std::invalid_argument("resource is not Sound or Music");
     return asset;
 }
-void Add(lua_State* L,N::Manifest& manifest,N::Kind kind,int offset) {
-    const auto name=Name(L,offset+1),path=Text(L,offset+2,4096,"source path");
+void Add(lua_State* L,N::Manifest& manifest,N::Kind kind,int offset,const Token& token) {
+    const auto name=Name(L,offset+1);
+    // Declaration-time checks cannot be postponed to a worker or Submit.
+    // Actual I/O still happens asynchronously and rechecks the fixed VFS gate.
+    const auto path=*token.files->NormalizePath(Text(L,offset+2,4096,"source path"));
     if(kind==N::Kind::Image) {
         int supplied{};
         for(int i=3;i<=6;++i) supplied+=!lua_isnoneornil(L,offset+i);
@@ -135,11 +143,11 @@ template<N::Kind Kind,bool Async> int Load(lua_State* L) {
     if constexpr(Async) {
         auto& box=RequireBox<LoaderBox>(L,1,LoaderType); (void)Service(box.token);
         if(box.job) throw std::logic_error("Loader has already been submitted");
-        Add(L,box.manifest,Kind,1);
+        Add(L,box.manifest,Kind,1,*box.token);
     } else {
         auto& token=Module(L).token;
         auto& service=Service(token);
-        auto manifest=service.CreateManifest(); Add(L,manifest,Kind,0);
+        auto manifest=service.CreateManifest(); Add(L,manifest,Kind,0,*token);
         auto job=service.Submit(manifest);
         try { token->wait(job); job.CheckResult(); }
         catch(...) { job.Cancel(); throw; }
@@ -218,18 +226,20 @@ void Metatable(lua_State* L,const char* type,lua_CFunction collect,const luaL_Re
 }
 struct Context::Impl {
     lua_State* L; std::shared_ptr<Token> token;
-    Impl(lua_State* state,N::Service& service,std::function<void(N::Job&)> wait)
-        :L(state),token(std::make_shared<Token>(Token{&service,std::move(wait)})) {
-        if(!L || !token->wait) throw std::invalid_argument("Resource Context requires Lua and a synchronous loading pump");
+    Impl(lua_State* state,N::Service& service,std::function<void(N::Job&)> wait,
+        std::shared_ptr<const core::modules::File::FileSystem> files)
+        :L(state),token(std::make_shared<Token>(Token{&service,std::move(wait),std::move(files)})) {
+        if(!L || !token->wait || !token->files) throw std::invalid_argument("Resource Context requires Lua, VFS and a synchronous loading pump");
     }
 };
 std::shared_ptr<const N::Asset> AcquireImage(lua_State* L,int index,N::Service& service) {
     return Image(service,Find(service,Name(L,index)));
 }
-Context::Context(lua_State* L,N::Service& service,std::function<void(N::Job&)> wait)
-    :impl_(std::make_unique<Impl>(L,service,std::move(wait))) {}
+Context::Context(lua_State* L,N::Service& service,std::function<void(N::Job&)> wait,
+    std::shared_ptr<const core::modules::File::FileSystem> files)
+    :impl_(std::make_unique<Impl>(L,service,std::move(wait),std::move(files))) {}
 Context::~Context() { Shutdown(); }
-void Context::Shutdown() noexcept { if(impl_) { impl_->token->service=nullptr; impl_->token->wait={}; } }
+void Context::Shutdown() noexcept { if(impl_) { impl_->token->service=nullptr; impl_->token->wait={}; impl_->token->files.reset(); } }
 void Register(lua_State* L,Context& context) {
     if(!L || !context.impl_ || context.impl_->L!=L || !context.impl_->token->service)
         throw std::invalid_argument("Resource.Register requires a live Context for this Lua state");

@@ -257,7 +257,13 @@ public:
         *output=nullptr;
         try {
             CheckCancelled(cancelled);
-            const auto requested=Utf8(filename);
+            auto requested=Utf8(filename);
+            // DXC NormalizePathW converts '/' to '\\' and prefixes '.\\' on
+            // Windows. Translate this backend spelling at the include boundary,
+            // not in the public File/Resource path validator. VFS still rejects
+            // parent traversal, absolute paths and unauthorized locations.
+            std::replace(requested.begin(),requested.end(),'\\','/');
+            while(requested.starts_with("./")) requested.erase(0,2);
             const auto base=requested.find_last_of("/\\");
             if(requested.substr(base==std::string::npos?0:base+1)=="Solongo.hlsl") {
                 builtinIncluded=true;

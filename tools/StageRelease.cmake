@@ -19,14 +19,11 @@ function(engine_stage_release)
     # Ordinary builds prepare only their own runnable bin directory. They never
     # publish into the shared release directory or create a release ZIP.
     add_custom_target(stage_development ALL
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/src/res/development/launch.lua"
-            "$<TARGET_FILE_DIR:engine_app>/launch.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${PROJECT_SOURCE_DIR}/src/res/development/example"
             "$<TARGET_FILE_DIR:engine_app>/example"
         DEPENDS engine_app
-        COMMENT "Preparing the local development entry and example"
+        COMMENT "Preparing the example for the compiled development entry"
         VERBATIM)
 
     # This project uses single-configuration Ninja builds. Keep an explicit
@@ -49,8 +46,8 @@ function(engine_stage_release)
     get_filename_component(linker_directory "${CMAKE_LINKER}" DIRECTORY)
     find_program(ENGINE_RELEASE_DUMPBIN NAMES dumpbin HINTS "${linker_directory}" REQUIRED)
 
-    # Publishing is explicit and Release-only. The packer is an optional tool
-    # and is neither built nor distributed here.
+    # Publishing is explicit and Release-only. Source Python tools and private
+    # launch headers are never distributed here.
     add_custom_target(stage_release
         COMMAND "${CMAKE_COMMAND}"
             "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"

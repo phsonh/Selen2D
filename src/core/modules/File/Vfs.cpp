@@ -1,409 +1,710 @@
 #include "Vfs.h"
 #include "Package.h"
+#include "NativeIo.h"
+#include "ReadSource.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
-#include <limits>
+#include <cerrno>
+#include <exception>
+#include <cstring>
+#include <map>
+#include <mutex>
 #include <set>
 #include <system_error>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <windows.h>
+#include <Windows.h>
 #undef CreateDirectory
-#elif defined(__linux__)
+#else
 #include <fcntl.h>
-#include <sys/syscall.h>
+#include <sys/stat.h>
 #include <unistd.h>
-#elif defined(__APPLE__)
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
+#ifdef __APPLE__
 #include <stdio.h>
+#endif
 #endif
 
 namespace core::modules::File {
 namespace {
-namespace fs = std::filesystem;
-std::string Utf8(const fs::path& p) {
-    const auto s=p.generic_u8string(); return {reinterpret_cast<const char*>(s.data()),s.size()};
+namespace fs=std::filesystem;
+std::string Utf8(const fs::path& path) {
+    const auto s=path.generic_u8string(); return {reinterpret_cast<const char*>(s.data()),s.size()};
 }
-bool Utf8Valid(std::string_view s) {
-    for(std::size_t i=0;i<s.size();) {
-        const auto first=static_cast<unsigned char>(s[i++]);
-        if(first<0x80) continue;
-        unsigned count{}, value{}, minimum{};
-        if(first>=0xc2 && first<=0xdf) { count=1; value=first&31; minimum=0x80; }
-        else if(first>=0xe0 && first<=0xef) { count=2; value=first&15; minimum=0x800; }
-        else if(first>=0xf0 && first<=0xf4) { count=3; value=first&7; minimum=0x10000; }
-        else return false;
-        if(count>s.size()-i) return false;
-        while(count--) { const auto next=static_cast<unsigned char>(s[i++]); if((next&0xc0)!=0x80) return false; value=(value<<6)|(next&63); }
-        if(value<minimum || value>0x10ffff || (value>=0xd800 && value<=0xdfff)) return false;
+fs::path NativePath(std::string_view text) {
+    return fs::path(std::u8string_view(reinterpret_cast<const char8_t*>(text.data()),text.size()));
+}
+[[noreturn]] void Fail(std::string code,std::string_view operation,std::string_view path) {
+    throw IoError(code,std::string(operation)+" '"+std::string(path)+"': "+code);
+}
+void Check(const std::error_code& error,std::string_view operation,std::string_view path) {
+    if(error) Fail(IoErrorCode(error),operation,path);
+}
+std::error_code LastError() {
+#ifdef _WIN32
+    return {static_cast<int>(GetLastError()),std::system_category()};
+#else
+    return {errno,std::system_category()};
+#endif
+}
+std::string Strict(std::string_view path) {
+    auto normalized=Normalize(path);
+    if(!normalized) throw InvalidPath("expected a nonempty canonical relative UTF-8 path");
+    return std::move(*normalized);
+}
+std::string Parent(std::string_view path) {
+    const auto slash=path.rfind('/'); return slash==std::string_view::npos?std::string{}:std::string(path.substr(0,slash));
+}
+std::string Leaf(std::string_view path) { return std::string(path.substr(path.rfind('/')==std::string_view::npos?0:path.rfind('/')+1)); }
+std::string Tail(std::string_view parent,std::string_view path) {
+    return parent==path?std::string{}:std::string(path.substr(parent.size()+1));
+}
+void NativeName(std::string_view relative,std::string_view virtualPath) {
+#ifdef _WIN32
+    for(std::size_t start=0;start<relative.size();) {
+        auto end=relative.find('/',start); if(end==std::string_view::npos) end=relative.size();
+        const auto part=relative.substr(start,end-start);
+        if(part.empty()||part.back()=='.'||part.back()==' '||part.find_first_of("\"<>|")!=std::string_view::npos)
+            Fail("unsupported","Windows filename",virtualPath);
+        std::string stem(part.substr(0,part.find('.')));
+        for(auto& c:stem) if(c>='a'&&c<='z') c-=32;
+        if(stem=="CON"||stem=="PRN"||stem=="AUX"||stem=="NUL"||stem=="CONIN$"||stem=="CONOUT$")
+            Fail("unsupported","Windows filename",virtualPath);
+        if(stem.starts_with("COM")||stem.starts_with("LPT")) {
+            const auto suffix=std::string_view(stem).substr(3);
+            if((suffix.size()==1&&suffix[0]>='1'&&suffix[0]<='9')||suffix=="\xc2\xb9"||suffix=="\xc2\xb2"||suffix=="\xc2\xb3")
+                Fail("unsupported","Windows filename",virtualPath);
+        }
+        start=end+1;
     }
-    return true;
+#else
+    (void)relative; (void)virtualPath;
+#endif
 }
-bool Component(std::string_view c) {
-    if(c.empty() || c=="." || c==".." || c.back()=='.' || c.back()==' ') return false;
-    for(const unsigned char ch:c) if(ch<32 || ch==127 || std::string_view(":*?\"<>|/\\").find(ch)!=std::string_view::npos) return false;
-    // Reject Windows device aliases on every platform so packages are portable.
-    std::string stem(c.substr(0,c.find('.')));
-    for(auto& ch:stem) if(ch>='a' && ch<='z') ch-=32;
-    if(stem=="CON" || stem=="PRN" || stem=="AUX" || stem=="NUL" || stem=="CONIN$" || stem=="CONOUT$") return false;
-    if(stem.size()==4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem[3]>='1' && stem[3]<='9') return false;
-    return true;
+std::string PhysicalKey(const fs::path& path) {
+    auto result=Utf8(path.lexically_normal());
+    const auto rootLength=Utf8(path.root_path()).size();
+    while(result.size()>rootLength&&result.back()=='/') result.pop_back();
+#ifdef _WIN32
+    return FoldPath(result);
+#else
+    return result;
+#endif
 }
-bool Within(std::string_view parent,std::string_view child) {
-    return parent.empty() || parent==child || (child.size()>parent.size() && child.starts_with(parent) && child[parent.size()]=='/');
+bool PhysicalContains(const fs::path& parent,const fs::path& child) {
+    auto a=PhysicalKey(parent),b=PhysicalKey(child);
+    while(a.size()>1 && a.back()=='/') a.pop_back();
+    return a==b || (b.size()>a.size() && b.starts_with(a) && (a.back()=='/'||b[a.size()]=='/'));
 }
-bool UnsafeLink(const fs::path& p) {
-    std::error_code ec;
-    const auto status=fs::symlink_status(p,ec);
-    if(ec && ec!=std::errc::no_such_file_or_directory) return true;
+bool Redirected(const fs::path& path,const fs::file_status& status) {
     if(fs::is_symlink(status)) return true;
 #ifdef _WIN32
-    const auto attributes=GetFileAttributesW(p.c_str());
-    if(attributes!=INVALID_FILE_ATTRIBUTES && (attributes&FILE_ATTRIBUTE_REPARSE_POINT)) return true;
+    const auto attrs=GetFileAttributesW(path.c_str());
+    return attrs!=INVALID_FILE_ATTRIBUTES && (attrs&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
+#else
+    (void)path; return false;
 #endif
-    return false;
 }
-fs::path DiskSpelling(const fs::path& path) {
-#ifdef _WIN32
-    // canonical() does not expand Windows 8.3 aliases. Compare the long form
-    // so alternate spellings cannot bypass protection of a mounted source.
-    const auto length=GetLongPathNameW(path.c_str(),nullptr,0);
-    if(length) {
-        std::wstring text(length,L'\0');
-        const auto written=GetLongPathNameW(path.c_str(),text.data(),length);
-        if(written && written<length) { text.resize(written); return fs::path(text); }
-    }
-#endif
-    return path;
-}
-// This prevents ordinary symlink/junction escapes. It is not a hostile-process
-// filesystem sandbox: external replacement between validation and open is out
-// of scope. Every operation rechecks the path rather than caching permission.
-std::optional<fs::path> DiskPath(const fs::path& root,std::string_view relative) {
-    fs::path p=DiskSpelling(root);
-    if(UnsafeLink(p)) return {};
-    for(const auto& part:fs::u8path(relative)) {
-        p/=part;
-        if(UnsafeLink(p)) return {};
-        p=DiskSpelling(p);
-    }
-    return p;
-}
-NodeInfo DiskStat(const fs::path& p) {
-    SDL_PathInfo info{};
-    if(!SDL_GetPathInfo(Utf8(p).c_str(),&info)) return {};
-    if(info.type==SDL_PATHTYPE_DIRECTORY) return {NodeType::Directory};
-    if(info.type==SDL_PATHTYPE_FILE) return {NodeType::File,info.size,static_cast<std::uint64_t>(info.modify_time)};
-    return {};
-}
-std::optional<std::vector<std::string>> DiskList(const fs::path& p) {
+fs::file_status Status(const fs::path& path,std::string_view virtualPath) {
     std::error_code ec;
-    fs::directory_iterator it(p,ec),end;
-    if(ec) return {};
-    std::vector<std::string> result;
+    const auto status=fs::symlink_status(path,ec);
+    if(ec==std::errc::no_such_file_or_directory || ec==std::errc::not_a_directory) return fs::file_status(fs::file_type::not_found);
+    Check(ec,"inspect",virtualPath);
+    if(Redirected(path,status)) throw AccessError("redirected filesystem path refused at '"+std::string(virtualPath)+"'");
+    return status;
+}
+// Keep each visited directory open while checking/using a view. On Windows the
+// missing DELETE share prevents renaming an already checked parent during I/O.
+// Configured base/project roots also retain such anchors across operations.
+struct DirectoryAnchor {
+#ifdef _WIN32
+    HANDLE handle{INVALID_HANDLE_VALUE};
+    explicit DirectoryAnchor(const fs::path& path,std::string_view virtualPath) {
+        handle=CreateFileW(path.c_str(),FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,
+            OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+        if(handle==INVALID_HANDLE_VALUE) Fail(IoErrorCode(LastError()),"anchor directory",virtualPath);
+        BY_HANDLE_FILE_INFORMATION info{};
+        if(!GetFileInformationByHandle(handle,&info)) {
+            const auto ec=LastError(); CloseHandle(handle); handle=INVALID_HANDLE_VALUE;
+            Fail(IoErrorCode(ec),"anchor directory",virtualPath);
+        }
+        if(!(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)||(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)) {
+            CloseHandle(handle); handle=INVALID_HANDLE_VALUE;
+            throw AccessError("directory identity is redirected or changed at '"+std::string(virtualPath)+"'");
+        }
+    }
+    ~DirectoryAnchor() { if(handle!=INVALID_HANDLE_VALUE) CloseHandle(handle); }
+#else
+    int handle{-1};
+    explicit DirectoryAnchor(const fs::path& path,std::string_view virtualPath) {
+        handle=::open(path.c_str(),O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        if(handle<0) Fail(IoErrorCode(LastError()),"anchor directory",virtualPath);
+    }
+    ~DirectoryAnchor() { if(handle>=0) ::close(handle); }
+#endif
+    DirectoryAnchor(const DirectoryAnchor&)=delete;
+    DirectoryAnchor& operator=(const DirectoryAnchor&)=delete;
+    bool Same(const DirectoryAnchor& other) const {
+#ifdef _WIN32
+        BY_HANDLE_FILE_INFORMATION a{},b{};
+        if(!GetFileInformationByHandle(handle,&a)||!GetFileInformationByHandle(other.handle,&b))
+            throw ConflictError("cannot verify configured directory identity");
+        return a.dwVolumeSerialNumber==b.dwVolumeSerialNumber&&a.nFileIndexHigh==b.nFileIndexHigh&&a.nFileIndexLow==b.nFileIndexLow;
+#else
+        struct stat a{},b{};
+        if(fstat(handle,&a)||fstat(other.handle,&b)) throw ConflictError("cannot verify configured directory identity");
+        return a.st_dev==b.st_dev&&a.st_ino==b.st_ino;
+#endif
+    }
+};
+using Anchor=std::shared_ptr<DirectoryAnchor>;
+struct GuardedDirectory { fs::path path; Anchor anchor; };
+using Guards=std::vector<GuardedDirectory>;
+Anchor Guard(const fs::path& path,std::string_view virtualPath,Guards& guards) {
+    auto anchor=std::make_shared<DirectoryAnchor>(path,virtualPath);
+    guards.push_back({path,anchor}); return anchor;
+}
+fs::path BaseRoot(const fs::path& path) {
+    if(!path.is_absolute()) throw InvalidPath("a configured filesystem base must be absolute");
+    std::error_code ec;
+    const auto root=fs::canonical(path,ec);
+    Check(ec,"resolve configured base","<configured root>");
+    if(!fs::is_directory(root,ec)) { Check(ec,"resolve configured base","<configured root>"); throw InvalidPath("configured base is not a directory"); }
+#ifdef _WIN32
+    DirectoryAnchor anchor(root,"<configured root>");
+    const auto length=GetFinalPathNameByHandleW(anchor.handle,nullptr,0,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
+    if(!length) Fail(IoErrorCode(LastError()),"resolve configured base","<configured root>");
+    std::wstring name(length,L'\0');
+    const auto written=GetFinalPathNameByHandleW(anchor.handle,name.data(),length,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
+    if(!written||written>=length) Fail("io_error","resolve configured base","<configured root>");
+    name.resize(written); return fs::path(name);
+#else
+    return root;
+#endif
+}
+// Match a normalized component against actual spelling, without Windows' case
+// insensitive lookup or 8.3 aliases. Detect normalization/casefold collisions.
+std::optional<fs::path> Child(const fs::path& directory,std::string_view component,std::string_view virtualPath) {
+    std::error_code ec; fs::directory_iterator it(directory,ec),end;
+    Check(ec,"enumerate",virtualPath);
+    const auto wantedFold=FoldPath(component);
+    std::optional<std::string> spelling;
+    std::optional<fs::path> result;
     while(it!=end) {
-        const auto name=Utf8(it->path().filename());
-        if(Component(name) && Utf8Valid(name) && !UnsafeLink(it->path())) result.push_back(name);
-        it.increment(ec); if(ec) return {};
+        const auto actual=Utf8(it->path().filename()); const auto name=Normalize(actual);
+        // Ancestors outside the project are not part of the virtual tree.
+        // Ignore unrelated project names and inspect only this component.
+        if(name&&FoldPath(*name)==wantedFold) {
+            if(spelling) throw ConflictError("Unicode or case collision in '"+std::string(virtualPath)+"'");
+            spelling=actual;
+            if(*name!=component) throw ConflictError("configured path has incorrect case at '"+std::string(virtualPath)+"'");
+            result=it->path();
+        }
+        it.increment(ec); Check(ec,"enumerate",virtualPath);
     }
     return result;
 }
-struct Closer { void operator()(SDL_IOStream* s) const { if(s) SDL_CloseIO(s); } };
-using Stream=std::unique_ptr<SDL_IOStream,Closer>;
-bool RenameNoReplace(const fs::path& source,const fs::path& destination) {
+// Resolve a configured project/source path, checking only the declared chain.
+// Missing trailing components keep an exact future creation route.
+fs::path ProjectPath(const fs::path& base,std::string_view relative,std::string_view virtualPath,Guards& guards) {
+    NativeName(relative,virtualPath);
+    auto result=base; bool missing=false;
+    for(std::size_t start=0;start<relative.size();) {
+        auto end=relative.find('/',start); if(end==std::string_view::npos) end=relative.size();
+        const auto part=relative.substr(start,end-start);
+        if(!missing) {
+            const auto status=Status(result,virtualPath);
+            if(!fs::is_directory(status)) Fail("not_directory","resolve mapping",virtualPath);
+            Guard(result,virtualPath,guards);
+            const auto child=Child(result,part,virtualPath);
+            if(child) result=*child;
+            else { result/=NativePath(part); missing=true; }
+        } else result/=NativePath(part);
+        if(!missing) (void)Status(result,virtualPath);
+        start=end+1;
+    }
+    return result;
+}
+NodeInfo DiskInfo(const fs::path& disk,const fs::file_status& status,std::string_view path) {
+    if(fs::is_directory(status)) return {NodeType::Directory};
+    if(!fs::exists(status)) return {};
+    if(!fs::is_regular_file(status)) throw ConflictError("non-regular filesystem entry at '"+std::string(path)+"'");
+    std::error_code ec; const auto size=fs::file_size(disk,ec); Check(ec,"size",path);
+    const auto modified=fs::last_write_time(disk,ec); Check(ec,"timestamp",path);
+    return {NodeType::File,size,static_cast<std::uint64_t>(modified.time_since_epoch().count())};
+}
+using FileIdentity=std::array<std::uint64_t,3>;
+FileIdentity Identity(const fs::path& disk,std::string_view path) {
 #ifdef _WIN32
-    // MOVEFILE_COPY_ALLOWED deliberately absent: a failed move retains source.
-    return MoveFileExW(source.c_str(),destination.c_str(),0)!=0;
-#elif defined(__linux__) && defined(SYS_renameat2)
-    return syscall(SYS_renameat2,AT_FDCWD,source.c_str(),AT_FDCWD,destination.c_str(),1 /* RENAME_NOREPLACE */)==0;
-#elif defined(__APPLE__)
-    return renamex_np(source.c_str(),destination.c_str(),RENAME_EXCL)==0;
+    const auto handle=CreateFileW(disk.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    if(handle==INVALID_HANDLE_VALUE) Fail(IoErrorCode(LastError()),"inspect file identity",path);
+    FILE_ID_INFO info{};
+    if(!GetFileInformationByHandleEx(handle,FileIdInfo,&info,sizeof(info))) {
+        const auto ec=LastError(); CloseHandle(handle); Fail(IoErrorCode(ec),"inspect file identity",path);
+    }
+    CloseHandle(handle);
+    FileIdentity result{info.VolumeSerialNumber,0,0};
+    std::memcpy(&result[1],info.FileId.Identifier,16); return result;
 #else
-    // A preflight exists() + overwriting rename is racy. Unsupported platforms
-    // fail instead of violating the no-overwrite contract.
-    (void)source; (void)destination; return false;
+    struct stat info{}; if(lstat(disk.c_str(),&info)) Fail(IoErrorCode(LastError()),"inspect file identity",path);
+    return {static_cast<std::uint64_t>(info.st_dev),static_cast<std::uint64_t>(info.st_ino),0};
 #endif
 }
-void Cancel(const ReadOptions& o) { if(o.cancelled && o.cancelled()) throw ReadCancelled(); }
+struct StreamCloser { void operator()(SDL_IOStream* value) const { if(value) SDL_CloseIO(value); } };
+using Stream=std::unique_ptr<SDL_IOStream,StreamCloser>;
+void Cancel(const ReadOptions& options) { if(options.cancelled&&options.cancelled()) throw ReadCancelled(); }
+void RenamePhysical(const fs::path& source,const fs::path& target,bool replace,std::string_view name) {
+#ifdef _WIN32
+    if(!MoveFileExW(source.c_str(),target.c_str(),replace?MOVEFILE_REPLACE_EXISTING:0))
+        Fail(IoErrorCode(LastError()),replace?"replace":"move",name);
+#elif defined(__linux__) && defined(SYS_renameat2)
+    if(syscall(SYS_renameat2,AT_FDCWD,source.c_str(),AT_FDCWD,target.c_str(),replace?0:1))
+        Fail(IoErrorCode(LastError()),replace?"replace":"move",name);
+#elif defined(__APPLE__)
+    if(renamex_np(source.c_str(),target.c_str(),replace?0:RENAME_EXCL))
+        Fail(IoErrorCode(LastError()),replace?"replace":"move",name);
+#else
+    if(!replace) Fail("unsupported","move",name);
+    if(::rename(source.c_str(),target.c_str())) Fail(IoErrorCode(LastError()),"replace",name);
+#endif
+}
 }
 
-std::optional<std::string> Normalize(std::string_view input) {
-    if(input.size()>4096 || !Utf8Valid(input) || input.find('\0')!=std::string_view::npos) return {};
-    std::string value(input); std::replace(value.begin(),value.end(),'\\','/');
-    if(!value.empty() && value.front()=='/') return {};
-    std::vector<std::string_view> parts;
-    std::size_t begin{};
-    while(begin<value.size()) {
-        auto end=value.find('/',begin); if(end==std::string::npos) end=value.size();
-        const std::string_view part(value.data()+begin,end-begin); begin=end+1;
-        if(part.empty() || part==".") continue;
-        if(part=="..") {
-            if(parts.empty()) return {};
-            parts.pop_back();
-        } else { if(!Component(part)) return {}; parts.push_back(part); }
-    }
-    std::string result;
-    for(const auto part:parts) { if(!result.empty()) result+='/'; result+=part; }
-    return result;
-}
 OpenMode ParseMode(std::string_view mode) {
-    if(mode.empty() || std::string_view("rwax").find(mode.front())==std::string_view::npos)
+    if(mode.empty()||std::string_view("rwax").find(mode.front())==std::string_view::npos)
         throw std::invalid_argument("File.Open mode must start with r, w, a or x");
     bool binary{},plus{};
     for(std::size_t i=1;i<mode.size();++i) {
-        if(mode[i]=='b' && !binary) binary=true;
-        else if(mode[i]=='+' && !plus) plus=true;
+        if(mode[i]=='b'&&!binary) binary=true;
+        else if(mode[i]=='+'&&!plus) plus=true;
         else throw std::invalid_argument("invalid File.Open mode");
     }
-    OpenMode m; m.base=mode.front(); m.readable=m.base=='r'||plus;
-    m.writable=m.base!='r'||plus; m.append=m.base=='a'; m.exclusive=m.base=='x';
-    m.sdlMode=std::string(1,m.exclusive?'w':m.base)+"b"+(plus?"+":"")+(m.exclusive?"x":"");
-    return m;
+    OpenMode result; result.base=mode.front(); result.readable=result.base=='r'||plus;
+    result.writable=result.base!='r'||plus; result.append=result.base=='a'; result.exclusive=result.base=='x';
+    result.sdlMode=std::string(1,result.exclusive?'w':result.base)+"b"+(plus?"+":"")+(result.exclusive?"x":"");
+    return result;
 }
 
 struct FileSystem::Impl {
-    struct Mount { std::string target; fs::path directory; std::shared_ptr<Package> package; };
-    struct Resolved { NodeInfo info; fs::path disk; std::shared_ptr<Package> package; std::string relative; };
-    fs::path root;
+    struct Mount { fs::path source; std::string target; std::uint32_t parts{}; bool encrypted{}; std::shared_ptr<Package> package; };
+    struct Directory { fs::path base,root; std::string path,target; Anchor baseAnchor; mutable Anchor rootAnchor; };
+    struct Node {
+        NodeInfo info;
+        const Mount* mount{};
+        const Directory* directory{};
+        fs::path disk;
+        std::string relative;
+        std::optional<FileIdentity> identity;
+    };
+    struct View {
+        std::map<std::string,Node,std::less<>> nodes;
+        std::map<std::string,std::string,std::less<>> folded;
+        std::map<FileIdentity,const Directory*> identities;
+        Guards guards;
+        const Node* Find(std::string_view path) const {
+            const auto it=nodes.find(path); return it==nodes.end()?nullptr:&it->second;
+        }
+        const Node* Resolve(std::string_view path) const {
+            for(auto parent=Parent(path);!parent.empty();parent=Parent(parent)) {
+                const auto* node=Find(parent);
+                if(node&&node->info.type!=NodeType::Directory) Fail("not_directory","resolve",path);
+            }
+            return Find(path);
+        }
+        void Insert(std::string path,Node node,bool packageOverlay=false) {
+            const auto canonical=Normalize(path);
+            if(!canonical||*canonical!=path) throw ConflictError("mapped entry exceeds the canonical path contract");
+            if(node.identity&&node.directory) {
+                const auto [source,added]=identities.emplace(*node.identity,node.directory);
+                if(!added&&source->second!=node.directory)
+                    throw ConflictError("same physical file is authorized through different targets at '"+path+"'");
+            }
+            const auto fold=FoldPath(path);
+            const auto [key,added]=folded.emplace(fold,path);
+            if(!added&&key->second!=path) throw ConflictError("Unicode case collision at '"+path+"'");
+            const auto [it,inserted]=nodes.emplace(path,node);
+            if(!inserted) {
+                auto& old=it->second;
+                if(old.info.type!=node.info.type) throw ConflictError("file/directory conflict at '"+path+"'");
+                if(node.info.type==NodeType::File) {
+                    if(!packageOverlay||!old.mount||!node.mount) throw ConflictError("multiple file sources at '"+path+"'");
+                    old=std::move(node);
+                } else if(node.directory) {
+                    if(old.directory&&PhysicalKey(old.disk)!=PhysicalKey(node.disk)) throw ConflictError("multiple directory destinations at '"+path+"'");
+                    old.directory=node.directory; old.disk=std::move(node.disk);
+                }
+            }
+            for(auto ancestor=Parent(path);!ancestor.empty();ancestor=Parent(ancestor)) {
+                const auto existing=nodes.find(ancestor);
+                if(existing!=nodes.end()&&existing->second.info.type!=NodeType::Directory)
+                    throw ConflictError("file blocks directory at '"+ancestor+"'");
+                const auto [foldIt,foldAdded]=folded.emplace(FoldPath(ancestor),ancestor);
+                if(!foldAdded&&foldIt->second!=ancestor) throw ConflictError("Unicode case collision at '"+ancestor+"'");
+                nodes.try_emplace(ancestor,Node{NodeInfo{NodeType::Directory}});
+            }
+        }
+        void UnlockSubtree(const fs::path& root) {
+            std::erase_if(guards,[&](const auto& guard){ return PhysicalContains(root,guard.path); });
+        }
+    };
+    fs::path install;
     std::vector<Mount> mounts;
-    bool Mounted(std::string_view path) const {
-        return std::any_of(mounts.begin(),mounts.end(),[&](const Mount& m){ return Within(m.target,path); });
+    std::vector<Directory> directories;
+    bool protectedCode{};
+    mutable std::recursive_mutex mutex;
+
+    std::string Authorize(std::string_view path) const {
+        auto p=Strict(path);
+        for(const auto& d:directories) if(PathContains(d.target,p)||PathContains(p,d.target)) return p;
+        for(const auto& m:mounts) if(PathContains(m.target,p)||PathContains(p,m.target)) return p;
+        throw AccessError("path is outside the compiled authorization: '"+p+"'");
+    }
+    const Directory& Route(std::string_view path) const {
+        for(const auto& d:directories) if(PathContains(d.target,path)) return d;
+        throw AccessError("no authorized real directory for '"+std::string(path)+"'");
     }
     bool Protected(std::string_view path) const {
-        return path.empty() || std::any_of(mounts.begin(),mounts.end(),[&](const Mount& m){
-            return Within(m.target,path) || Within(path,m.target);
-        });
+        for(const auto& d:directories) if(PathContains(path,d.target)) return true;
+        for(const auto& m:mounts) if(PathContains(path,m.target)) return true;
+        return false;
     }
-    Resolved Raw(std::string_view path) const {
-        if(path.empty()) return {{NodeType::Directory},{},{},{}};
-        for(const auto& mount:mounts)
-            if(path==mount.target || Within(path,mount.target)) return {{NodeType::Directory},{},{},{}};
-        for(auto it=mounts.rbegin();it!=mounts.rend();++it) {
-            if(!Within(it->target,path)) continue;
-            const auto relative=std::string(path.substr(it->target.empty()?0:it->target.size()+1));
-            if(it->package) {
-                const auto info=it->package->Stat(relative);
-                if(info.type!=NodeType::Missing) return {info,{},it->package,relative};
-            } else if(const auto disk=DiskPath(it->directory,relative)) {
-                const auto info=DiskStat(*disk);
-                if(info.type!=NodeType::Missing) return {info,*disk,{},{}};
+    void CheckBacking(const fs::path& disk,std::string_view path,bool subtree) const {
+        for(const auto& m:mounts) {
+            if((subtree&&PhysicalContains(disk,m.source)) || PhysicalKey(disk)==PhysicalKey(m.source) || m.package->IsBackingFile(disk))
+                Fail("read_only","modify active package backend",path);
+        }
+    }
+    void AddDisk(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
+        std::vector<std::pair<fs::path,std::string>> pending{{disk,path}};
+        while(!pending.empty()) {
+            auto [current,name]=std::move(pending.back()); pending.pop_back();
+            const auto status=Status(current,name);
+            if(!fs::exists(status)) continue;
+            const auto info=DiskInfo(current,status,name);
+            Node node{info,nullptr,&d,current,{}};
+            if(info.type==NodeType::File) node.identity=Identity(current,name);
+            view.Insert(name,std::move(node));
+            if(info.type!=NodeType::Directory) continue;
+            auto anchor=Guard(current,name,view.guards);
+            if(name==d.target) {
+                if(d.rootAnchor&&!d.rootAnchor->Same(*anchor)) throw ConflictError("configured root identity changed at '"+name+"'");
+                if(!d.rootAnchor) d.rootAnchor=anchor;
+            }
+            std::error_code ec; fs::directory_iterator it(current,ec),end;
+            Check(ec,"enumerate",name);
+            std::set<std::string,std::less<>> originals;
+            while(it!=end) {
+                const auto child=Normalize(Utf8(it->path().filename()));
+                if(!child||child->find('/')!=std::string::npos) throw ConflictError("unaddressable directory entry at '"+name+"'");
+                if(!originals.insert(FoldPath(*child)).second) throw ConflictError("Unicode collision at '"+name+"'");
+                pending.emplace_back(it->path(),name+"/"+*child);
+                it.increment(ec); Check(ec,"enumerate",name);
             }
         }
-        // Mounted names never fall through to an unrelated physical file.
-        if(Mounted(path)) return {};
-        const auto disk=DiskPath(root,path);
-        return disk ? Resolved{DiskStat(*disk),*disk,{},{}} : Resolved{};
     }
-    Resolved Resolve(std::string_view p) const {
-        for(auto slash=p.find('/');slash!=std::string_view::npos;slash=p.find('/',slash+1))
-            if(Raw(p.substr(0,slash)).info.type!=NodeType::Directory) return {};
-        return Raw(p);
-    }
-    std::optional<fs::path> WritePath(std::string_view p) const {
-        if(Protected(p)) return {};
-        const auto result=DiskPath(root,p); if(!result) return {};
-        // A mounted archive/directory may also be addressable through the disk
-        // root. Protect that physical alias, including ancestor moves/removals.
-        for(const auto& mount:mounts) {
-            const auto& backing=mount.directory;
-            if(backing.empty()) continue;
-            std::error_code ec;
-            if(mount.package && fs::equivalent(*result,backing,ec) && !ec) return {};
-            auto same=[](const fs::path& a,const fs::path& b) {
-#ifdef _WIN32
-                return CompareStringOrdinal(a.c_str(),-1,b.c_str(),-1,TRUE)==CSTR_EQUAL;
-#else
-                return a==b;
-#endif
-            };
-            auto prefix=[&](const fs::path& a,const fs::path& b) {
-                auto x=a.begin(),y=b.begin();
-                for(;x!=a.end();++x,++y) if(y==b.end() || !same(*x,*y)) return false;
-                return true;
-            };
-            if(prefix(*result,backing) || (mount.package ? same(*result,backing) : prefix(backing,*result))) return {};
+    View Scan() const {
+        View view;
+        // All package records are checked before resolving overlays. A real
+        // file collision cannot be hidden by a higher-parts package record.
+        for(const auto& m:mounts) {
+            view.Insert(m.target,Node{NodeInfo{NodeType::Directory},&m});
+            for(const auto& [relative,info]:m.package->Entries()) {
+                if(relative.empty()) continue;
+                view.Insert(m.target+"/"+relative,Node{info,&m,nullptr,{},relative},true);
+            }
         }
-        return result;
+        for(const auto& d:directories) {
+            const auto baseAnchor=Guard(d.base,d.target,view.guards);
+            if(!d.baseAnchor->Same(*baseAnchor)) throw ConflictError("configured base identity changed at '"+d.target+"'");
+            view.Insert(d.target,Node{NodeInfo{NodeType::Directory}});
+            const auto root=ProjectPath(d.base,d.path,d.target,view.guards);
+            if(PhysicalKey(root)!=PhysicalKey(d.root)) throw ConflictError("configured root identity changed at '"+d.target+"'");
+            const auto status=Status(root,d.target);
+            if(fs::exists(status)&&!fs::is_directory(status)) throw ConflictError("configured directory root is occupied by a file at '"+d.target+"'");
+            if(fs::is_directory(status)) AddDisk(view,d,root,d.target);
+        }
+        return view;
+    }
+    fs::path Destination(const View& view,const Directory& d,std::string_view path) const {
+        NativeName(Tail(d.target,path),path);
+        auto disk=d.root; auto current=d.target;
+        const auto relative=Tail(d.target,path);
+        for(std::size_t start=0;start<relative.size();) {
+            auto end=relative.find('/',start); if(end==std::string::npos) end=relative.size();
+            const auto part=std::string_view(relative).substr(start,end-start);
+            current+='/'; current+=part;
+            if(const auto* node=view.Find(current);node&&node->directory==&d) disk=node->disk;
+            else disk/=NativePath(part);
+            start=end+1;
+        }
+        return disk;
+    }
+    void CheckNewName(const View& view,std::string_view path) const {
+        const auto found=view.folded.find(FoldPath(path));
+        if(found!=view.folded.end()&&found->second!=path) Fail("name_conflict","create",path);
+    }
+    void RequireParent(const View& view,const Directory& d,std::string_view path) const {
+        const auto parent=Parent(path);
+        const auto* node=view.Find(parent);
+        if(!node) Fail("not_found","parent directory",path);
+        if(node->info.type!=NodeType::Directory) Fail("not_directory","parent directory",path);
+        if(node->directory!=&d||node->disk.empty()) Fail("not_found","real parent directory",path);
+    }
+    void MutationSource(const View& view,const Node* node,std::string_view path,bool allowDirectory) const {
+        if(Protected(path)) Fail("unsupported","modify mapping root",path);
+        if(!node) Fail("not_found","modify",path);
+        if(node->mount&&node->info.type==NodeType::File) Fail("read_only","modify",path);
+        if(node->info.type==NodeType::Directory) {
+            if(!allowDirectory) Fail("is_directory","modify",path);
+            for(const auto& [name,child]:view.nodes) if(PathContains(path,name)&&child.mount)
+                Fail("unsupported","modify merged directory",path);
+            for(const auto& [name,child]:view.nodes)
+                if(PathContains(path,name)&&child.directory&&child.info.type==NodeType::File)
+                    CheckBacking(child.disk,path,false);
+        }
+        if(!node->directory||node->disk.empty()) Fail("read_only","modify",path);
+        CheckBacking(node->disk,path,node->info.type==NodeType::Directory);
+    }
+    void CheckMovedAliases(const View& view,std::string_view source,std::string_view destination,const Directory& route) const {
+        std::set<FileIdentity> moved;
+        for(const auto& [name,node]:view.nodes)
+            if(PathContains(source,name)&&node.identity) moved.insert(*node.identity);
+        for(const auto& [name,node]:view.nodes)
+            if(!PathContains(source,name)&&name!=destination&&node.identity&&node.directory!=&route&&moved.contains(*node.identity))
+                Fail("name_conflict","move would authorize a physical alias",destination);
     }
 };
-FileSystem::FileSystem(fs::path installRoot,std::vector<MountSpec> specs) : impl_(std::make_unique<Impl>()) {
-    std::error_code ec;
-    impl_->root=DiskSpelling(fs::canonical(installRoot,ec));
-    if(ec || !fs::is_directory(impl_->root)) throw std::invalid_argument("VFS install root must be an existing directory");
-    for(const auto& spec:specs) {
-        const auto target=Normalize(spec.target);
-        if(!target) throw std::invalid_argument("invalid VFS mount target");
-        const auto source=DiskSpelling(fs::canonical(impl_->root/spec.source,ec));
-        if(ec) throw std::runtime_error("cannot resolve VFS mount: "+Utf8(spec.source));
-        Impl::Mount mount; mount.target=*target; mount.directory=source;
-        if(!fs::is_directory(source,ec)) {
-            if(!ec && fs::is_regular_file(source,ec)) mount.package=Package::Load(source);
-            else throw std::runtime_error("VFS mount is neither directory nor package: "+Utf8(source));
-        }
-        impl_->mounts.push_back(std::move(mount));
+
+FileSystem::FileSystem(fs::path installRoot,std::vector<MountSpec> specs,std::vector<DirectorySpec> rules,
+    std::optional<std::array<std::uint8_t,32>> key):impl_(std::make_unique<Impl>()) {
+    impl_->install=BaseRoot(installRoot);
+    if(specs.size()>4096) throw InvalidPath("too many compiled package mounts");
+    Guards guards;
+    std::sort(specs.begin(),specs.end(),[](const auto& a,const auto& b){return a.parts<b.parts;});
+    for(std::size_t i=0;i<specs.size();++i) {
+        const auto& spec=specs[i];
+        if(i&&spec.parts==specs[i-1].parts) throw InvalidPath("package parts must be globally unique");
+        const auto target=Strict(spec.target); const auto source=Strict(Utf8(spec.source));
+        if(spec.source.is_absolute()||spec.source.has_root_path()) throw InvalidPath("package source must be deployment relative");
+        if(spec.encrypted&&!key) throw InvalidPath("encrypted package requires a compiled key");
+        const auto disk=ProjectPath(impl_->install,source,target,guards);
+        if(!fs::is_regular_file(Status(disk,target))) Fail("not_found","mount required package",target);
+        impl_->mounts.push_back({disk,target,spec.parts,spec.encrypted,Package::Load(disk,spec.encrypted,key)});
+        impl_->protectedCode=impl_->protectedCode||spec.encrypted;
     }
+    for(const auto& rule:rules) {
+        const auto path=Strict(rule.path),target=Strict(rule.target); const auto base=BaseRoot(rule.baseRoot);
+        const auto root=ProjectPath(base,path,target,guards);
+        Impl::Directory candidate{base,root,path,target,std::make_shared<DirectoryAnchor>(base,target),{}};
+        bool redundant=false;
+        for(auto it=impl_->directories.begin();it!=impl_->directories.end();) {
+            const bool existingParent=PathContains(it->target,target),newParent=PathContains(target,it->target);
+            const bool sameBase=PhysicalKey(it->base)==PhysicalKey(base);
+            if(existingParent&&sameBase&&PhysicalKey(it->root/NativePath(Tail(it->target,target)))==PhysicalKey(root)) { redundant=true; break; }
+            if(newParent&&sameBase&&PhysicalKey(root/NativePath(Tail(target,it->target)))==PhysicalKey(it->root)) { it=impl_->directories.erase(it); continue; }
+            if(existingParent||newParent||PhysicalContains(root,it->root)||PhysicalContains(it->root,root))
+                throw ConflictError("conflicting real directory mappings at '"+target+"'");
+            ++it;
+        }
+        if(!redundant) impl_->directories.push_back(std::move(candidate));
+    }
+    (void)impl_->Scan();
 }
 FileSystem::~FileSystem()=default;
-std::optional<std::string> FileSystem::NormalizePath(std::string_view path) const {
-    const auto normalized=Normalize(path); if(!normalized) return {};
-    std::string raw(path); std::replace(raw.begin(),raw.end(),'\\','/');
-    std::string prefix;
-    for(std::size_t begin=0;begin<raw.size();) {
-        auto end=raw.find('/',begin); if(end==std::string::npos) end=raw.size();
-        const auto part=std::string_view(raw).substr(begin,end-begin); begin=end+1;
-        if(part.empty() || part==".") continue;
-        if(part=="..") {
-            for(const auto& mount:impl_->mounts) if(prefix==mount.target) return {};
-            const auto slash=prefix.rfind('/'); prefix=slash==std::string::npos?"":prefix.substr(0,slash);
-        } else { if(!prefix.empty()) prefix+='/'; prefix+=part; }
-    }
-    return normalized;
+std::optional<std::string> FileSystem::NormalizePath(std::string_view path) const { return impl_->Authorize(path); }
+void FileSystem::CheckCodeSource(std::string_view path) const {
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto* node=view.Resolve(p);
+    if(impl_->protectedCode&&node&&node->info.type==NodeType::File&&(!node->mount||!node->mount->encrypted))
+        throw AccessError("file code is not authenticated package content at '"+p+"'");
 }
 NodeInfo FileSystem::Stat(std::string_view path) const {
-    const auto p=NormalizePath(path); return p?impl_->Resolve(*p).info:NodeInfo{};
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto* node=view.Resolve(p); return node?node->info:NodeInfo{};
 }
 std::optional<std::vector<std::string>> FileSystem::ListDirectory(std::string_view path) const {
-    const auto p=NormalizePath(path);
-    if(!p || impl_->Resolve(*p).info.type!=NodeType::Directory) return {};
-    std::set<std::string> names;
-    if(!impl_->Mounted(*p)) {
-        const auto disk=DiskPath(impl_->root,*p);
-        if(disk && DiskStat(*disk).type==NodeType::Directory) {
-            auto list=DiskList(*disk); if(!list) return {};
-            names.insert(list->begin(),list->end());
-        }
-    }
-    for(const auto& mount:impl_->mounts) {
-        if(*p!=mount.target && Within(*p,mount.target)) {
-            auto tail=std::string_view(mount.target).substr(p->empty()?0:p->size()+1);
-            names.emplace(tail.substr(0,tail.find('/')));
-        } else if(Within(mount.target,*p)) {
-            const auto relative=p->substr(mount.target.empty()?0:(*p==mount.target?p->size():mount.target.size()+1));
-            std::optional<std::vector<std::string>> list;
-            if(mount.package) {
-                if(mount.package->Stat(relative).type!=NodeType::Directory) continue;
-                list=mount.package->ListDirectory(relative);
-            } else {
-                const auto disk=DiskPath(mount.directory,relative);
-                if(!disk || DiskStat(*disk).type!=NodeType::Directory) continue;
-                list=DiskList(*disk);
-            }
-            if(!list) return {};
-            names.insert(list->begin(),list->end());
-        }
-    }
-    std::vector<std::string> result;
-    for(const auto& name:names) {
-        const auto child=p->empty()?name:*p+"/"+name;
-        if(impl_->Resolve(child).info.type!=NodeType::Missing) result.push_back(name);
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto* node=view.Resolve(p);
+    if(!node) Fail("not_found","list",p);
+    if(node->info.type!=NodeType::Directory) Fail("not_directory","list",p);
+    std::vector<std::string> result; const auto prefix=p+'/';
+    for(auto it=view.nodes.lower_bound(prefix);it!=view.nodes.end()&&it->first.starts_with(prefix);++it) {
+        const auto tail=std::string_view(it->first).substr(prefix.size());
+        if(tail.find('/')==std::string_view::npos) result.emplace_back(tail);
     }
     return result;
 }
 SDL_IOStream* FileSystem::Open(std::string_view path,std::string_view mode) const { return Open(path,ParseMode(mode)); }
+std::shared_ptr<const ReadSource> FileSystem::OpenReadSource(std::string_view path) const {
+    const auto name=impl_->Authorize(path);
+    std::shared_ptr<SDL_IOStream> stream(Open(name,"rb"),[](SDL_IOStream* value){ SDL_CloseIO(value); });
+    return std::shared_ptr<const ReadSource>(new ReadSource(std::move(stream),name));
+}
 SDL_IOStream* FileSystem::Open(std::string_view path,const OpenMode& mode) const {
-    const auto p=NormalizePath(path);
-    if(!p || p->empty()) { SDL_SetError("invalid virtual file path"); return nullptr; }
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto* node=view.Resolve(p);
+    if(mode.exclusive&&node) Fail("already_exists","open exclusive",p);
+    if(node&&node->info.type==NodeType::Directory) Fail("is_directory","open",p);
+    if(node&&node->info.size>MaxFilePosition) Fail("out_of_range","open",p);
     if(mode.writable) {
-        const auto disk=impl_->WritePath(*p);
-        if(!disk) { SDL_SetError("virtual path is read-only or not a file"); return nullptr; }
-        return SDL_IOFromFile(Utf8(*disk).c_str(),mode.sdlMode.c_str());
+        if(node&&node->mount) Fail("read_only","open",p);
+        const auto& d=impl_->Route(p);
+        if(mode.base=='r'&&!node) Fail("not_found","open",p);
+        impl_->CheckNewName(view,p); impl_->RequireParent(view,d,p);
+        const auto disk=impl_->Destination(view,d,p); impl_->CheckBacking(disk,p,false);
+        return detail::OpenNative(disk,mode,p);
     }
-    const auto resolved=impl_->Resolve(*p);
-    if(resolved.info.type!=NodeType::File) { SDL_SetError("virtual file not found: %s",p->c_str()); return nullptr; }
-    if(resolved.package) return resolved.package->Open(resolved.relative);
-    return SDL_IOFromFile(Utf8(resolved.disk).c_str(),"rb");
+    if(!node) Fail("not_found","open",p);
+    if(node->mount) return node->mount->package->Open(node->relative);
+    if(!node->directory) Fail("not_found","open",p);
+    return detail::OpenNative(node->disk,mode,p);
 }
 bool FileSystem::CreateDirectory(std::string_view path) const {
-    const auto p=NormalizePath(path); if(!p) return false;
-    if(p->empty()) return !impl_->Mounted(*p);
-    const auto disk=impl_->WritePath(*p); if(!disk) return false;
-    std::error_code ec; fs::create_directories(*disk,ec); return !ec;
+    const auto p=impl_->Authorize(path); const auto& d=impl_->Route(p);
+    std::lock_guard lock(impl_->mutex); auto view=impl_->Scan();
+    if(const auto* node=view.Find(p);node&&node->info.type==NodeType::File) Fail("already_exists","create directory",p);
+    impl_->CheckNewName(view,p);
+    const auto disk=impl_->Destination(view,d,p); impl_->CheckBacking(disk,p,true);
+    // Create each fixed project ancestor explicitly, never an arbitrary base.
+    auto current=d.base;
+    const auto combined=d.path+(p==d.target?"":"/"+Tail(d.target,p));
+    for(std::size_t start=0;start<combined.size();) {
+        auto end=combined.find('/',start); if(end==std::string::npos) end=combined.size();
+        const auto part=std::string_view(combined).substr(start,end-start);
+        Guard(current,p,view.guards);
+        if(const auto existing=Child(current,part,p)) current=*existing;
+        else {
+            // A differently cased name must never become an OS-dependent alias.
+            std::error_code ec; fs::directory_iterator it(current,ec),last; Check(ec,"create directory",p);
+            while(it!=last) {
+                const auto name=Normalize(Utf8(it->path().filename()));
+                if(name&&FoldPath(*name)==FoldPath(part)) Fail("name_conflict","create directory",p);
+                it.increment(ec); Check(ec,"create directory",p);
+            }
+            current/=NativePath(part);
+            fs::create_directory(current,ec); Check(ec,"create directory",p);
+        }
+        if(!fs::is_directory(Status(current,p))) Fail("not_directory","create directory",p);
+        start=end+1;
+    }
+    (void)impl_->Scan(); return true;
 }
 bool FileSystem::Remove(std::string_view path) const {
-    const auto p=NormalizePath(path); if(!p) return false;
-    const auto disk=impl_->WritePath(*p); if(!disk) return false;
-    std::error_code ec; return fs::remove(*disk,ec) && !ec;
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); auto view=impl_->Scan();
+    const auto* node=view.Find(p); impl_->MutationSource(view,node,p,true);
+    if(node->info.type==NodeType::Directory) {
+        const auto prefix=p+'/'; const auto next=view.nodes.lower_bound(prefix);
+        if(next!=view.nodes.end()&&next->first.starts_with(prefix)) Fail("directory_not_empty","remove",p);
+        view.UnlockSubtree(node->disk);
+    }
+    std::error_code ec; const auto removed=fs::remove(node->disk,ec); Check(ec,"remove",p);
+    if(!removed) Fail("not_found","remove",p);
+    (void)impl_->Scan(); return true;
 }
 bool FileSystem::Rename(std::string_view directory,std::string_view oldName,std::string_view newName) const {
-    if(!Component(oldName) || !Component(newName) || !Utf8Valid(oldName) || !Utf8Valid(newName)) return false;
-    const auto dir=NormalizePath(directory); if(!dir) return false;
-    const auto prefix=dir->empty()?"":*dir+"/";
-    const auto from=prefix+std::string(oldName),to=prefix+std::string(newName);
-    return Stat(from).type==NodeType::File && Move(from,to);
+    const auto dir=impl_->Authorize(directory),a=Strict(oldName),b=Strict(newName);
+    if(a.find('/')!=std::string::npos||b.find('/')!=std::string::npos) throw InvalidPath("Rename requires two single filenames");
+    const auto source=dir+'/'+a,destination=dir+'/'+b;
+    (void)impl_->Authorize(source); (void)impl_->Authorize(destination);
+    if(Stat(source).type==NodeType::Directory) Fail("is_directory","rename",source);
+    return Move(source,destination);
 }
 bool FileSystem::Copy(std::string_view source,std::string_view destination) const {
-    const auto dest=NormalizePath(destination); if(!dest || !impl_->WritePath(*dest)) return false;
-    Stream input(Open(source,"rb")); if(!input) return false;
-    Stream output(Open(*dest,"xb")); if(!output) return false;
-    const auto disk=impl_->WritePath(*dest);
-    bool ok=true;
-    std::array<char,64*1024> bytes;
-    for(;;) {
-        const auto count=SDL_ReadIO(input.get(),bytes.data(),bytes.size());
-        const auto status=SDL_GetIOStatus(input.get());
-        if(status==SDL_IO_STATUS_ERROR || (count && SDL_WriteIO(output.get(),bytes.data(),count)!=count)) { ok=false; break; }
-        if(status==SDL_IO_STATUS_EOF) break;
-        if(!count) { ok=false; break; }
-    }
-    const bool flushed=SDL_FlushIO(output.get());
-    const bool closed=SDL_CloseIO(output.release());
-    const bool readClosed=SDL_CloseIO(input.release());
-    ok=ok && flushed && closed && readClosed;
-    if(!ok && disk) { std::error_code ec; fs::remove(*disk,ec); }
-    return ok;
+    const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
+    std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto* from=view.Resolve(a); const auto* to=view.Resolve(b);
+    if(!from) Fail("not_found","copy",a);
+    if(from->info.type!=NodeType::File) Fail("is_directory","copy",a);
+    if(to) Fail("already_exists","copy",b);
+    const auto& d=impl_->Route(b); impl_->CheckNewName(view,b); impl_->RequireParent(view,d,b);
+    impl_->CheckBacking(impl_->Destination(view,d,b),b,false);
+    Stream input(Open(a,"rb")),output(Open(b,"xb"));
+    std::exception_ptr failure;
+    try {
+        std::array<char,64*1024> bytes{};
+        for(;;) {
+            const auto count=SDL_ReadIO(input.get(),bytes.data(),bytes.size()); const auto state=SDL_GetIOStatus(input.get());
+            if(state==SDL_IO_STATUS_ERROR) throw GetStreamError(input.get(),"copy read",a);
+            if(count&&SDL_WriteIO(output.get(),bytes.data(),count)!=count) throw GetStreamError(output.get(),"copy write",b);
+            if(state==SDL_IO_STATUS_EOF) break;
+            if(!count) Fail("io_error","copy read",a);
+        }
+    } catch(...) { failure=std::current_exception(); }
+    try { CloseStream(output.release(),b); } catch(...) { if(!failure) failure=std::current_exception(); }
+    try { CloseStream(input.release(),a); } catch(...) { if(!failure) failure=std::current_exception(); }
+    if(failure) std::rethrow_exception(failure);
+    (void)impl_->Scan(); return true;
 }
 bool FileSystem::Move(std::string_view source,std::string_view destination) const {
-    const auto a=NormalizePath(source),b=NormalizePath(destination);
-    if(!a || !b) return false;
-    const auto from=impl_->WritePath(*a),to=impl_->WritePath(*b);
-    if(!from || !to || Stat(*a).type==NodeType::Missing || Stat(*b).type!=NodeType::Missing) return false;
-    return RenameNoReplace(*from,*to);
+    const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
+    std::lock_guard lock(impl_->mutex); auto view=impl_->Scan(); const auto* from=view.Resolve(a);
+    impl_->MutationSource(view,from,a,true);
+    if(view.Resolve(b)) Fail("already_exists","move",b);
+    const auto& d=impl_->Route(b); impl_->CheckNewName(view,b); impl_->RequireParent(view,d,b);
+    if(PathContains(a,b)) Fail("unsupported","move into own subtree",b);
+    const auto disk=impl_->Destination(view,d,b); impl_->CheckBacking(disk,b,true);
+    impl_->CheckMovedAliases(view,a,b,d);
+    view.UnlockSubtree(from->disk);
+    RenamePhysical(from->disk,disk,false,a);
+    (void)impl_->Scan(); return true;
 }
 bool FileSystem::Replace(std::string_view source,std::string_view destination) const {
-    const auto a=NormalizePath(source),b=NormalizePath(destination); if(!a || !b) return false;
-    const auto from=impl_->WritePath(*a),to=impl_->WritePath(*b);
-    if(!from || !to || Stat(*a).type!=NodeType::File || Stat(*b).type==NodeType::Directory) return false;
-    // SDL maps to MoveFileEx(REPLACE_EXISTING) / rename; no delete-first and no
-    // cross-volume copy fallback. Failed replacement preserves the old target.
-    return SDL_RenamePath(Utf8(*from).c_str(),Utf8(*to).c_str());
+    const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
+    std::lock_guard lock(impl_->mutex); auto view=impl_->Scan(); const auto* from=view.Resolve(a); const auto* to=view.Resolve(b);
+    impl_->MutationSource(view,from,a,false);
+    if(impl_->Protected(b)) Fail("unsupported","replace mapping root",b);
+    if(to&&to->info.type==NodeType::Directory) Fail("is_directory","replace",b);
+    if(to&&to->mount) Fail("read_only","replace",b);
+    const auto& d=impl_->Route(b); impl_->CheckNewName(view,b); impl_->RequireParent(view,d,b);
+    const auto disk=impl_->Destination(view,d,b); impl_->CheckBacking(disk,b,false);
+    impl_->CheckMovedAliases(view,a,b,d);
+    if(a==b) return true;
+    RenamePhysical(from->disk,disk,true,a);
+    (void)impl_->Scan(); return true;
 }
 Snapshot FileSystem::ReadSnapshot(std::string_view path,const ReadOptions& options) const {
-    if(!options.maxBytes || !options.chunkBytes || options.chunkBytes>16*1024*1024 || options.prefixBytes>4096)
+    if(!options.maxBytes||!options.chunkBytes||options.chunkBytes>16*1024*1024||options.prefixBytes>4096)
         throw std::invalid_argument("invalid VFS snapshot read limits");
-    Cancel(options);
-    const auto p=NormalizePath(path); if(!p) throw std::runtime_error("invalid VFS snapshot path");
-    const auto resolved=impl_->Resolve(*p);
-    if(resolved.info.type!=NodeType::File) throw std::runtime_error("VFS file not found: "+*p);
-    if(!resolved.package) return File::ReadSnapshot(Utf8(resolved.disk),options);
-    const auto size=resolved.info.size;
-    if(size>options.maxBytes || size>std::string{}.max_size()) throw std::length_error("VFS snapshot exceeds byte limit: "+*p);
-    Stream stream(resolved.package->Open(resolved.relative));
-    if(!stream) throw std::runtime_error(std::string("open VFS snapshot: ")+SDL_GetError());
+    const auto p=impl_->Authorize(path); Cancel(options);
+    Stream stream(Open(p,"rb"));
+    const auto modified=detail::NativeModified(stream.get(),p);
+    const auto signedSize=SDL_GetIOSize(stream.get());
+    if(signedSize<0) throw GetStreamError(stream.get(),"snapshot size",p);
+    const auto size=static_cast<std::uint64_t>(signedSize);
+    if(size>options.maxBytes||size>std::string{}.max_size()) Fail("out_of_range","snapshot size",p);
     const auto exact=[&](char* out,std::size_t wanted) {
         while(wanted) {
-            Cancel(options);
-            const auto n=SDL_ReadIO(stream.get(),out,std::min(wanted,options.chunkBytes));
-            if(SDL_GetIOStatus(stream.get())==SDL_IO_STATUS_ERROR || !n)
-                throw std::runtime_error(std::string("read VFS snapshot: ")+SDL_GetError());
-            out+=n; wanted-=n;
+            Cancel(options); const auto request=std::min(wanted,options.chunkBytes);
+            const auto count=SDL_ReadIO(stream.get(),out,request);
+            if(SDL_GetIOStatus(stream.get())==SDL_IO_STATUS_ERROR) throw GetStreamError(stream.get(),"snapshot read",p);
+            if(!count||count>request) Fail("resource_busy","file changed during snapshot",p);
+            out+=count; wanted-=count;
         }
         Cancel(options);
     };
-    std::array<char,4096> prefix;
-    const auto prefixSize=std::min<std::size_t>(static_cast<std::size_t>(size),options.prefixBytes);
+    std::array<char,4096> prefix{}; const auto prefixSize=static_cast<std::size_t>(std::min<std::uint64_t>(size,options.prefixBytes));
     exact(prefix.data(),prefixSize);
     if(options.admit) options.admit(size,{prefix.data(),prefixSize});
     Cancel(options);
     Snapshot result; result.bytes.resize(static_cast<std::size_t>(size));
-    std::copy_n(prefix.data(),prefixSize,result.bytes.data());
-    exact(result.bytes.data()+prefixSize,result.bytes.size()-prefixSize);
-    if(!SDL_CloseIO(stream.release())) throw std::runtime_error(std::string("close VFS snapshot: ")+SDL_GetError());
-    Cancel(options); result.modified=resolved.info.modified; return result;
+    std::copy_n(prefix.data(),prefixSize,result.bytes.data()); exact(result.bytes.data()+prefixSize,result.bytes.size()-prefixSize);
+    char extra{}; const auto more=SDL_ReadIO(stream.get(),&extra,1);
+    if(SDL_GetIOStatus(stream.get())==SDL_IO_STATUS_ERROR) throw GetStreamError(stream.get(),"snapshot finish",p);
+    const auto afterSize=SDL_GetIOSize(stream.get());
+    if(afterSize<0) throw GetStreamError(stream.get(),"snapshot size",p);
+    if(more||afterSize!=signedSize||detail::NativeModified(stream.get(),p)!=modified)
+        Fail("resource_busy","file changed during snapshot",p);
+    result.modified=modified.value_or(0);
+    CloseStream(stream.release(),p); Cancel(options);
+    return result;
 }
 std::optional<std::string> FileSystem::Read(std::string_view path) const {
     ReadOptions options; options.maxBytes=std::string{}.max_size();
-    try { return ReadSnapshot(path,options).bytes; }
-    catch(const std::runtime_error&) { return {}; }
+    return ReadSnapshot(path,options).bytes;
 }
 }

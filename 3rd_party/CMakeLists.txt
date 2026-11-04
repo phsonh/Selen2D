@@ -11,6 +11,8 @@ add_subdirectory(SDL EXCLUDE_FROM_ALL)
 add_subdirectory(cmake/luajit)
 add_subdirectory(cmake/audio)
 add_subdirectory(cmake/zstd)
+add_subdirectory(cmake/utf8proc)
+add_subdirectory(cmake/sodium)
 
 # Pinned upstream FreeType VER-2-14-1 (526ec5c47b9ebccc4754c85ac0c0cdf7c85a5e9b).
 # Fonts are prepared from VFS memory; upstream source and licenses are intact.

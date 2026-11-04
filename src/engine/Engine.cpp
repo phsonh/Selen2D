@@ -64,7 +64,7 @@ void RegisterBindings() {
     lua_bind::modules::File::Register(L,files);
     Lua::InstallSearchers(L,files);
     resourceBindings=std::make_unique<lua_bind::modules::Resource::Context>(L,resources->Resources(),
-        [](auto& job){ resources->Wait(job); });
+        [](auto& job){ resources->Wait(job); },files);
     lua_bind::modules::Resource::Register(L,*resourceBindings);
     audioBindings=std::make_unique<lua_bind::modules::Audio::Context>(L,audio,resources->Resources());
     lua_bind::modules::Audio::Register(L,*audioBindings);

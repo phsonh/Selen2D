@@ -30,5 +30,24 @@ cmake --build build/release --target stage_release
 ```
 
 Ordinary Debug and Release builds never overwrite the official package. The
-development package contains the executable, Lua entry/example and documentation;
+development package contains the executable, Lua example and documentation;
 source tools and private test output are not included.
+
+The default executable starts `example/main.lua` directly from its compiled
+`launch.h` configuration. It authorizes the `example/` and `output/` virtual
+ranges; it does not expose the whole executable directory. There is no external
+startup file or runtime configuration override. Changing the entry, mounts or
+directory rules requires rebuilding the executable; editing an authorized Lua
+file in the default development layout only requires restarting it.
+
+Stage C adds the File/VFS contract, compiled startup configuration, and Python
+tools for SLPK v1 packages and authenticated SLPK v2 packages. The Python
+packages in `tools/requirements-tools.txt` are needed only when running those
+source tools. Ordinary engine builds need the build tools listed above, without
+those extra Python packages; the running engine does not need Python.
+The staged Resource/Graphic/Audio API migration remains separate work.
+
+See [running the example](doc/guide/getting-started.md) and
+[File, packages and compiled startup configuration](doc/guide/file-launch.md).
+The Shader example still uses the built-in `Solongo.hlsl` declarations described
+in the [Shader guide](doc/guide/shader.md).

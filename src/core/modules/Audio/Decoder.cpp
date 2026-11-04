@@ -1,5 +1,6 @@
 #include "Decoder.h"
 #include "core/modules/File/Vfs.h"
+#include "core/modules/File/ReadSource.h"
 #include <SDL3/SDL.h>
 #include <vorbis/vorbisfile.h>
 #define DR_WAV_IMPLEMENTATION
@@ -16,8 +17,8 @@ namespace core::modules::Audio::detail {
 namespace {
 struct CloseIO { void operator()(SDL_IOStream* value) const { if (value) SDL_CloseIO(value); } };
 using IO = std::unique_ptr<SDL_IOStream, CloseIO>;
-IO Open(const File::FileSystem& files, const std::string& path) {
-    IO value(files.Open(path, "rb"));
+IO Open(const File::ReadSource& source, const std::string& path) {
+    IO value(source.Open());
     if (!value) throw std::runtime_error("cannot open audio '" + path + "': " + SDL_GetError());
     return value;
 }
@@ -117,16 +118,14 @@ private:
     ResourceInfo info_{};
 };
 }
-std::unique_ptr<Decoder> OpenDecoder(std::shared_ptr<const File::FileSystem> files, const std::string& path) {
-    if(!files) throw std::invalid_argument("audio requires a virtual file system");
-    const auto normalized=files->NormalizePath(path);
-    if(!normalized || normalized->empty()) throw std::invalid_argument("invalid virtual audio path");
-    auto io=Open(*files,*normalized);
+std::unique_ptr<Decoder> OpenDecoder(std::shared_ptr<const File::ReadSource> source, const std::string& path) {
+    if(!source) throw std::invalid_argument("audio requires an authorized read source");
+    auto io=Open(*source,path);
     std::array<char,12> magic{};
     const auto count=SDL_ReadIO(io.get(),magic.data(),magic.size());
     if(SDL_GetIOStatus(io.get())==SDL_IO_STATUS_ERROR) throw std::runtime_error("audio header read failed: "+path);
     if(SDL_SeekIO(io.get(),0,SDL_IO_SEEK_SET)<0) throw std::runtime_error("audio source rewind failed: "+path);
-    if(count>=4 && std::memcmp(magic.data(),"OggS",4)==0) return std::make_unique<Vorbis>(std::move(io),*normalized);
+    if(count>=4 && std::memcmp(magic.data(),"OggS",4)==0) return std::make_unique<Vorbis>(std::move(io),path);
     if(count==12 && (std::memcmp(magic.data(),"RIFF",4)==0 || std::memcmp(magic.data(),"RF64",4)==0)
         && std::memcmp(magic.data()+8,"WAVE",4)==0) {
         // dr_wav tolerates truncated RIFF data by reducing the frame count.
@@ -138,7 +137,7 @@ std::unique_ptr<Decoder> OpenDecoder(std::shared_ptr<const File::FileSystem> fil
             if(size<0 || declared+8>static_cast<std::uint64_t>(size))
                 throw std::runtime_error("truncated WAV audio: "+path);
         }
-        return std::make_unique<Wav>(std::move(io),*normalized);
+        return std::make_unique<Wav>(std::move(io),path);
     }
     throw std::runtime_error("audio file is neither supported WAV nor Ogg Vorbis: "+path);
 }
@@ -155,7 +154,9 @@ std::shared_ptr<const ResourceData> PrepareResource(std::shared_ptr<const File::
     stop.Check();
     if(path.empty()) throw std::invalid_argument("audio path cannot be empty");
     if(options.mode!=StorageMode::Decoded && options.mode!=StorageMode::Stream) throw std::invalid_argument("invalid audio storage mode");
-    auto decoder=OpenDecoder(files,path);
+    if(!files) throw std::invalid_argument("audio requires a virtual file system");
+    auto source=files->OpenReadSource(path);
+    auto decoder=OpenDecoder(source,path);
     stop.Check();
     auto result=std::make_shared<ResourceData>();
     result->info=decoder->GetInfo();
@@ -163,7 +164,7 @@ std::shared_ptr<const ResourceData> PrepareResource(std::shared_ptr<const File::
     result->info.duration=static_cast<double>(result->info.frames)/result->info.sampleRate;
     result->info.loopEndFrame=result->info.frames;
     result->path=*files->NormalizePath(path);
-    result->files=std::move(files);
+    result->source=std::move(source);
     if(options.loop) {
         const auto begin=options.loop->start;
         const auto end=options.loop->finish.value_or(result->info.duration);

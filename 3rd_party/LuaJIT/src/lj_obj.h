@@ -703,6 +703,9 @@ struct lua_State {
   GCRef env;		/* Thread environment (table of globals). */
   void *cframe;		/* End of C stack frame chain. */
   MSize stacksize;	/* True stack size (incl. LJ_STACK_EXTRA). */
+  /* Host provenance: x64 VM marks calls that erase their Lua caller. This is
+  ** internal state, not a Lua API or a claimed source for dynamic code. */
+  uint8_t native_call_tail;
 };
 
 #define G(L)			(mref(L->glref, global_State))

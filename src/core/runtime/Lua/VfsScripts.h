@@ -1,5 +1,6 @@
 #pragma once
 #include <lua.hpp>
+#include "TrustedScripts.h"
 #include <memory>
 #include <string_view>
 namespace core::modules::File { class FileSystem; }
@@ -8,17 +9,13 @@ namespace core::runtime::Lua {
 enum class ScriptStatus { Success, Unreadable, Error };
 // Success: pushes the compiled function. Error: pushes the Lua error string.
 // Unreadable: leaves the stack unchanged. Never throws a Lua error itself.
-ScriptStatus LoadScript(lua_State* L, const modules::File::FileSystem& filesystem, std::string_view path);
+ScriptStatus LoadScript(lua_State* L, const modules::File::FileSystem& filesystem, std::string_view path, const char* mode = nullptr);
 // Success: ignores script results. Error: leaves one syntax error / traceback.
 // Unreadable: leaves the stack unchanged. Executes in the caller's Lua VM.
 ScriptStatus RunScript(lua_State* L, const modules::File::FileSystem& filesystem, std::string_view path);
-// Keeps package.preload and package.loaded; replaces script/C search fallbacks
-// with one VFS searcher. loadfile/dofile use this same immutable mount snapshot.
-// Default package.path: "?.lua;?/init.lua", relative to the VFS root. The entry
-// script does not implicitly change that root or append its own directory.
-// Lua may set package.path explicitly. There is no physical C-module fallback.
-// loadfile(path) returns function or nil,error; dofile(path) returns all script
-// values and propagates errors. Neither accepts a missing path / stdin input.
-// This is script-resolution policy, not a security sandbox for Lua io/os/ffi.
+// Preserves native require/preload/cache and custom searchers. Replaces only
+// file and disk-C searchers; all filename entry points share VFS admission.
+// Dynamic load/loadstring, stdio, popen, os.execute and FFI remain native and
+// are explicitly not a complete untrusted-code sandbox.
 void InstallSearchers(lua_State* L, std::shared_ptr<const modules::File::FileSystem> filesystem);
 }

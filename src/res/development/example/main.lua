@@ -1,4 +1,5 @@
--- All paths are relative to the executable directory, including inside this file.
+-- All paths are virtual paths in the compiled launch.h mapping. This example's
+-- default entry is example/main.lua; only example/ and output/ are authorized.
 -- Edit these values, save, then restart the executable. No C++ build is needed.
 local settings = {
     width = 960,

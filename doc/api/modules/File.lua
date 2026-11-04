@@ -1,145 +1,168 @@
 ---@meta
 
--- Selen2D v2.0.0 一号机基线声明；仅供编辑器，不应执行。
--- 来源：lua_bind/modules/File/File.cpp、core/modules/File/Vfs.cpp、core/runtime/Lua/VfsScripts.cpp。
--- 设计依据：devs/design/Solongo API 一号机/modules/File.md，及已批准的安装根普通目录写入行为。
--- 路径相对安装/虚拟根，支持 UTF-8，/ 与反斜杠均规范化；最多 4096 字节，拒绝 NUL、非法 UTF-8、绝对路径。
--- . 与重复分隔符归一化；.. 不得越过虚拟根或挂载边界；拒绝 Windows 设备名、非法组件和符号链接/重解析点。
--- 普通未挂载目录可读写，由 Lua 决定存储目录。挂载目标、其祖先、源物理别名受保护，挂载内容只读。
--- 后挂载同路径覆盖前挂载，查询读取统一 VFS；挂载下不存在的路径不会回退到无关物理文件。
--- 本模块同步完成操作。错误实参数量/类型、非法模式、无效句柄会抛 Lua 错误；正常 I/O 失败见各返回值。
--- 无默认文件路径；文件父目录需先创建。所有 I/O 均为原始字节，不自动换行或转换编码。
+-- Selen2D 二号机已实现 File 契约；编辑器定义，不参与运行。
+-- 路径使用非空相对 VFS 路径、UTF-8/NFC 和正斜杠。拒绝绝对路径、反斜杠、
+-- 独立 . / ..、空组件、末尾斜杠、NUL；不以进程 CWD 或脚本目录为根。
+-- 只能访问编译配置接入的包/真实目录。未授权查询也抛错，不伪装不存在。
+-- 文件句柄绑定打开时获准的后端。包只读；真实父目录不会由 Open 自动创建。
+-- 参数/状态/路径/授权及异常 VFS 结构抛 Lua 错误；正常 I/O 失败返回独立错误表。
+-- 除 GetScriptPath 一值、三个读取方法三值外，其余公开函数固定返回两值。
+-- File 均读写原始字节；文本与二进制模式不隐式变换编码或换行。
+-- require 保留原生缓存、preload、自定义搜索器。只在文件候选开头允许去掉一个 ./。
+-- loadfile/dofile、标准 io 文件名、os.remove/rename、package.searchpath 共用 VFS 授权。
+-- 标准 io 保留 LuaJIT 的返回形式，不能按本模块的 err 表解析；stdio/popen 保留。
+-- loadlib/磁盘 C 搜索器、自动系统临时路径拒绝。FFI、popen、os.execute、应用主动
+-- load/loadstring 和无文件名 stdin 编译不属于文件授权保证，绝非完整不可信代码沙箱。
 
 ---@alias FileOpenMode 'r'|'rb'|'r+'|'rb+'|'r+b'|'w'|'wb'|'w+'|'wb+'|'w+b'|'a'|'ab'|'a+'|'ab+'|'a+b'|'x'|'xb'|'x+'|'xb+'|'x+b'
 ---@alias FileSeekOrigin 'set'|'cur'|'end'
+---@alias FileErrorCode 'not_found'|'already_exists'|'permission_denied'|'read_only'|'not_directory'|'is_directory'|'directory_not_empty'|'cross_device'|'no_space'|'resource_busy'|'out_of_range'|'name_conflict'|'corrupt_data'|'unsupported'|'io_error'
+---@class FileError
+---@field code FileErrorCode 稳定分类；范围外访问是抛错，不属于 permission_denied。
+---@field message string 非空安全诊断；不保证固定措辞，不包含密钥或未授权物理路径。
+-- 每次失败为独立、无元表且恰好含 code/message 的普通表；不存在 GetLastError。
+
 ---@class FileModule
 File = {}
 
----同步打开普通文件，成功返回有独立游标的句柄；路径非法、只读限制或操作失败返回 nil。
----mode 必填：r 读取已有文件；w 创建/截断；a 创建/末尾追加；x 仅在不存在时排他创建。
----主模式后可各加一次 b 和 +，顺序任意；+ 读写，b 不改变原始字节语义；任何可写模式均不能访问挂载内容。
----不创建父目录。mode 非法或参数错误抛错；不能通过扩展名区分真实目录与包挂载目录。
+---同步打开文件，独立游标。r 读已有；w 创建/截断；a 每次写到末尾；x 排他创建。
+---b 保持字节语义，+ 允许读写，二者可各一次。未创建父目录返回 nil,err。
 ---@param path string
 ---@param mode FileOpenMode
 ---@return FileHandle|nil file
+---@return FileError|nil err
 function File.Open(path, mode) end
 
----读取 VFS 视图：文件或目录（含挂载目录）存在为 true；无效路径/不可查询为 false。
+---合法缺失为 false,nil；文件或目录存在为 true,nil；查询失败为 false,err。
 ---@param path string
 ---@return boolean exists
+---@return FileError|nil err
 function File.Exists(path) end
 
----路径在 VFS 中为普通文件时 true；目录、挂载点、缺失或无效路径为 false。
+---目录/正常缺失为 false,nil；查询失败为 false,err。
 ---@param path string
 ---@return boolean isFile
+---@return FileError|nil err
 function File.IsFile(path) end
 
----路径在 VFS 中为目录时 true，包含虚拟挂载点；缺失或无效路径为 false。
+---包括虚拟挂载目录。文件/正常缺失为 false,nil。
 ---@param path string
 ---@return boolean isDirectory
+---@return FileError|nil err
 function File.IsDirectory(path) end
 
----返回直接子项名称数组（从 1 索引，不带父路径），文件与目录均包含；不递归，同名去重。
----空目录为 {}；无效路径、不是目录或列举失败为 nil。基线按名称排序，不依赖该顺序组织游戏逻辑。
----@param path string 空串或 "." 可表示虚拟根。
+---直接子项名称，含文件/目录，不含父路径；非递归、去重、UTF-8 字节序排序。
+---空目录 {},nil；缺失/非目录/普通失败 nil,err；空串及 . 不能代表根。
+---@param path string
 ---@return string[]|nil entries
+---@return FileError|nil err
 function File.ListDirectory(path) end
 
----递归创建可写普通目录；已存在目录为 true，目标是文件、受保护或操作失败为 false。
+---在获准真实范围内递归创建目录；已有目录 true,nil；失败可能留下部分祖先。
 ---@param path string
 ---@return boolean success
+---@return FileError|nil err
 function File.CreateDirectory(path) end
 
----删除可写普通文件或空目录；不递归。缺失、非空目录、受保护路径或 I/O 失败返回 false。
+---删除可写普通文件或空目录，不递归；缺失、非空、只读等为 false,err。
 ---@param path string
 ---@return boolean success
+---@return FileError|nil err
 function File.Remove(path) end
 
----只在指定目录内重命名普通文件；不覆盖，不能用于目录改名或跨目录移动。
----oldName/newName 必须为单个合法文件名（允许通常扩展名，不允许分隔符、独立 . 或 ..）。
----源不存在、目标已存在、不可写、名称非法或操作失败为 false；不创建父目录。
+---在指定目录重命名普通文件，不覆盖；oldName/newName 必须为合法单个名称。
+---不能改名目录或跨目录移动；所有路径先授权，不创建父目录。
 ---@param directory string
 ---@param oldName string
 ---@param newName string
 ---@return boolean success
+---@return FileError|nil err
 function File.Rename(directory, oldName, newName) end
 
----复制普通文件内容，保留源；源可来自只读挂载，目标必须可写且不存在，不创建父目录。
----不复制目录树；失败返回 false。失败时尝试移除本次新建的未完成目标，不覆盖既有目标。
+---复制普通文件，保留源；源可来自包；目标必须可写且不存在，不递归/不创建父目录。
 ---@param sourcePath string
 ---@param destinationPath string
 ---@return boolean success
+---@return FileError|nil err
 function File.Copy(sourcePath, destinationPath) end
 
----移动可写普通文件或目录，目标必须不存在，不创建父目录。
----基线使用系统无覆盖重命名；跨卷/不支持/受保护或操作失败返回 false，保留源，不作复制删除回退。
+---移动可写普通文件或目录，不覆盖。跨设备 false,cross_device；没有复制删除回退。
 ---@param sourcePath string
 ---@param destinationPath string
 ---@return boolean success
+---@return FileError|nil err
 function File.Move(sourcePath, destinationPath) end
 
----把可写普通源文件移动发布到目标文件；目标存在则替换，不存在则创建，成功后源路径消失。
----要求同一文件系统、目标父目录存在且目标不是目录；失败保留旧目标，不使用先删目标再移动。
----返回 true 表示替换调用成功，不等于断电持久化；发布前检查 Write 与 Close 结果。
+---将可写源文件发布到目标文件；已存在则替换，否则创建；源/目标须在同一文件系统。
+---不先删除旧目标；失败保留旧目标。成功不等于断电持久化，应先检查 Write 与 Close。
 ---@param sourcePath string
 ---@param destinationPath string
 ---@return boolean success
+---@return FileError|nil err
 function File.Replace(sourcePath, destinationPath) end
 
----每次重新从 VFS 读取并在当前 Lua VM/全局环境执行；同步、无缓存，不改变工作目录。
----读取失败为 false，编译和执行成功为 true；脚本所有返回值被丢弃，return false 仍算成功。
----语法/运行时错误抛出并保留调用栈，不能伪装为 false；不等价于 require 的缓存机制。
+---重新读取并执行，忽略脚本返回值，无缓存；成功 true,nil，普通读失败 false,err。
+---编译前检查代码来源；加密配置只能执行获准认证包内代码。语法/运行错误抛出，保留栈。
 ---@param path string
 ---@return boolean success
+---@return FileError|nil err
 function File.RunLuaFile(path) end
 
----原生 userdata；只能由 File.Open 创建，不提供公开构造器。
----方法用冒号调用。Close 后所有方法（再次 Close 也包括）抛错；GC 兜底关闭不能报告写入失败。
+---返回直接 Lua 调用者的规范虚拟文件路径（含文件名），不探测当前文件是否仍存在。
+---文件定义的闭包/协程保留来源；动态 loadstring 的 @名称不构成文件来源。
+---不逐层回溯。尾调用/优化/元方法等无法可靠辨识的调用返回单个 nil，不归到上层脚本。
+---@return string|nil path
+function File.GetScriptPath() end
+
+---只能由 File.Open 创建的原生 userdata；冒号调用。关闭后所有方法（再次 Close 也含）抛错。
+---GC 仅兜底关闭；不会代替显式 Close 的失败检查。
 ---@class FileHandle
 local FileHandle = {}
 
----从当前位置读最多 size 个字节并推进游标；省略/nil 读完剩余内容，0 返回空串成功。
----EOF/短读成功返回实际内容与 true，已在 EOF 返回 "",true；不可读或读取失败返回 nil,false。
----size 必须为非负有限整数且小于本机 size_t 的 2^位数；大读取仍受内存限制，分配失败抛错。
----@param size? integer 字节数，不是 UTF-8 字符数；无默认上限。
+---最多读 size 字节；省略/nil 读剩余全部，0 成功空串且不移动游标。
+---EOF 为 "",true,nil；短读成功；失败 nil,false,err，不交付部分结果，游标可能已推进。
+---size 为 [0,2^53-1] 有限整数，错误参数抛错；实际读取还受内存限制。
+---@param size? integer
 ---@return string|nil data
 ---@return boolean success
+---@return FileError|nil err
 function FileHandle:Read(size) end
 
----从游标读下一行，去掉 LF 及其前的 CR；不把单独 CR 作为行分隔符。
----空行返回 "",true；EOF 且无内容返回 nil,true；不可读/I/O 失败返回 nil,false。
----没有终止换行的末行也会返回；读写、Seek、Tell 与逐行读取共享同一准确字节游标。
+---下一行，去掉 LF 或 CRLF；单独 CR 保留。空行 "",true,nil；EOF nil,true,nil。
+---与其他读写/Seek/Tell 共用准确字节游标；普通失败 nil,false,err。
 ---@return string|nil line
 ---@return boolean success
+---@return FileError|nil err
 function FileHandle:ReadLine() end
 
----从当前位置读到 EOF，返回去除 LF/CRLF 的连续字符串数组；已在 EOF 返回 {},true。
----末尾换行不额外制造空行，中间空行保留；失败返回 nil,false，不交付部分结果，游标可能已推进。
----结果超过 Lua 数组索引范围或内存不足抛错。
+---当前游标到 EOF 的行数组，末尾换行不制造空行；EOF {},true,nil。
+---失败 nil,false,err，不交付已读前缀；内存或 Lua 数组索引限制抛错。
 ---@return string[]|nil lines
 ---@return boolean success
+---@return FileError|nil err
 function FileHandle:ReadLines() end
 
----写入字符串原始字节，允许 NUL，不添加换行；a 模式始终追加，其余按游标写入。
----不可写、短写、I/O 失败返回 false，可能已写入部分数据；成功为 true，包括可写流的空串。
----成功不保证磁盘持久化；必须检查 Close，不提供独立 Flush。
+---写原始字节，支持 NUL；成功 true,nil，短写/只读/失败 false,err，可能已部分写入。
+---空串仍检查可写性，不移动/扩展文件。不提供 Flush，必须检查 Close。
 ---@param data string
 ---@return boolean success
+---@return FileError|nil err
 function FileHandle:Write(data) end
 
----按指定基准改变字节游标；成功 true，定位失败 false，set 的负偏移直接 false。
----offset 必须是有限整数且位于 [-2^63,2^63)；非法 origin/参数抛错。支持 VFS 包逻辑定位。
----Lua number 在超过 2^53 的偏移处不再逐字节精确；越过 EOF 的支持由流实现决定。
+---offset 为 [-(2^53-1),2^53-1] 有限整数。目标须在 [0,2^53-1]，越界 false,out_of_range。
+---成功 true,nil；失败 false,err 且位置不变。可越过 EOF 定位，不立即扩展文件。
 ---@param offset integer
----@param whence? FileSeekOrigin 省略或 nil 默认为 "set"；cur 相对当前位置，end 相对结尾。
+---@param whence? FileSeekOrigin 省略/nil 为 set；cur 当前，end 文件末尾。
 ---@return boolean success
+---@return FileError|nil err
 function FileHandle:Seek(offset, whence) end
 
----返回当前零基字节位置；查询失败 nil。不改变游标，超过 2^53 的位置可能受 Lua number 精度限制。
+---零基字节位置，范围 [0,2^53-1]，不改变游标；失败 nil,err。
 ---@return integer|nil position
+---@return FileError|nil err
 function FileHandle:Tell() end
 
----完成缓冲关闭并释放句柄；成功 true，提交/关闭失败 false。
----不论返回值均立即使句柄失效；重复关闭抛错，不是幂等操作。GC 自动关闭不能替代显式检查。
+---关闭并释放原生流；成功 true,nil，提交/关闭失败 false,err；无论结果立即失效。
 ---@return boolean success
+---@return FileError|nil err
 function FileHandle:Close() end

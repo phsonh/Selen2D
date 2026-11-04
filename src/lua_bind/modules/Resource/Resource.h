@@ -4,6 +4,7 @@
 #include <functional>
 
 namespace core::modules::Resource { class Service; class Job; struct Asset; }
+namespace core::modules::File { class FileSystem; }
 namespace lua_bind::modules::Resource {
     // Internal binding boundary: ready logical Image name only.
     // Renderer never receives a resource registry or Lua value.
@@ -14,7 +15,8 @@ namespace lua_bind::modules::Resource {
     class Context final {
     public:
         Context(lua_State* L, core::modules::Resource::Service& service,
-            std::function<void(core::modules::Resource::Job&)> wait);
+            std::function<void(core::modules::Resource::Job&)> wait,
+            std::shared_ptr<const core::modules::File::FileSystem> files);
         ~Context();
         Context(const Context&) = delete;
         Context& operator=(const Context&) = delete;

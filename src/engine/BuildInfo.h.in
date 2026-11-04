@@ -6,5 +6,4 @@ inline constexpr char Developer[] = "@ENGINE_DEVELOPER@";
 inline constexpr char Copyright[] = "@ENGINE_COPYRIGHT@";
 inline constexpr char Version[] = "@PROJECT_VERSION@";
 inline constexpr char Title[] = "@ENGINE_PRODUCT_NAME@ v@PROJECT_VERSION@";
-inline constexpr char PackName[] = "@ENGINE_PACK_NAME@";
 }

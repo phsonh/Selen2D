@@ -7,6 +7,7 @@ Third-party source licenses accompany them in doc/guide/licenses.
 
 Included components: SDL3 (and its bundled dependencies), LuaJIT,
 nlohmann/json, libogg, libvorbis, dr_wav, stb_image, FreeType, Zstandard,
+libsodium, utf8proc and its Unicode-derived data,
 and Microsoft DirectX Shader Compiler (DXC, including its LLVM/Clang code).
 SDL local fixes and the stb_image local fix are recorded with their original
 provenance; migration has not modified these vendor sources.
@@ -16,6 +17,23 @@ FreeType portions of this software are copyright (c) The FreeType Project
 the original dual-license materials are retained in doc/guide/licenses/freetype.
 SDL's HIDAPI is used under its BSD option; its original license options and
 copyright statements are preserved in doc/guide/licenses/SDL.
+
+libsodium is copyright (c) 2013-2026 Frank Denis and is used under the ISC
+License. Its original notice is retained in doc/guide/licenses/libsodium/LICENSE.
+utf8proc is used under its MIT license, retaining the original Public Software
+Group and subsequent contributors' copyright notices. Its Unicode-derived data
+has its own copyright and permission notice. Both are retained in
+doc/guide/licenses/utf8proc/LICENSE.md; neither is relicensed as project-owned code.
+
+The separately installed build-time Python tools use PyNaCl 1.6.2 (Apache-2.0),
+zstandard 0.25.0 (BSD-3-Clause), and unicodedata2 18.0.0 (Apache-2.0), as pinned
+in tools/requirements-tools.txt in the source checkout. Their distributions
+retain their own license files and dependency notices, including PyNaCl's
+libsodium notice. These Python packages are not included in the runtime package.
+The source tools also include the Unicode 18.0.0 CaseFolding data, copyright
+(c) 1991-2026 Unicode, Inc., under Unicode License V3. Its complete notice is
+tools/unicode/LICENSE.txt in the source checkout. This build-time data is not
+required by the running engine.
 
 DXC notices come from the pinned compiler source, including its LICENSE.TXT,
 ThirdPartyNotices.txt and nested component licenses. The source revision and

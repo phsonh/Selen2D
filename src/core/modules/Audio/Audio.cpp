@@ -363,7 +363,7 @@ void System::RunWorker() {
                     // Build the pair transactionally. A failed old-generation
                     // initialization may be superseded by Seek, so it must not
                     // leave a decoder without its reader for the next job.
-                    auto decoder=OpenDecoder(data->files,data->path);
+                    auto decoder=OpenDecoder(data->source,data->path);
                     const auto actual=decoder->GetInfo();
                     if(actual.sampleRate!=data->info.sampleRate||actual.channels!=data->info.channels||actual.frames!=data->info.frames)
                         throw std::runtime_error("audio source changed after Prepare; explicitly Unload/Load it");

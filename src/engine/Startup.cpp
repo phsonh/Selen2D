@@ -1,58 +1,98 @@
 #include "Startup.h"
-#include "core/modules/File/File.h"
+#include "UserDataRoot.h"
+#include "launch.h"
 #include "core/modules/File/Vfs.h"
-#include "core/modules/Text/Text.h"
+#include "core/modules/File/PackageCrypto.h"
+#include <utf8proc.h>
+#include <set>
+#include <map>
 #include <stdexcept>
 
 namespace engine::Startup {
 namespace {
-std::string Utf8(const std::filesystem::path& path) {
-    const auto text=path.generic_u8string(); return {reinterpret_cast<const char*>(text.data()),text.size()};
+namespace File = core::modules::File;
+std::string Path(std::string_view value) {
+    const auto path = File::Normalize(value);
+    if(!path || path->empty()) throw std::invalid_argument("Invalid path in compiled launch configuration");
+    return *path;
 }
-}
-Config Load(const std::filesystem::path& executableDirectory) {
-    Config config;
-    config.directory=std::filesystem::absolute(executableDirectory).lexically_normal();
-    config.entry="launch.lua";
-    config.files=std::make_shared<core::modules::File::FileSystem>(
-        config.directory,std::vector<core::modules::File::MountSpec>{});
-    if(config.files->Stat(config.entry).type!=core::modules::File::NodeType::File)
-        throw std::runtime_error("Lua entry not found in executable directory: "+Utf8(config.directory/config.entry));
-    return config;
-}
-Config LoadManifest(const std::filesystem::path& executableDirectory) {
-    Config config;
-    config.directory=std::filesystem::absolute(executableDirectory).lexically_normal();
-    const auto filename=Utf8(config.directory/"launch");
-    if(!std::filesystem::is_regular_file(config.directory/"launch"))
-        throw std::runtime_error("Missing startup configuration: "+filename+"; provide entry and mounts explicitly");
-    core::modules::File::ReadOptions options; options.maxBytes=64*1024;
-    const auto snapshot=core::modules::File::ReadSnapshot(filename,options);
-    const auto json=core::modules::Text::DecodeJson(snapshot.bytes,filename);
-    if(!json.is_object() || !json.contains("entry") || !json["entry"].is_string() ||
-       !json.contains("mounts") || !json["mounts"].is_array())
-        throw std::runtime_error(filename+": expected string 'entry' and array 'mounts'");
-    for(const auto& [key,value]:json.items()) {
-        (void)value;
-        if(key!="entry" && key!="mounts") throw std::runtime_error(filename+": unknown startup field '"+key+"'");
+void ValidateSecret(std::span<const std::uint8_t> bytes) {
+    std::size_t offset{};
+    while(offset < bytes.size()) {
+        utf8proc_int32_t scalar{};
+        const auto size = utf8proc_iterate(bytes.data() + offset,
+            static_cast<utf8proc_ssize_t>(bytes.size() - offset), &scalar);
+        if(size <= 0) throw std::invalid_argument("Compiled secret is not valid UTF-8");
+        offset += static_cast<std::size_t>(size);
     }
-    const auto entryText=json["entry"].get<std::string>();
-    std::vector<core::modules::File::MountSpec> mounts;
-    for(const auto& mount:json["mounts"]) {
-        if(!mount.is_object() || mount.size()!=2 || !mount.contains("source") || !mount["source"].is_string() ||
-           !mount.contains("target") || !mount["target"].is_string())
-            throw std::runtime_error(filename+": each mount requires exactly string 'source' and 'target'");
-        const auto source=mount["source"].get<std::string>();
-        if(source.empty() || source.size()>4096 || source.find('\0')!=std::string::npos)
-            throw std::runtime_error(filename+": invalid mount source path");
-        mounts.push_back({std::filesystem::u8path(source),mount["target"].get<std::string>()});
+}
+}
+using Names = std::map<std::string, std::string, std::less<>>;
+void RecordNames(Names& names, std::string_view path) {
+    (void)Path(path);
+    std::size_t end{};
+    do {
+        end = path.find('/', end);
+        const std::string raw(path.substr(0, end));
+        const auto key = File::FoldPath(raw);
+        const auto [entry, added] = names.emplace(key, raw);
+        if(!added && entry->second != raw)
+            throw std::invalid_argument("Compiled mapping names have an NFC or Unicode case collision");
+        if(end == std::string_view::npos) break;
+        ++end;
+    } while(true);
+}
+Config Load(const std::filesystem::path& directory) { return Load(directory, launch_config::value); }
+
+Config Load(const std::filesystem::path& directory, const launch::Config& declaration) {
+    if(!directory.is_absolute()) throw std::invalid_argument("Deployment root must be an absolute executable directory");
+    if(declaration.mounts.size() > 4096 || declaration.directories.size() > 4096)
+        throw std::invalid_argument("Compiled launch configuration has too many records");
+    Config config;
+    config.directory = directory.lexically_normal();
+    config.entry = Path(declaration.entry);
+    std::vector<File::MountSpec> mounts;
+    std::set<std::uint32_t> parts;
+    Names virtualNames, deploymentNames, userNames;
+    bool protectedCode{};
+    for(const auto& record : declaration.mounts) {
+        if(!parts.insert(record.parts).second) throw std::invalid_argument("Compiled package parts must be globally unique");
+        RecordNames(virtualNames, record.target);
+        RecordNames(deploymentNames, record.source);
+        mounts.push_back({std::filesystem::u8path(Path(record.source)), Path(record.target), record.parts, record.encrypted});
+        protectedCode |= record.encrypted;
     }
-    config.files=std::make_shared<core::modules::File::FileSystem>(config.directory,std::move(mounts));
-    const auto entry=config.files->NormalizePath(entryText);
-    if(!entry || entry->empty()) throw std::runtime_error(filename+": 'entry' must be a valid nonempty virtual path");
-    if(config.files->Stat(*entry).type!=core::modules::File::NodeType::File)
-        throw std::runtime_error(filename+": Lua entry not found in mounted VFS: "+*entry);
-    config.entry=*entry;
+    if(protectedCode && !declaration.secret) throw std::invalid_argument("Encrypted packages require an explicit compiled secret");
+    std::optional<File::PackageKey> key;
+    if(declaration.secret) {
+        ValidateSecret(*declaration.secret);
+        const auto bytes = *declaration.secret;
+        // Explicit length includes an intentional embedded NUL, excludes any
+        // C string terminator. Missing and explicitly empty remain distinct.
+        const std::string_view secret = bytes.empty() ? std::string_view{} :
+            std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        key = File::DerivePackageKey(secret);
+    }
+    std::optional<std::filesystem::path> userRoot;
+    std::vector<File::DirectorySpec> directories;
+    for(const auto& record : declaration.directories) {
+        std::filesystem::path base;
+        switch(record.base) {
+        case launch::Base::Deployment: base = config.directory; break;
+        case launch::Base::UserData:
+            if(!userRoot) userRoot = ResolveUserDataRoot();
+            base = *userRoot;
+            break;
+        default: throw std::invalid_argument("Unknown base in compiled directory rule");
+        }
+        RecordNames(virtualNames, record.target);
+        RecordNames(record.base == launch::Base::Deployment ? deploymentNames : userNames, record.path);
+        directories.push_back({std::move(base), Path(record.path), Path(record.target)});
+    }
+    config.files = std::make_shared<File::FileSystem>(config.directory, std::move(mounts), std::move(directories), key);
+    config.files->CheckCodeSource(config.entry);
+    if(config.files->Stat(config.entry).type != File::NodeType::File)
+        throw std::runtime_error("Compiled Lua entry is not an authorized file: " + config.entry);
     return config;
 }
 }

@@ -45,6 +45,8 @@
 *.exp
 *.ilk
 *.log
+__pycache__/
+*.pyc
 .vs/
 .idea/
 .env

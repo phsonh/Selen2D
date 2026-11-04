@@ -249,6 +249,8 @@
 |
 |.macro ins_call
 |  // BASE = new base, RB = LFUNC, RD = nargs+1
+|  mov L:RA, SAVE_L
+|  mov byte L:RA->native_call_tail, 0
 |  mov [BASE-8], PC
 |  ins_callt
 |.endmacro
@@ -4262,6 +4264,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  cmp byte LFUNC:RB->ffid, 1	// (> FF_C) Calling a fast function?
     |  ja >5
     |4:
+    |  // Preserve the fact that the original Lua caller has been erased.
+    |  mov L:RA, SAVE_L
+    |  mov byte L:RA->native_call_tail, 1
     |  ins_callt
     |
     |5:  // Tailcall to a fast function.

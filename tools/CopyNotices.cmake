@@ -71,7 +71,7 @@ function(engine_copy_notices source_root destination)
             list(APPEND notice_files "${relative}")
         endif()
     endforeach()
-    foreach(relative IN ITEMS README.md SDL_LOCAL_PATCHES.md stb_image/README.md
+    foreach(relative IN ITEMS README.md SDL_LOCAL_PATCHES.md LuaJIT/HOST_PATCHES.md stb_image/README.md
             dxc/STATIC-INTEGRATION.md dxc/patches/static-embedding.patch)
         get_filename_component(parent "${relative}" DIRECTORY)
         file(MAKE_DIRECTORY "${destination}/licenses/${parent}")

@@ -1,0 +1,4 @@
+# Development tools only. Not needed by ordinary CMake builds or the engine.
+PyNaCl==1.6.2
+zstandard==0.25.0
+unicodedata2==18.0.0

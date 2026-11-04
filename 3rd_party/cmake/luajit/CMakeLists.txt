@@ -12,7 +12,7 @@ endif()
 file(MAKE_DIRECTORY "${task_luajit_work}/src")
 file(GLOB_RECURSE task_luajit_inputs CONFIGURE_DEPENDS
     "${task_luajit_source}/src/*.c" "${task_luajit_source}/src/*.h" "${task_luajit_source}/src/*.hpp"
-    "${task_luajit_source}/src/*.lua" "${task_luajit_source}/dynasm/*")
+    "${task_luajit_source}/src/*.lua" "${task_luajit_source}/src/*.dasc" "${task_luajit_source}/dynasm/*")
 add_custom_command(
     OUTPUT "${task_luajit_work}/src/lua51.lib"
     BYPRODUCTS "${task_luajit_work}/src/luajit.h"

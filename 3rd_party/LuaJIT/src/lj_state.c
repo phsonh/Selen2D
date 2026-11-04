@@ -365,6 +365,7 @@ lua_State *lj_state_new(lua_State *L)
   L1->gct = ~LJ_TTHREAD;
   L1->dummy_ffid = FF_C;
   L1->status = LUA_OK;
+  L1->native_call_tail = 0;
   L1->stacksize = 0;
   setmref(L1->stack, NULL);
   L1->cframe = NULL;

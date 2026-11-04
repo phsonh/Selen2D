@@ -1,6 +1,7 @@
 #include "File.h"
 #include "Handle.h"
 #include "core/modules/File/Vfs.h"
+#include "core/modules/File/IoError.h"
 #include "core/runtime/Lua/VfsScripts.h"
 #include "lua_bind/Guard.h"
 #include <array>
@@ -46,10 +47,40 @@ Handle& OpenHandle(lua_State* L) {
 double Integer(lua_State* L, int index) {
     if (lua_type(L, index) != LUA_TNUMBER) throw std::invalid_argument("file byte offset/size must be an integer");
     const double value = lua_tonumber(L, index);
-    if (!std::isfinite(value) || value != std::floor(value)) throw std::invalid_argument("file byte offset/size must be a finite integer");
+    if (!std::isfinite(value) || value != std::floor(value) || std::abs(value) > 9007199254740991.0) throw std::invalid_argument("file byte offset/size must be a finite integer");
     return value;
 }
-int Failure(lua_State* L) { lua_pushnil(L); lua_pushboolean(L, false); return 2; }
+// Only IoError is translated to normal failure. Permission/argument/structure
+// exceptions continue through Guard and become Lua errors.
+enum class ResultKind { Value, Boolean, Read };
+template<int (*F)(lua_State*), ResultKind Kind> int IoResult(lua_State* L) {
+    std::string code, message;
+    try {
+        const int results = F(L);
+        if (results < 0) return results;
+        lua_pushnil(L);
+        return results + 1;
+    } catch (const Native::IoError& error) {
+        code = error.code; message = error.what();
+    }
+    // Never allocate or raise a Lua exception while a C++ catch is active.
+    if constexpr (Kind == ResultKind::Boolean) lua_pushboolean(L, false);
+    else lua_pushnil(L);
+    if constexpr (Kind == ResultKind::Read) lua_pushboolean(L, false);
+    lua_createtable(L, 0, 2);
+    lua_pushlstring(L, code.data(), code.size()); lua_setfield(L, -2, "code");
+    lua_pushlstring(L, message.data(), message.size()); lua_setfield(L, -2, "message");
+    return Kind == ResultKind::Read ? 3 : 2;
+}
+void Readable(const Handle& handle) {
+    if (!handle.readable) throw Native::IoError("permission_denied", "file was not opened for reading");
+}
+void Writable(const Handle& handle) {
+    if (!handle.writable) throw Native::IoError("permission_denied", "file was not opened for writing");
+}
+[[noreturn]] void StreamError(const Handle& h, const char* operation) {
+    throw Native::GetStreamError(h.stream, operation, h.path);
+}
 int Bytes(lua_State* L, const std::string& bytes) {
     lua_pushlstring(L, bytes.data(), bytes.size()); lua_pushboolean(L, true); return 2;
 }
@@ -63,31 +94,31 @@ int Read(lua_State* L) {
             throw std::invalid_argument("read size is outside the supported byte range");
         remaining = static_cast<std::size_t>(size);
     }
-    if (!handle.readable) return Failure(L);
+    Readable(handle);
     std::string output;
     std::array<char, 64 * 1024> buffer{};
     while (remaining > 0) {
         const auto wanted = std::min(remaining, buffer.size());
         const auto count = SDL_ReadIO(handle.stream, buffer.data(), wanted);
-        if (SDL_GetIOStatus(handle.stream) == SDL_IO_STATUS_ERROR) return Failure(L);
+        if (SDL_GetIOStatus(handle.stream) == SDL_IO_STATUS_ERROR) StreamError(handle, "read");
         output.append(buffer.data(), count);
         remaining -= count;
         if (count < wanted) {
             const auto status = SDL_GetIOStatus(handle.stream);
             if (status == SDL_IO_STATUS_EOF) break;
-            if (status != SDL_IO_STATUS_READY || count == 0) return Failure(L);
+            if (status != SDL_IO_STATUS_READY || count == 0) StreamError(handle, "read");
         }
     }
     return Bytes(L, output);
 }
-enum class LineStatus { Line, End, Error };
+enum class LineStatus { Line, End };
 LineStatus NextLine(Handle& handle, std::string& line) {
     line.clear();
-    if (!handle.readable) return LineStatus::Error;
+    Readable(handle);
     std::array<char, 4096> buffer{};
     for (;;) {
         const auto count = SDL_ReadIO(handle.stream, buffer.data(), buffer.size());
-        if (SDL_GetIOStatus(handle.stream) == SDL_IO_STATUS_ERROR) return LineStatus::Error;
+        if (SDL_GetIOStatus(handle.stream) == SDL_IO_STATUS_ERROR) StreamError(handle, "read line");
         const auto newline = std::find(buffer.begin(), buffer.begin() + count, '\n');
         if (newline != buffer.begin() + count) {
             const auto used = static_cast<std::size_t>(newline - buffer.begin()) + 1;
@@ -95,7 +126,7 @@ LineStatus NextLine(Handle& handle, std::string& line) {
             // Return surplus bytes to the seekable VFS stream. Mixed Read and
             // ReadLine calls, Tell and writes therefore share one exact cursor.
             if (used < count && SDL_SeekIO(handle.stream, -static_cast<Sint64>(count - used), SDL_IO_SEEK_CUR) < 0)
-                return LineStatus::Error;
+                StreamError(handle, "read line");
             if (!line.empty() && line.back() == '\r') line.pop_back();
             return LineStatus::Line;
         }
@@ -103,7 +134,7 @@ LineStatus NextLine(Handle& handle, std::string& line) {
         if (count < buffer.size()) {
             const auto status = SDL_GetIOStatus(handle.stream);
             if (status == SDL_IO_STATUS_EOF) return line.empty() ? LineStatus::End : LineStatus::Line;
-            if (status != SDL_IO_STATUS_READY || count == 0) return LineStatus::Error;
+            if (status != SDL_IO_STATUS_READY || count == 0) StreamError(handle, "read line");
         }
     }
 }
@@ -113,9 +144,8 @@ int ReadLine(lua_State* L) {
     switch (NextLine(OpenHandle(L), line)) {
     case LineStatus::Line: return Bytes(L, line);
     case LineStatus::End: lua_pushnil(L); lua_pushboolean(L, true); return 2;
-    case LineStatus::Error: return Failure(L);
     }
-    return Failure(L);
+    throw std::logic_error("invalid line state");
 }
 int ReadLines(lua_State* L) {
     Count(L, 1, 1);
@@ -125,7 +155,6 @@ int ReadLines(lua_State* L) {
     int index = 0;
     for (;;) {
         const auto status = NextLine(handle, line);
-        if (status == LineStatus::Error) { lua_pop(L, 1); return Failure(L); }
         if (status == LineStatus::End) break;
         if (index == std::numeric_limits<int>::max()) throw std::runtime_error("too many lines for a Lua array");
         lua_pushlstring(L, line.data(), line.size());
@@ -138,47 +167,42 @@ int Write(lua_State* L) {
     Count(L, 2, 2);
     auto& handle = OpenHandle(L);
     const auto bytes = CheckString(L, 2);
-    const bool success = handle.writable && (bytes.empty() ||
-        (SDL_WriteIO(handle.stream, bytes.data(), bytes.size()) == bytes.size() &&
-         SDL_GetIOStatus(handle.stream) == SDL_IO_STATUS_READY));
-    lua_pushboolean(L, success);
+    Writable(handle);
+    if (!bytes.empty() && (SDL_WriteIO(handle.stream, bytes.data(), bytes.size()) != bytes.size() ||
+        SDL_GetIOStatus(handle.stream) != SDL_IO_STATUS_READY)) StreamError(handle, "write");
+    lua_pushboolean(L, true);
     return 1;
 }
 int Seek(lua_State* L) {
     Count(L, 2, 3);
     auto& handle = OpenHandle(L);
     const auto offset = Integer(L, 2);
-    if (offset < -9223372036854775808.0 || offset >= 9223372036854775808.0)
-        throw std::invalid_argument("seek offset must fit a signed 64-bit byte offset");
     const auto whence = lua_isnoneornil(L, 3) ? std::string_view("set") : CheckString(L, 3);
     SDL_IOWhence origin;
     if (whence == "set") origin = SDL_IO_SEEK_SET;
     else if (whence == "cur") origin = SDL_IO_SEEK_CUR;
     else if (whence == "end") origin = SDL_IO_SEEK_END;
     else throw std::invalid_argument("seek whence must be set, cur, or end");
-    if (origin == SDL_IO_SEEK_SET && offset < 0) { lua_pushboolean(L,false); return 1; }
-    // SDL's Windows stream in the pinned version returns false (0) on a
-    // SetFilePointerEx error. Clear/check its error as well as the offset.
-    SDL_ClearError();
-    const auto position = SDL_SeekIO(handle.stream, static_cast<Sint64>(offset), origin);
-    lua_pushboolean(L, position >= 0 && SDL_GetError()[0] == '\0');
+    if (SDL_SeekIO(handle.stream, static_cast<Sint64>(offset), origin) < 0) StreamError(handle, "seek");
+    lua_pushboolean(L, true);
     return 1;
 }
 int Tell(lua_State* L) {
     Count(L, 1, 1);
     auto& handle=OpenHandle(L);
-    SDL_ClearError();
     const auto offset = SDL_TellIO(handle.stream);
-    if (offset < 0 || SDL_GetError()[0] != '\0') lua_pushnil(L); else lua_pushnumber(L, static_cast<double>(offset));
+    if (offset < 0) StreamError(handle, "tell");
+    if (offset > 9007199254740991LL) throw Native::IoError("out_of_range", "file position exceeds exact Lua integer range");
+    lua_pushnumber(L, static_cast<double>(offset));
     return 1;
 }
 int Close(lua_State* L) {
     Count(L, 1, 1);
     auto& handle = OpenHandle(L);
     auto* stream = std::exchange(handle.stream, nullptr);
-    const bool success = SDL_CloseIO(stream); // Invalid even if flush/close fails.
     handle.filesystem.reset();
-    lua_pushboolean(L, success);
+    Native::CloseStream(stream, handle.path); // Invalid even if flush/close fails.
+    lua_pushboolean(L, true);
     return 1;
 }
 int HandleGc(lua_State* L) {
@@ -187,6 +211,8 @@ int HandleGc(lua_State* L) {
         handle->tag = 0;
         if (auto* stream = std::exchange(handle->stream, nullptr)) SDL_CloseIO(stream);
         handle->filesystem.reset();
+        handle->path.clear();
+        handle->~Handle();
     }
     return 0;
 }
@@ -204,10 +230,11 @@ int Open(lua_State* L) {
     // first, then validate and pin its native owner before any further work.
     auto* handle = &detail::PushHandle(L);
     handle->filesystem = FileContext(L).filesystem;
+    handle->path = std::string(path);
     handle->readable = mode.readable;
     handle->writable = mode.writable;
     handle->stream = handle->filesystem->Open(path, mode);
-    if (!handle->stream) { handle->filesystem.reset(); lua_pop(L, 1); lua_pushnil(L); }
+    if (!handle->stream) throw Native::IoError("io_error", "failed to open VFS file");
     return 1;
 }
 int Exists(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type != Native::NodeType::Missing); return 1; }
@@ -216,7 +243,7 @@ int IsDirectory(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L)
 int ListDirectory(lua_State* L) {
     Count(L, 1, 1);
     const auto entries = Filesystem(L).ListDirectory(CheckString(L, 1));
-    if (!entries) { lua_pushnil(L); return 1; }
+    if (!entries) throw Native::IoError("io_error", "failed to list VFS directory");
     if (entries->size() > std::size_t(std::numeric_limits<int>::max())) throw std::runtime_error("too many directory entries for Lua");
     lua_createtable(L, static_cast<int>(entries->size()), 0);
     int index = 0;
@@ -233,12 +260,17 @@ int RunLuaFileChecked(lua_State* L) {
     Count(L, 1, 1);
     const auto status = core::runtime::Lua::RunScript(L, Filesystem(L), CheckString(L, 1));
     if (status == core::runtime::Lua::ScriptStatus::Error) return -2;
-    lua_pushboolean(L, status == core::runtime::Lua::ScriptStatus::Success);
+    if (status == core::runtime::Lua::ScriptStatus::Unreadable) throw Native::IoError("not_found", "VFS script does not exist");
+    lua_pushboolean(L, true);
     return 1;
+}
+int GetScriptPath(lua_State* L) {
+    Count(L, 0, 0);
+    return core::runtime::Lua::PushCallingScriptPath(L);
 }
 int RunLuaFile(lua_State* L) {
     char error[4096]{};
-    const int result = TryFunction<RunLuaFileChecked>(L, error, sizeof(error));
+    const int result = TryFunction<IoResult<RunLuaFileChecked, ResultKind::Boolean>>(L, error, sizeof(error));
     // All C++ scopes have ended before propagating a Lua error on Windows.
     if (result == -2) return lua_error(L);
     if (result < 0) { lua_pushstring(L, error); return lua_error(L); }
@@ -258,8 +290,8 @@ void Register(lua_State* L, std::shared_ptr<const Native::FileSystem> filesystem
     }
     lua_pop(L, 1);
     if (luaL_newmetatable(L, handleType)) {
-        const luaL_Reg methods[] = {{"Read", Guard<Read>}, {"ReadLine", Guard<ReadLine>}, {"ReadLines", Guard<ReadLines>},
-            {"Write", Guard<Write>}, {"Seek", Guard<Seek>}, {"Tell", Guard<Tell>}, {"Close", Guard<Close>}, {nullptr, nullptr}};
+        const luaL_Reg methods[] = {{"Read", Guard<IoResult<Read, ResultKind::Read>>}, {"ReadLine", Guard<IoResult<ReadLine, ResultKind::Read>>}, {"ReadLines", Guard<IoResult<ReadLines, ResultKind::Read>>},
+            {"Write", Guard<IoResult<Write, ResultKind::Boolean>>}, {"Seek", Guard<IoResult<Seek, ResultKind::Boolean>>}, {"Tell", Guard<IoResult<Tell, ResultKind::Value>>}, {"Close", Guard<IoResult<Close, ResultKind::Boolean>>}, {nullptr, nullptr}};
         lua_newtable(L); luaL_register(L, nullptr, methods); lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, HandleGc); lua_setfield(L, -2, "__gc");
         lua_pushliteral(L, "File handle"); lua_setfield(L, -2, "__metatable");
@@ -269,10 +301,10 @@ void Register(lua_State* L, std::shared_ptr<const Native::FileSystem> filesystem
     luaL_getmetatable(L, contextType); lua_setmetatable(L, -2);
     lua_pushlightuserdata(L, &contextKey); lua_pushvalue(L, -2); lua_rawset(L, LUA_REGISTRYINDEX);
     const luaL_Reg functions[] = {
-        {"Open", Guard<Open>}, {"Exists", Guard<Exists>}, {"IsFile", Guard<IsFile>}, {"IsDirectory", Guard<IsDirectory>},
-        {"ListDirectory", Guard<ListDirectory>}, {"CreateDirectory", Guard<CreateDirectory>}, {"Remove", Guard<Remove>},
-        {"Rename", Guard<Rename>}, {"Copy", Guard<Copy>}, {"Move", Guard<Move>}, {"Replace", Guard<Replace>},
-        {"RunLuaFile", RunLuaFile}, {nullptr, nullptr}};
+        {"Open", Guard<IoResult<Open, ResultKind::Value>>}, {"Exists", Guard<IoResult<Exists, ResultKind::Boolean>>}, {"IsFile", Guard<IoResult<IsFile, ResultKind::Boolean>>}, {"IsDirectory", Guard<IoResult<IsDirectory, ResultKind::Boolean>>},
+        {"ListDirectory", Guard<IoResult<ListDirectory, ResultKind::Value>>}, {"CreateDirectory", Guard<IoResult<CreateDirectory, ResultKind::Boolean>>}, {"Remove", Guard<IoResult<Remove, ResultKind::Boolean>>},
+        {"Rename", Guard<IoResult<Rename, ResultKind::Boolean>>}, {"Copy", Guard<IoResult<Copy, ResultKind::Boolean>>}, {"Move", Guard<IoResult<Move, ResultKind::Boolean>>}, {"Replace", Guard<IoResult<Replace, ResultKind::Boolean>>},
+        {"RunLuaFile", RunLuaFile}, {"GetScriptPath", Guard<GetScriptPath>}, {nullptr, nullptr}};
     luaL_openlib(L, "File", functions, 1);
     lua_pop(L, 1);
 }
