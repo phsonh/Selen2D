@@ -1,0 +1,4 @@
+#pragma once
+namespace core::modules::Graphic::Shader::Sampling {
+inline constexpr char Source[]=R"EngineHlsl(@ENGINE_IMAGE_SAMPLING_SOURCE@)EngineHlsl";
+}

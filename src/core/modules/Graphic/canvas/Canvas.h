@@ -23,6 +23,7 @@ struct Info {
     std::uint32_t width{}, height{};
     Bounds bounds;
     bool window{}, threeD{};
+    std::uint32_t logicalWidth{}, logicalHeight{};
 };
 struct Config {
     std::size_t maxCanvases{256};
@@ -56,7 +57,8 @@ public:
     Handle Create(std::uint32_t width, std::uint32_t height, std::optional<Bounds> = {});
     Handle Create3D(std::uint32_t width, std::uint32_t height);
     Handle GetWindowCanvas() const;
-    Info Describe(Handle) const; // Window dimensions resolved now, never cached swapchain pointers.
+    Info Describe(Handle) const;
+    void PublishWindowMetrics(std::uint32_t logicalWidth, std::uint32_t logicalHeight);
     bool Destroy(Handle); // Invalidates new access; already accepted commands keep their pin.
     std::shared_ptr<detail::Attachment> Acquire(Handle) const; // Internal renderer integration only.
     Stats GetStats() const;

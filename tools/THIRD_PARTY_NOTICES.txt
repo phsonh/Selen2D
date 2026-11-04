@@ -8,6 +8,7 @@ Third-party source licenses accompany them in doc/guide/licenses.
 Included components: SDL3 (and its bundled dependencies), LuaJIT,
 nlohmann/json, libogg, libvorbis, dr_wav, stb_image, FreeType, Zstandard,
 libsodium, utf8proc and its Unicode-derived data,
+HarfBuzz, SheenBidi, libunibreak and Unicode text property data,
 and Microsoft DirectX Shader Compiler (DXC, including its LLVM/Clang code).
 SDL local fixes and the stb_image local fix are recorded with their original
 provenance; migration has not modified these vendor sources.
@@ -17,6 +18,14 @@ FreeType portions of this software are copyright (c) The FreeType Project
 the original dual-license materials are retained in doc/guide/licenses/freetype.
 SDL's HIDAPI is used under its BSD option; its original license options and
 copyright statements are preserved in doc/guide/licenses/SDL.
+
+HarfBuzz 12.3.0 uses the notices in doc/guide/licenses/harfbuzz/COPYING,
+including the separately attributed Microsoft USE portions at
+harfbuzz/src/ms-use/COPYING. SheenBidi 3.0.0 uses its MIT notice in
+sheenbidi/LICENSE. libunibreak 8.0 uses its zlib/libpng-style notice in
+unibreak/LICENCE. Unicode 17.0.0 text property tables use Unicode License V3,
+retained at unicode-text/LICENSE.txt. These names refer to subdirectories
+of doc/guide/licenses; none is relicensed as project-owned code.
 
 libsodium is copyright (c) 2013-2026 Frank Denis and is used under the ISC
 License. Its original notice is retained in doc/guide/licenses/libsodium/LICENSE.

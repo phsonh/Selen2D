@@ -1,12 +1,14 @@
 #include "Graphic.h"
 #include "Mesh.h"
 #include "ShaderParams.h"
+#include "TextBinding.h"
 #include "lua_bind/Guard.h"
 #include "lua_bind/modules/Resource/Resource.h"
 #include "core/modules/Resource/ImageProvider.h"
 #include "core/modules/Resource/ShaderProvider.h"
 #include "core/modules/Graphic/render/Renderer.h"
 #include "core/modules/Graphic/geometry/Ribbon.h"
+#include "core/modules/Graphic/text/Text.h"
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -28,7 +30,7 @@ constexpr const char* CanvasType="Solongo.Graphic.Canvas";
 constexpr const char* CameraType="Solongo.Graphic.Camera";
 constexpr const char* PngType="Solongo.Graphic.PngBuffer";
 char ContextKey;
-struct Token { R::Renderer* renderer{}; A::Service* resources{}; };
+struct Token { R::Renderer* renderer{}; A::Service* resources{}; core::modules::Graphic::Text::State text; };
 struct ServiceBox {
     static constexpr std::uint64_t tag=0x5347524150485356ULL;
     std::shared_ptr<Token> token;
@@ -136,6 +138,7 @@ R::Image Image(lua_State* L,int index,Token& host) {
     const auto asset=std::dynamic_pointer_cast<const A::Images::ImageAsset>(Resource::AcquireImage(L,index,*host.resources));
     if(!asset || !asset->texture) throw std::invalid_argument("Resource is not a drawable Image");
     R::Image result;
+    result.alpha=R::Alpha::Premultiplied;
     result.texture=asset->texture->Native(); result.lifetime=asset->texture;
     result.textureWidth=asset->texture->Width(); result.textureHeight=asset->texture->Height();
     result.textureLevels=asset->texture->Levels();
@@ -169,6 +172,12 @@ int CreateCanvasValue(lua_State* L,bool threeD) {
 }
 int CreateCanvas(lua_State* L) { return CreateCanvasValue(L,false); }
 int CreateCanvas3D(lua_State* L) { return CreateCanvasValue(L,true); }
+int CreateMesh(lua_State* L) {
+    auto& service=Module(L); (void)Live(service.token);
+    return MeshBinding::CreateOwned(L,{service.token,[](const std::shared_ptr<void>& owner) {
+        (void)Live(std::static_pointer_cast<Token>(owner));
+    }});
+}
 int WindowCanvas(lua_State* L) {
     Count(L,0,0);
     auto& module=Module(L); auto& host=Live(module.token);
@@ -201,14 +210,15 @@ int GetCanvasPNG(lua_State* L) {
 }
 int Destroy(lua_State* L) {
     Count(L,1,1); auto& box=Require<CanvasBox>(L,1,CanvasType);
-    lua_pushboolean(L,Live(box.token).renderer->Canvases().Destroy(box.handle)); return 1;
+    (void)Live(box.token).renderer->Canvases().Destroy(box.handle); return 0;
 }
 int GetSize(lua_State* L) {
     Count(L,1,1); auto& box=Require<CanvasBox>(L,1,CanvasType);
     const auto info=Live(box.token).renderer->Canvases().Describe(box.handle);
-    lua_pushnumber(L,info.width); lua_pushnumber(L,info.height); return 2;
+    lua_pushnumber(L,info.window ? info.logicalWidth:info.width);
+    lua_pushnumber(L,info.window ? info.logicalHeight:info.height); return 2;
 }
-int GetBounds(lua_State* L) {
+int GetBound(lua_State* L) {
     Count(L,1,1); auto& box=Require<CanvasBox>(L,1,CanvasType);
     const auto info=Live(box.token).renderer->Canvases().Describe(box.handle);
     if(info.threeD) throw std::invalid_argument("Canvas3D has a perspective projection, not 2D bounds");
@@ -223,27 +233,33 @@ int SetTarget(lua_State* L) {
     Count(L,1,1); auto& host=Host(L);
     host.renderer->SetTargetCanvas(Canvas(L,1,host)); return 0;
 }
-int Clear(lua_State* L) { Count(L,0,1); const auto color=lua_isnoneornil(L,1) ? 0xFF000000u : Integer(L,1); Host(L).renderer->Clear(color); return 0; }
+template<bool explicitTarget> int Clear(lua_State* L) {
+    const auto target=ResolveDrawingTarget(L,explicitTarget);
+    Count(L,0,1); const auto color=lua_isnoneornil(L,1) ? 0xFF000000u : Integer(L,1);
+    target.renderer->Clear(color,target.output); return 0;
+}
 int Color(lua_State* L) {
     Count(L,4,4); (void)Host(L);
     const auto value=(Integer(L,1,255)<<24)|(Integer(L,2,255)<<16)|(Integer(L,3,255)<<8)|Integer(L,4,255);
     lua_pushnumber(L,value); return 1;
 }
-int RenderImage(lua_State* L) {
+template<bool explicitTarget> int RenderImage(lua_State* L) {
+    const auto target=ResolveDrawingTarget(L,explicitTarget);
     Count(L,3,9);
     R::Transform transform{Number(L,2),Number(L,3),Optional(L,4,0),Optional(L,5,1),1};
     transform.scaleY=Optional(L,6,transform.scaleX);
-    const auto paint=Paint(L,7); auto& host=Host(L);
-    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderImage(Canvas(L,1,host),transform,paint);
-    else host.renderer->RenderImage(Image(L,1,host),transform,paint);
+    const auto paint=Paint(L,7); auto& host=*std::static_pointer_cast<Token>(target.contextLifetime);
+    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderImage(Canvas(L,1,host),transform,paint,target.output);
+    else host.renderer->RenderImage(Image(L,1,host),transform,paint,target.output);
     return 0;
 }
-int RenderRect(lua_State* L) {
+template<bool explicitTarget> int RenderRect(lua_State* L) {
+    const auto target=ResolveDrawingTarget(L,explicitTarget);
     Count(L,5,8);
     const auto l=Number(L,2),r=Number(L,3),b=Number(L,4),t=Number(L,5);
-    const auto paint=Paint(L,6); auto& host=Host(L);
-    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderRect(Canvas(L,1,host),l,r,b,t,paint);
-    else host.renderer->RenderRect(Image(L,1,host),l,r,b,t,paint);
+    const auto paint=Paint(L,6); auto& host=*std::static_pointer_cast<Token>(target.contextLifetime);
+    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderRect(Canvas(L,1,host),l,r,b,t,paint,target.output);
+    else host.renderer->RenderRect(Image(L,1,host),l,r,b,t,paint,target.output);
     return 0;
 }
 // Raw tuples have no metamethods and no implicit coordinates/default vertex
@@ -270,7 +286,10 @@ int CanvasIndex(lua_State* L) {
     Count(L,2,2); auto& box=Require<CanvasBox>(L,1,CanvasType);
     auto& renderer=*Live(box.token).renderer;
     const auto key=CheckString(L,2);
+    // Destroy must remain retrievable after the first call for idempotence.
+    const bool threeD=key=="Destroy" ? false:renderer.Canvases().Describe(box.handle).threeD;
     if(key=="Camera") {
+        if(!threeD) { lua_pushnil(L); return 1; }
         (void)renderer.GetSpatialState(box.handle);
         lua_getfenv(L,1); lua_getfield(L,-1,"Camera");
         if(!lua_isnil(L,-1)) return 1;
@@ -278,7 +297,11 @@ int CanvasIndex(lua_State* L) {
         auto** slot=NewSlot<CameraBox>(L,CameraType); *slot=new CameraBox{box.token,box.handle};
         lua_pushvalue(L,-1); lua_setfield(L,-3,"Camera"); return 1;
     }
-    if((key=="SetPerspective" || key=="OpenZBuffer" || key=="CloseZBuffer" || key=="SetFog") && !renderer.Canvases().Describe(box.handle).threeD) {
+    const bool only3D=key=="SetPerspective" || key=="GetPerspective" || key=="OpenZBuffer" ||
+        key=="CloseZBuffer" || key=="IsZBufferEnabled" || key=="SetFog" || key=="GetFog";
+    const bool only2D=key=="GetBound" || key=="RenderImage" || key=="RenderRect" ||
+        key=="RenderRibbon" || key=="RenderText";
+    if((only3D && !threeD) || (only2D && threeD)) {
         lua_pushnil(L); return 1;
     }
     luaL_getmetatable(L,CanvasType); lua_getfield(L,-1,"methods"); lua_pushvalue(L,2); lua_rawget(L,-2); return 1;
@@ -309,6 +332,11 @@ int Perspective(lua_State* L) {
     auto state=renderer.GetSpatialState(box.handle); state.perspective={Number(L,2),Number(L,3),Number(L,4)};
     renderer.SetSpatialState(box.handle,state); return 0;
 }
+int GetPerspective(lua_State* L) {
+    Count(L,1,1); auto& box=Require<CanvasBox>(L,1,CanvasType);
+    const auto value=Live(box.token).renderer->GetSpatialState(box.handle).perspective;
+    lua_pushnumber(L,value.fov); lua_pushnumber(L,value.nearPlane); lua_pushnumber(L,value.farPlane); return 3;
+}
 int Depth(lua_State* L,bool enabled) {
     Count(L,1,1); auto& box=Require<CanvasBox>(L,1,CanvasType); auto& renderer=*Live(box.token).renderer;
     auto state=renderer.GetSpatialState(box.handle); state.depthEnabled=enabled;
@@ -316,6 +344,10 @@ int Depth(lua_State* L,bool enabled) {
 }
 int OpenDepth(lua_State* L) { return Depth(L,true); }
 int CloseDepth(lua_State* L) { return Depth(L,false); }
+int IsDepthEnabled(lua_State* L) {
+    Count(L,1,1); auto& box=Require<CanvasBox>(L,1,CanvasType);
+    lua_pushboolean(L,Live(box.token).renderer->GetSpatialState(box.handle).depthEnabled); return 1;
+}
 int Fog(lua_State* L) {
     Count(L,2,6); auto& box=Require<CanvasBox>(L,1,CanvasType); auto& renderer=*Live(box.token).renderer;
     auto state=renderer.GetSpatialState(box.handle);
@@ -337,28 +369,39 @@ int Fog(lua_State* L) {
     }
     renderer.SetSpatialState(box.handle,state); return 0;
 }
-int RenderQuad(lua_State* L) {
+int GetFog(lua_State* L) {
+    Count(L,1,1); auto& box=Require<CanvasBox>(L,1,CanvasType);
+    const auto fog=Live(box.token).renderer->GetSpatialState(box.handle).fog;
+    if(!fog) { lua_pushnil(L); return 1; }
+    constexpr std::string_view rgb[]{"lerp","add","sub","mul","screen"},alpha[]{"keep","mul","fade"};
+    const std::string blend=std::string(rgb[static_cast<int>(fog->rgb)])+"+"+std::string(alpha[static_cast<int>(fog->alpha)]);
+    lua_pushnumber(L,fog->start); lua_pushnumber(L,fog->end); lua_pushinteger(L,fog->mode);
+    lua_pushnumber(L,fog->color); lua_pushlstring(L,blend.data(),blend.size()); return 5;
+}
+template<bool explicitTarget> int RenderQuad(lua_State* L) {
+    const auto target=ResolveDrawingTarget(L,explicitTarget);
     Count(L,5,8);
-    auto& host=Host(L);
-    if(host.renderer->GetTargetInfo().threeD) {
+    auto& host=*std::static_pointer_cast<Token>(target.contextLifetime);
+    if(host.renderer->GetTargetInfo(target.output).threeD) {
         Count(L,5,7); S::Quad3 corners;
         for(int i=0;i<4;++i) { Tuple(L,i+2,3); corners[i]={Component(L,i+2,1),Component(L,i+2,2),Component(L,i+2,3)}; }
         const auto color=lua_isnoneornil(L,6) ? 0xFFFFFFFFu : Integer(L,6); const auto blend=Blend(L,7);
-        if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderQuad3D(Canvas(L,1,host),corners,color,blend);
-        else host.renderer->RenderQuad3D(Image(L,1,host),corners,color,blend);
+        if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderQuad3D(Canvas(L,1,host),corners,color,blend,target.output);
+        else host.renderer->RenderQuad3D(Image(L,1,host),corners,color,blend,target.output);
         return 0;
     }
     core::modules::Graphic::Geometry::Quad corners{};
     for(int i=0;i<4;++i) { Tuple(L,i+2,2); corners[i]={Component(L,i+2,1),Component(L,i+2,2)}; }
     const auto paint=Paint(L,6);
-    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderQuad(Canvas(L,1,host),corners,paint);
-    else host.renderer->RenderQuad(Image(L,1,host),corners,paint);
+    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderQuad(Canvas(L,1,host),corners,paint,target.output);
+    else host.renderer->RenderQuad(Image(L,1,host),corners,paint,target.output);
     return 0;
 }
-int Render4V(lua_State* L) {
+template<bool explicitTarget> int Render4V(lua_State* L) {
+    const auto target=ResolveDrawingTarget(L,explicitTarget);
     Count(L,5,7);
-    auto& host=Host(L);
-    if(host.renderer->GetTargetInfo().threeD) {
+    auto& host=*std::static_pointer_cast<Token>(target.contextLifetime);
+    if(host.renderer->GetTargetInfo(target.output).threeD) {
         Count(L,5,6); R::QuadVertices3 vertices;
         for(int i=0;i<4;++i) {
             Tuple(L,i+2,6); auto& v=vertices[i];
@@ -367,8 +410,8 @@ int Render4V(lua_State* L) {
             lua_rawgeti(L,i+2,6); v.color=Integer(L,-1); lua_pop(L,1);
         }
         const auto blend=Blend(L,6);
-        if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->Render4V3D(Canvas(L,1,host),vertices,blend);
-        else host.renderer->Render4V3D(Image(L,1,host),vertices,blend);
+        if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->Render4V3D(Canvas(L,1,host),vertices,blend,target.output);
+        else host.renderer->Render4V3D(Image(L,1,host),vertices,blend,target.output);
         return 0;
     }
     R::QuadVertices vertices{};
@@ -379,11 +422,12 @@ int Render4V(lua_State* L) {
         lua_rawgeti(L,i+2,5); v.color=Integer(L,-1); lua_pop(L,1);
     }
     const auto blend=Blend(L,6); const auto layer=Optional(L,7,0);
-    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->Render4V(Canvas(L,1,host),vertices,blend,layer);
-    else host.renderer->Render4V(Image(L,1,host),vertices,blend,layer);
+    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->Render4V(Canvas(L,1,host),vertices,blend,layer,target.output);
+    else host.renderer->Render4V(Image(L,1,host),vertices,blend,layer,target.output);
     return 0;
 }
-int RenderRibbon(lua_State* L) {
+template<bool explicitTarget> int RenderRibbon(lua_State* L) {
+    const auto target=ResolveDrawingTarget(L,explicitTarget);
     Count(L,6,7);
     if(lua_type(L,2)!=LUA_TTABLE) throw std::invalid_argument("Ribbon points must be an array of {x,y}");
     const auto count=lua_objlen(L,2);
@@ -400,9 +444,9 @@ int RenderRibbon(lua_State* L) {
     (void)CheckString(L,5); // Unlike other primitives, Ribbon requires explicit color/blend/layer.
     const R::Paint paint{Integer(L,4),Blend(L,5),Number(L,6)};
     if(!lua_isnoneornil(L,7) && lua_type(L,7)!=LUA_TBOOLEAN) throw std::invalid_argument("Ribbon closed must be a boolean");
-    const bool closed=lua_toboolean(L,7)!=0; auto& host=Host(L);
-    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderRibbon(Canvas(L,1,host),points,width,paint,closed);
-    else host.renderer->RenderRibbon(Image(L,1,host),points,width,paint,closed);
+    const bool closed=lua_toboolean(L,7)!=0; auto& host=*std::static_pointer_cast<Token>(target.contextLifetime);
+    if(TrySlot<CanvasBox>(L,1,CanvasType)) host.renderer->RenderRibbon(Canvas(L,1,host),points,width,paint,closed,target.output);
+    else host.renderer->RenderRibbon(Image(L,1,host),points,width,paint,closed,target.output);
     return 0;
 }
 R::ShaderStageData ShaderStage(ShaderParams::Stage stage) {
@@ -420,14 +464,15 @@ R::ShaderStageData ShaderStage(ShaderParams::Stage stage) {
     }
     return result;
 }
-int RenderShader(lua_State* L) {
+template<bool explicitTarget> int RenderShader(lua_State* L) {
+    const auto output=ResolveDrawingTarget(L,explicitTarget);
     Count(L,2,4);
     // Reserve before acquiring Program/Image/Mesh pins. The remaining Lua
     // operations are raw reads, with no metamethods, callbacks or allocations.
     if(!lua_checkstack(L,24)) throw std::runtime_error("Graphic.Render Lua stack capacity exceeded");
-    auto& host=Host(L);
-    const auto target=host.renderer->GetTargetCanvas();
-    const bool threeD=host.renderer->GetTargetInfo().threeD;
+    auto& host=*std::static_pointer_cast<Token>(output.contextLifetime);
+    const auto target=output.output ? *output.output:host.renderer->GetTargetCanvas();
+    const bool threeD=host.renderer->GetTargetInfo(output.output).threeD;
     if(threeD) Count(L,2,3);
     const double layer=threeD ? 0:Optional(L,3,0);
     const int meshIndex=threeD ? 3:4;
@@ -463,7 +508,7 @@ int RenderShader(lua_State* L) {
         sources.emplace(std::string(field),std::move(source));
     };
     auto packed=[&] {
-        try { return ShaderParams::Pack(L,2,draw.program->Metadata(),resolve); }
+        try { return ShaderParams::Pack(L,2,draw.program->Metadata(),threeD,resolve); }
         catch(const std::invalid_argument& error) {
             // Metadata identifies the source path; include the logical name
             // too, since several registered shaders may share that same file.
@@ -475,7 +520,7 @@ int RenderShader(lua_State* L) {
         if(packed.textures[i].provided) draw.sources[i]=std::move(sources.at(packed.textures[i].name));
     draw.vertex=ShaderStage(std::move(packed.vertex));
     draw.fragment=ShaderStage(std::move(packed.fragment));
-    host.renderer->RenderShader(std::move(draw));
+    host.renderer->RenderShader(std::move(draw),output.output);
     return 0;
 }
 void Metatable(lua_State* L,const char* name,lua_CFunction collect,const luaL_Reg* methods=nullptr) {
@@ -488,6 +533,32 @@ void Metatable(lua_State* L,const char* name,lua_CFunction collect,const luaL_Re
     }
     lua_pop(L,1);
 }
+}
+DrawingTarget ResolveDrawingTarget(lua_State* L,bool explicitTarget) {
+    DrawingTarget target;
+    std::shared_ptr<Token> token;
+    if(explicitTarget) {
+        auto& box=Require<CanvasBox>(L,1,CanvasType);
+        token=box.token;
+        auto& host=Live(token);
+        (void)host.renderer->Canvases().Describe(box.handle);
+        target.output=box.handle;
+        lua_remove(L,1);
+    } else token=Module(L).token;
+    auto& host=Live(token);
+    target.renderer=host.renderer; target.resources=host.resources; target.text=&host.text;
+    target.contextLifetime=std::move(token);
+    return target;
+}
+void ValidateTextTarget(const DrawingTarget& target,std::string_view blend) {
+    if(target.renderer->GetTargetInfo(target.output).threeD)
+        throw std::invalid_argument("RenderText requires a 2D Canvas target");
+    if(!R::ParseBlend(blend)) throw std::invalid_argument("RenderText: unknown blend mode");
+}
+void SubmitText(const DrawingTarget& target,std::shared_ptr<const core::modules::Graphic::Text::LayoutResult> layout,
+    double x,double y,std::uint32_t color,std::string_view blend,double layer) {
+    ValidateTextTarget(target,blend);
+    target.renderer->RenderText(std::move(layout),x,y,color,*R::ParseBlend(blend),layer,target.output);
 }
 struct Context::Impl {
     lua_State* state;
@@ -510,8 +581,13 @@ void Register(lua_State* L,Context& context) {
     if(existing && *existing && (*existing)->token->renderer && (*existing)->token!=context.impl->token)
         throw std::logic_error("only one live Graphic Context may register in a Lua state");
     lua_pop(L,1);
-    const luaL_Reg methods[]={{"GetSize",Guard<GetSize>},{"GetBounds",Guard<GetBounds>},{"Destroy",Guard<Destroy>},
-        {"SetPerspective",Guard<Perspective>},{"OpenZBuffer",Guard<OpenDepth>},{"CloseZBuffer",Guard<CloseDepth>},{"SetFog",Guard<Fog>},{nullptr,nullptr}};
+    const luaL_Reg methods[]={{"GetSize",Guard<GetSize>},{"GetBound",Guard<GetBound>},{"Destroy",Guard<Destroy>},
+        {"SetPerspective",Guard<Perspective>},{"GetPerspective",Guard<GetPerspective>},
+        {"OpenZBuffer",Guard<OpenDepth>},{"CloseZBuffer",Guard<CloseDepth>},{"IsZBufferEnabled",Guard<IsDepthEnabled>},
+        {"SetFog",Guard<Fog>},{"GetFog",Guard<GetFog>},
+        {"Clear",Guard<Clear<true>>},{"RenderImage",Guard<RenderImage<true>>},{"RenderRect",Guard<RenderRect<true>>},
+        {"RenderQuad",Guard<RenderQuad<true>>},{"Render4V",Guard<Render4V<true>>},{"RenderRibbon",Guard<RenderRibbon<true>>},
+        {"Render",Guard<RenderShader<true>>},{"RenderText",TextBinding::RenderTextToCanvas},{nullptr,nullptr}};
     Metatable(L,ServiceType,Guard<CollectService>);
     Metatable(L,CanvasType,Guard<CollectCanvas>,methods);
     luaL_getmetatable(L,CanvasType); lua_getfield(L,-1,"__index"); lua_setfield(L,-2,"methods");
@@ -528,15 +604,18 @@ void Register(lua_State* L,Context& context) {
     lua_setmetatable(L,-2); lua_setfenv(L,service); // Per-context weak Canvas wrapper cache.
     lua_pushlightuserdata(L,&ContextKey); lua_pushvalue(L,service); lua_rawset(L,LUA_REGISTRYINDEX);
     const luaL_Reg functions[]={
-        {"Mesh",Guard<MeshBinding::Create>},
-        {"Canvas",Guard<CreateCanvas>},{"Canvas3D",Guard<CreateCanvas3D>},{"GetWindowCanvas",Guard<WindowCanvas>},
+        {"Mesh",Guard<CreateMesh>},
+        {"CreateCanvas",Guard<CreateCanvas>},{"CreateCanvas3D",Guard<CreateCanvas3D>},{"GetWindowCanvas",Guard<WindowCanvas>},
         {"GetTargetCanvas",Guard<CurrentCanvas>},{"SetTargetCanvas",Guard<SetTarget>},{"GetCanvasPNG",Guard<GetCanvasPNG>},
-        {"Clear",Guard<Clear>},{"Color",Guard<Color>},{"RenderImage",Guard<RenderImage>},{"RenderRect",Guard<RenderRect>},
-        {"RenderQuad",Guard<RenderQuad>},{"Render4V",Guard<Render4V>},{"RenderRibbon",Guard<RenderRibbon>},
-        {"Render",Guard<RenderShader>},{nullptr,nullptr}
+        {"Clear",Guard<Clear<false>>},{"Color",Guard<Color>},{"RenderImage",Guard<RenderImage<false>>},{"RenderRect",Guard<RenderRect<false>>},
+        {"RenderQuad",Guard<RenderQuad<false>>},{"Render4V",Guard<Render4V<false>>},{"RenderRibbon",Guard<RenderRibbon<false>>},
+        {"Render",Guard<RenderShader<false>>},{nullptr,nullptr}
     };
     lua_newtable(L); const int module=lua_gettop(L);
     for(const auto* f=functions;f->name;++f) {
+        lua_pushvalue(L,service); lua_pushcclosure(L,f->func,1); lua_setfield(L,module,f->name);
+    }
+    for(const auto* f=TextBinding::Functions();f->name;++f) {
         lua_pushvalue(L,service); lua_pushcclosure(L,f->func,1); lua_setfield(L,module,f->name);
     }
     // A new table prevents saved old modules from silently reconnecting on restart.

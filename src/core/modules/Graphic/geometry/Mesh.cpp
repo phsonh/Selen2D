@@ -26,8 +26,9 @@ std::shared_ptr<const MeshData> MeshData::Create(std::span<const MeshInputVertex
         limits.maxVertices > std::numeric_limits<std::size_t>::max() / sizeof(MeshVertex) ||
         limits.maxIndices > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t))
         throw std::invalid_argument("invalid Mesh capacity limits");
-    if (vertices.size() < 3 || indices.size() < 3 || indices.size() % 3)
-        throw std::invalid_argument("Mesh requires at least three vertices and a nonempty triangle index list");
+    const bool empty = vertices.empty() && indices.empty();
+    if (!empty && (vertices.size() < 3 || indices.size() < 3 || indices.size() % 3))
+        throw std::invalid_argument("Mesh requires both arrays empty or at least three vertices and triangle indices");
     if (vertices.size() > limits.maxVertices || indices.size() > limits.maxIndices ||
         indices.size() > (std::numeric_limits<std::size_t>::max() - vertices.size() * sizeof(MeshVertex)) / sizeof(std::uint32_t))
         throw std::length_error("Mesh vertex/index capacity exceeded");

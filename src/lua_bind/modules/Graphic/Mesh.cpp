@@ -12,7 +12,8 @@ namespace {
 namespace G = core::modules::Graphic::Geometry;
 constexpr const char* Type = "Solongo.Graphic.Mesh";
 constexpr std::uint64_t Tag = 0x53474D4553483031ULL;
-struct Slot { std::uint64_t tag{Tag}; std::shared_ptr<const Mesh>* value{}; };
+struct Box { std::shared_ptr<const Mesh> data; Owner owner; };
+struct Slot { std::uint64_t tag{Tag}; Box* value{}; };
 void Stack(lua_State* L) {
     if (!L || !lua_checkstack(L, 12)) throw std::runtime_error("Mesh requires a valid Lua state with available stack space");
 }
@@ -77,42 +78,44 @@ void Register(lua_State* L) {
     if (luaL_newmetatable(L, Type)) {
         lua_pushcfunction(L, Guard<Collect>); lua_setfield(L, -2, "__gc");
         lua_pushstring(L, Type); lua_setfield(L, -2, "__metatable");
-        lua_newtable(L); lua_setfield(L, -2, "__index"); // No Update/Destroy or mutable properties.
+        lua_newtable(L);
+        lua_pushcfunction(L, Guard<Update>); lua_setfield(L, -2, "Update");
+        lua_setfield(L, -2, "__index"); // No Destroy or mutable properties.
     }
     lua_pop(L, 1);
 }
-void Push(lua_State* L, const std::shared_ptr<const Mesh>& mesh) {
+void Push(lua_State* L, const std::shared_ptr<const Mesh>& mesh, Owner owner) {
     if (!mesh) throw std::invalid_argument("cannot push a null Mesh");
+    owner.Check();
     auto* slot = NewSlot(L);
-    slot->value = new std::shared_ptr<const Mesh>(mesh);
+    slot->value = new Box{mesh,std::move(owner)};
 }
 bool Is(lua_State* L, int index) {
     Stack(L);
     const auto* slot = Try(L, index);
-    return slot && slot->value && *slot->value;
+    if (!slot || !slot->value || !slot->value->data) return false;
+    slot->value->owner.Check();
+    return true;
 }
 std::shared_ptr<const Mesh> Pin(lua_State* L, int index) {
     Stack(L);
     const auto* slot = Try(L, index);
-    if (!slot || !slot->value || !*slot->value) throw std::invalid_argument("expected a live Graphic Mesh userdata");
-    return *slot->value;
+    if (!slot || !slot->value || !slot->value->data) throw std::invalid_argument("expected a live Graphic Mesh userdata");
+    slot->value->owner.Check();
+    return slot->value->data;
 }
-int Create(lua_State* L) {
-    Stack(L);
-    if (lua_gettop(L) != 2) throw std::invalid_argument("Graphic.Mesh expects vertices and indices");
-    // Allocate the GC shell before owning any native buffers. Parsing uses only
-    // raw Lua access with reserved stack space, never metamethods or callbacks.
-    auto* slot = NewSlot(L);
+namespace {
+std::shared_ptr<const Mesh> Parse(lua_State* L, int vertexIndex, int indexIndex) {
     const G::MeshLimits limits;
-    const auto vertexCount = Dense(L, 1, limits.maxVertices, "Mesh vertices");
-    const auto indexCount = Dense(L, 2, limits.maxIndices, "Mesh indices");
-    if (vertexCount < 3 || indexCount < 3 || indexCount % 3)
-        throw std::invalid_argument("Mesh requires at least three vertices and a nonempty triangle index list");
+    const auto vertexCount = Dense(L, vertexIndex, limits.maxVertices, "Mesh vertices");
+    const auto indexCount = Dense(L, indexIndex, limits.maxIndices, "Mesh indices");
+    if ((vertexCount || indexCount) && (vertexCount < 3 || indexCount < 3 || indexCount % 3))
+        throw std::invalid_argument("Mesh requires both arrays empty or at least three vertices and triangle indices");
     std::vector<G::MeshInputVertex> vertices;
     std::vector<std::uint32_t> indices;
     vertices.reserve(vertexCount); indices.reserve(indexCount);
     for (std::size_t i = 0; i < vertexCount; ++i) {
-        lua_rawgeti(L, 1, static_cast<int>(i + 1));
+        lua_rawgeti(L, vertexIndex, static_cast<int>(i + 1));
         const auto table = lua_gettop(L);
         if (Dense(L, table, 6, "Mesh vertex") != 6)
             throw std::invalid_argument("Mesh vertex must contain exactly x,y,z,u,v,color");
@@ -126,13 +129,38 @@ int Create(lua_State* L) {
         vertices.push_back(vertex); lua_pop(L, 1);
     }
     for (std::size_t i = 0; i < indexCount; ++i) {
-        lua_rawgeti(L, 2, static_cast<int>(i + 1));
+        lua_rawgeti(L, indexIndex, static_cast<int>(i + 1));
         const auto index = Number(L, -1, "Mesh index");
         if (index < 1 || index > vertexCount || std::floor(index) != index)
             throw std::invalid_argument("Mesh indices must be integers in [1,vertexCount]");
         indices.push_back(static_cast<std::uint32_t>(index - 1)); lua_pop(L, 1);
     }
-    slot->value = new std::shared_ptr<const Mesh>(G::MeshData::Create(vertices, indices, limits));
+    return G::MeshData::Create(vertices, indices, limits);
+}
+}
+int Create(lua_State* L) {
+    return CreateOwned(L,{});
+}
+int CreateOwned(lua_State* L, Owner owner) {
+    owner.Check();
+    Stack(L);
+    if (lua_gettop(L) != 2) throw std::invalid_argument("Graphic.Mesh expects vertices and indices");
+    // Allocate the GC shell before owning any native buffers. Parsing uses only
+    // raw Lua access with reserved stack space, never metamethods or callbacks.
+    auto* slot = NewSlot(L);
+    slot->value = new Box{Parse(L, 1, 2),std::move(owner)};
     return 1;
+}
+int Update(lua_State* L) {
+    Stack(L);
+    if (lua_gettop(L) != 3) throw std::invalid_argument("Mesh.Update expects self, vertices and indices");
+    auto* slot = Try(L, 1);
+    if (!slot || !slot->value || !slot->value->data) throw std::invalid_argument("expected a live Graphic Mesh userdata");
+    slot->value->owner.Check();
+    // Complete validation and allocation before publishing the replacement.
+    // An old Draw owns its own shared_ptr and is never rewritten here.
+    auto replacement = Parse(L, 2, 3);
+    slot->value->data.swap(replacement);
+    return 0;
 }
 }

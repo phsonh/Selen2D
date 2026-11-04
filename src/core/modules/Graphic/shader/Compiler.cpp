@@ -1,4 +1,5 @@
 #include "Compiler.h"
+#include "Sampling.h"
 #include "core/modules/File/Vfs.h"
 #include <algorithm>
 #include <atomic>
@@ -23,9 +24,10 @@
 namespace core::modules::Graphic::Shader {
 std::size_t Compiled::ResidentBytes() const noexcept {
     std::size_t result=sizeof(*this)+path.capacity()+model.source.capacity();
-    result+=model.declarations.capacity()*sizeof(Declaration)+model.parameters.capacity()*sizeof(Parameter);
-    for(const auto& d:model.declarations) result+=d.name.capacity()+d.location.file.capacity();
+    result+=model.declarations.capacity()*sizeof(Declaration)+model.parameters.capacity()*sizeof(Parameter)+model.sampling.capacity()*sizeof(SamplingCall);
+    for(const auto& d:model.declarations) result+=d.name.capacity()+d.location.file.capacity()+d.mainTexture.capacity();
     for(const auto& p:model.parameters) result+=p.name.capacity()+p.location.file.capacity();
+    for(const auto& c:model.sampling) result+=c.texture.capacity();
     for(const auto* s:{&vertex,&fragment}) {
         result+=s->code.capacity()+s->entry.capacity()+s->textures.capacity()*sizeof(TextureBinding)+s->buffers.capacity()*sizeof(BufferBinding);
         for(const auto& t:s->textures) result+=t.name.capacity();
@@ -94,13 +96,25 @@ void ValidateDirectives(std::string_view input,const std::string& path) {
             const auto directive=std::string_view(text).substr(start,end-start);
             if(directive=="line" || (!directive.empty() && directive.front()>='0' && directive.front()<='9'))
                 throw std::invalid_argument(path+":"+std::to_string(line)+":1: user #line is unsupported (engine source identities are reserved)");
+            if(directive=="include") {
+                trivia(end);
+                if(end<text.size() && (text[end]=='"' || text[end]=='<')) {
+                    const auto close=text[end]=='"'?'"':'>';
+                    const auto begin=++end;
+                    while(end<text.size() && text[end]!=close && text[end]!='\n') ++end;
+                    if(end==text.size() || text[end]!=close)
+                        throw std::invalid_argument(path+":"+std::to_string(line)+":1: unterminated Shader include path");
+                    try {if(!File::Normalize(std::string_view(text).substr(begin,end-begin))) throw std::invalid_argument("invalid path");}
+                    catch(const std::exception&) {throw std::invalid_argument(path+":"+std::to_string(line)+":1: Shader include requires a strict relative VFS path without '.' or '..' components");}
+                }
+            }
             if(directive=="define" || directive=="undef") {
                 trivia(end);
                 const auto begin=end;
                 while(end<text.size() && ((text[end]>='a'&&text[end]<='z') || (text[end]>='A'&&text[end]<='Z') ||
                     (text[end]>='0'&&text[end]<='9') || text[end]=='_')) ++end;
                 const auto name=std::string_view(text).substr(begin,end-begin);
-                if(name.starts_with("Solongo") || name=="VSInput" || name=="PSInput" || name=="SOLONGO_HLSL")
+                if(name.starts_with("Engine") || name=="VSInput" || name=="PSInput" || name=="ENGINE_HLSL")
                     throw std::invalid_argument(path+":"+std::to_string(line)+":1: reserved Shader ABI macro");
             }
         }
@@ -108,9 +122,9 @@ void ValidateDirectives(std::string_view input,const std::string& path) {
     }
 }
 
-constexpr const char* Builtin=R"HLSL(#line 1 "Solongo.hlsl"
-#ifndef SOLONGO_HLSL
-#define SOLONGO_HLSL
+constexpr const char* Builtin=R"HLSL(#line 1 "Engine.hlsl"
+#ifndef ENGINE_HLSL
+#define ENGINE_HLSL
 struct VSInput {
     float3 position : POSITION0;
     float2 uv : TEXCOORD0;
@@ -122,28 +136,27 @@ struct PSInput {
     float4 color : COLOR0;
     float3 worldPosition : TEXCOORD1;
 };
-cbuffer SolongoBuiltins {
-    column_major float4x4 SolongoView;
-    column_major float4x4 SolongoProjection;
-    column_major float4x4 SolongoViewProjection;
-    column_major float4x4 SolongoCanvasToClip;
-    float2 SolongoTargetSize;
-    float2 SolongoTargetInvSize;
-    uint SolongoIsFullscreen;
-    uint SolongoIs3D;
+cbuffer EngineBuiltins {
+    column_major float4x4 EngineView;
+    column_major float4x4 EngineProjection;
+    column_major float4x4 EngineViewProjection;
+    column_major float4x4 EngineCanvasToClip;
+    float2 EngineTargetSize;
+    float2 EngineTargetInvSize;
+    uint EngineIsFullscreen;
 };
 #endif
 )HLSL";
 // The public VSInput ABI differs from SDL's fixed TEXCOORD vertex attributes.
 // Keep that adaptation entirely inside the compiler boundary.
 constexpr const char* Adapter=R"HLSL(
-#line 1 "Solongo.generated.hlsl"
-struct SolongoNativeInput {
+#line 1 "Engine.generated.hlsl"
+struct EngineNativeInput {
     float3 position : TEXCOORD0;
     float2 uv : TEXCOORD1;
     float4 color : TEXCOORD2;
 };
-PSInput SolongoVertexEntry(SolongoNativeInput nativeInput) {
+PSInput EngineVertexEntry(EngineNativeInput nativeInput) {
     VSInput input;
     input.position=nativeInput.position;
     input.uv=nativeInput.uv;
@@ -152,12 +165,12 @@ PSInput SolongoVertexEntry(SolongoNativeInput nativeInput) {
 }
 )HLSL";
 constexpr const char* DefaultVertex=R"HLSL(
-#line 1 "Solongo.generated.hlsl"
+#line 1 "Engine.generated.hlsl"
 PSInput VSMain(VSInput input) {
     PSInput result;
     float4 p=float4(input.position,1.0);
-    result.position=SolongoIsFullscreen!=0 ? p :
-        (SolongoIs3D!=0 ? mul(SolongoViewProjection,p) : mul(SolongoCanvasToClip,p));
+    result.position=EngineIsFullscreen!=0 ? p :
+        (EngineTargetKind.x>0.5 ? mul(EngineViewProjection,p) : mul(EngineCanvasToClip,p));
     result.uv=input.uv;
     result.color=input.color;
     result.worldPosition=input.position;
@@ -169,18 +182,18 @@ PSInput VSMain(VSInput input) {
 // source. They never enter Model::declarations or its Lua parameter inventory.
 // Fields are reflected and uploaded like user buffers, rather than relying on
 // a hardcoded GPU register or assuming optimization preserves a whole block.
-constexpr const char* DrawStateName="SolongoDrawState";
-constexpr const char* FogDistanceName="SolongoFogDistance";
+constexpr const char* DrawStateName="EngineDrawState";
+constexpr const char* FogDistanceName="EngineFogDistance";
 constexpr const char* FragmentFunctions=R"HLSL(
-float SolongoStableLength(float3 value) {
+float EngineStableLength(float3 value) {
     float scale=max(abs(value.x),max(abs(value.y),abs(value.z)));
     if(scale==0) return 0;
     precise float3 normalized=value/scale;
     return scale*length(normalized);
 }
-float4 SolongoFogBase(float4 baseColor,float cameraDistance) {
-    float t=saturate((cameraDistance-SolongoFogRange.x)/(SolongoFogRange.y-SolongoFogRange.x));
-    int mode=(int)SolongoFogRange.z;
+float4 EngineFogBase(float4 baseColor,float cameraDistance) {
+    float t=saturate((cameraDistance-EngineFogRange.x)/(EngineFogRange.y-EngineFogRange.x));
+    int mode=(int)EngineFogRange.z;
     float v=mode>=4 ? 1-t : t;
     float factor=v;
     if(mode!=0) {
@@ -189,19 +202,19 @@ float4 SolongoFogBase(float4 baseColor,float cameraDistance) {
         if(mode==3 || mode==6) factor*=v;
     }
     if(mode>=4) factor=1-factor;
-    int rgbMode=(int)SolongoFogOps.x;
-    if(rgbMode==0) baseColor.rgb=lerp(baseColor.rgb,SolongoFogColor.rgb,factor);
-    else if(rgbMode==1) baseColor.rgb+=SolongoFogColor.rgb*factor;
-    else if(rgbMode==2) baseColor.rgb-=SolongoFogColor.rgb*factor;
-    else if(rgbMode==3) baseColor.rgb*=1-factor+SolongoFogColor.rgb*factor;
-    else baseColor.rgb=lerp(baseColor.rgb,1-(1-baseColor.rgb)*(1-SolongoFogColor.rgb),factor);
+    int rgbMode=(int)EngineFogOps.x;
+    if(rgbMode==0) baseColor.rgb=lerp(baseColor.rgb,EngineFogColor.rgb,factor);
+    else if(rgbMode==1) baseColor.rgb+=EngineFogColor.rgb*factor;
+    else if(rgbMode==2) baseColor.rgb-=EngineFogColor.rgb*factor;
+    else if(rgbMode==3) baseColor.rgb*=1-factor+EngineFogColor.rgb*factor;
+    else baseColor.rgb=lerp(baseColor.rgb,1-(1-baseColor.rgb)*(1-EngineFogColor.rgb),factor);
     baseColor.rgb=saturate(baseColor.rgb);
-    int alphaMode=(int)SolongoFogOps.y;
-    if(alphaMode==1) baseColor.a*=1-factor+factor*SolongoFogColor.a;
+    int alphaMode=(int)EngineFogOps.y;
+    if(alphaMode==1) baseColor.a*=1-factor+factor*EngineFogColor.a;
     else if(alphaMode==2) baseColor.a*=1-factor;
     return baseColor;
 }
-struct SolongoFragmentOutput {
+struct EngineFragmentOutput {
     float4 color : SV_Target0;
     float distance : SV_Target1;
 };
@@ -263,9 +276,13 @@ public:
             // not in the public File/Resource path validator. VFS still rejects
             // parent traversal, absolute paths and unauthorized locations.
             std::replace(requested.begin(),requested.end(),'\\','/');
-            while(requested.starts_with("./")) requested.erase(0,2);
+            if(requested.starts_with("./")) requested.erase(0,2);
+            // Validate syntax before the virtual builtin exception as well.
+            // Only the single backend-added prefix is removed; user traversal
+            // or absolute paths never become a way to reach Engine.hlsl.
+            if(!File::Normalize(requested)) throw std::invalid_argument("Shader include has invalid absolute path or dot component");
             const auto base=requested.find_last_of("/\\");
-            if(requested.substr(base==std::string::npos?0:base+1)=="Solongo.hlsl") {
+            if(requested.substr(base==std::string::npos?0:base+1)=="Engine.hlsl") {
                 builtinIncluded=true;
                 ComPtr<IDxcBlobEncoding> blob;
                 HR(utils->CreateBlob(Builtin,static_cast<UINT32>(std::char_traits<char>::length(Builtin)),DXC_CP_UTF8,&blob),"create builtin include");
@@ -332,7 +349,7 @@ struct Compiler {
             if(SUCCEEDED(result->GetOutput(DXC_OUT_ERRORS,IID_PPV_ARGS(&errors),nullptr)) && errors)
                 reason.append(errors->GetStringPointer(),std::min(errors->GetStringLength(),DiagnosticLimit));
             if(!includes->lastError.empty()) reason+="\n"+includes->lastError;
-            if(!includes->builtinIncluded) reason+="\nPublic VSInput/PSInput require #include \"Solongo.hlsl\".";
+            if(!includes->builtinIncluded) reason+="\nPublic VSInput/PSInput require #include \"Engine.hlsl\".";
             throw std::runtime_error(reason);
         }
         return result;
@@ -361,10 +378,13 @@ Bindings Assign(const Model& model,bool vertex,const Active* active) {
         if(d.kind==DeclarationKind::Texture) textures.push_back(d.name);
         if(d.kind==DeclarationKind::Builtins || d.kind==DeclarationKind::Params) buffers.push_back(d.name);
     }
-    if(!vertex) {
-        textures.emplace_back(FogDistanceName);
-        buffers.emplace_back(DrawStateName);
-    }
+    if(!vertex) textures.emplace_back(FogDistanceName);
+    // Target kind is a private per-Draw value used by both the default VS and
+    // fragment wrapper. It never enters the public/semantic Engine.hlsl input.
+    buffers.emplace_back(DrawStateName);
+    if(std::any_of(model.declarations.begin(),model.declarations.end(),[](const auto& d) {
+        return d.kind==DeclarationKind::Texture && d.textureRole==TextureRole::Color;
+    })) buffers.emplace_back(Sampling::BufferName);
     if(active) {
         std::stable_sort(textures.begin(),textures.end(),[&](const auto& a,const auto& b) { return active->textures.contains(a)>active->textures.contains(b); });
         std::stable_sort(buffers.begin(),buffers.end(),[&](const auto& a,const auto& b) { return active->buffers.contains(a)>active->buffers.contains(b); });
@@ -379,46 +399,51 @@ Bindings Assign(const Model& model,bool vertex,const Active* active) {
 std::string Register(const Assignment& value) {
     return " : register("+std::string(1,value.prefix)+std::to_string(value.slot)+", space"+std::to_string(value.space)+")";
 }
-std::string Fragment(const Model& model,const Bindings& bindings) {
-    std::string result="\n#line 1 \"Solongo.generated.hlsl\"\ncbuffer ";
+std::string DrawState(const Bindings& bindings) {
+    std::string result="\n#line 1 \"Engine.generated.hlsl\"\ncbuffer ";
     result+=DrawStateName+Register(bindings.at(DrawStateName))+R"HLSL( {
-    float4 SolongoFogRange; // start, end, curve 0..6, enabled
-    float4 SolongoFogColor; // straight RGBA
-    float4 SolongoFogOps; // RGB enum, Alpha enum, reserved, reserved
-    float4 SolongoCameraPosition; // xyz world position, reserved
+    float4 EngineFogRange; // start, end, curve 0..6, enabled
+    float4 EngineFogColor; // straight RGBA
+    float4 EngineFogOps; // RGB enum, Alpha enum, reserved, reserved
+    float4 EngineCameraPosition; // xyz world position, reserved
+    float4 EngineTargetKind; // Canvas3D flag, reserved, reserved, reserved
 };
 )HLSL";
+    return result;
+}
+std::string Fragment(const Model& model,const Bindings& bindings) {
+    std::string result;
     result+="Texture2D<float> "+std::string(FogDistanceName)+Register(bindings.at(FogDistanceName))+";\n";
     result+="SamplerState "+std::string(FogDistanceName)+"Sampler"+Register(bindings.at(std::string(FogDistanceName)+"Sampler"))+";\n";
     result+=FragmentFunctions;
     result+=R"HLSL(
-SolongoFragmentOutput SolongoFragmentEntry(PSInput input) {
+EngineFragmentOutput EngineFragmentEntry(PSInput input) {
     float cameraDistance=0;
-    if(SolongoIs3D!=0 && SolongoIsFullscreen==0)
-        cameraDistance=SolongoStableLength(input.worldPosition-SolongoCameraPosition.xyz);
-    if(SolongoIs3D!=0) {
+    if(EngineTargetKind.x>0.5 && EngineIsFullscreen==0)
+        cameraDistance=EngineStableLength(input.worldPosition-EngineCameraPosition.xyz);
+    if(EngineTargetKind.x>0.5) {
         float4 baseColor=input.color;
 )HLSL";
     const bool standardTexture=std::any_of(model.declarations.begin(),model.declarations.end(),[](const auto& declaration) {
         return declaration.kind==DeclarationKind::Texture && declaration.name=="texture";
     });
-    if(standardTexture) result+="        baseColor*=texture.Sample(textureSampler,input.uv);\n";
+    if(standardTexture) result+="        baseColor*="+Sampling::Function("texture",false)+"(textureSampler,input.uv);\n";
     result+=R"HLSL(
-        if(SolongoFogRange.w>0.5) {
+        if(EngineFogRange.w>0.5) {
             float fogDistance=cameraDistance;
-            if(SolongoIsFullscreen!=0)
-                fogDistance=SolongoFogDistance.SampleLevel(SolongoFogDistanceSampler,input.position.xy*SolongoTargetInvSize,0);
+            if(EngineIsFullscreen!=0)
+                fogDistance=EngineFogDistance.SampleLevel(EngineFogDistanceSampler,input.position.xy*EngineTargetInvSize,0);
             // A fullscreen triangle is not a world surface. An unwritten
             // history pixel must retain its original, un-fogged tint/material.
-            if(SolongoIsFullscreen==0 || fogDistance>0)
-                baseColor=SolongoFogBase(baseColor,fogDistance);
+            if(EngineIsFullscreen==0 || fogDistance>0)
+                baseColor=EngineFogBase(baseColor,fogDistance);
         }
         input.color=baseColor;
     }
     // PSMain is the user's ordinary function. It may intentionally disregard
     // input.color: there is no second Fog application after its return value.
     float4 straight=PSMain(input);
-    SolongoFragmentOutput output;
+    EngineFragmentOutput output;
     output.color=float4(straight.rgb*straight.a,straight.a);
     // Fullscreen preserves target depth/distance through the pipeline mask.
     // Zero here permits DXC to discard history entirely when Fog is unobserved.
@@ -429,19 +454,29 @@ SolongoFragmentOutput SolongoFragmentEntry(PSInput input) {
     return result;
 }
 std::string Generate(const Model& model,const Bindings& bindings,bool vertex) {
-    std::vector<const Declaration*> order;
-    order.reserve(model.declarations.size());
-    for(const auto& d:model.declarations) order.push_back(&d);
-    std::sort(order.begin(),order.end(),[](auto* a,auto* b) { return a->bindingOffset<b->bindingOffset; });
-    std::string result; result.reserve(model.source.size()+4096);
+    struct Edit {std::size_t begin,end;std::string text;};
+    std::vector<Edit> edits;
+    edits.reserve(model.declarations.size()+model.sampling.size());
+    for(const auto& d:model.declarations) edits.push_back({d.bindingOffset,d.bindingOffset,Register(bindings.at(d.name))});
+    for(const auto& call:model.sampling) edits.push_back({call.begin,call.end,Sampling::Function(call.texture,call.explicitLod)});
+    std::sort(edits.begin(),edits.end(),[](const auto& a,const auto& b){return a.begin<b.begin;});
+    std::string result=Sampling::Prototypes(model); result.reserve(model.source.size()+16384);
     std::size_t cursor{};
-    for(const auto* d:order) {
-        if(d->bindingOffset<cursor || d->bindingOffset>model.source.size()) throw std::logic_error("invalid Shader declaration span");
-        result.append(model.source,cursor,d->bindingOffset-cursor);
-        result+=Register(bindings.at(d->name));
-        cursor=d->bindingOffset;
+    for(const auto& edit:edits) {
+        if(edit.begin<cursor || edit.end<edit.begin || edit.end>model.source.size()) throw std::logic_error("invalid Shader semantic edit span");
+        result.append(model.source,cursor,edit.begin-cursor);
+        result+=edit.text;
+        cursor=edit.end;
     }
     result.append(model.source,cursor);
+    if(const auto found=bindings.find(Sampling::BufferName);found!=bindings.end()) {
+        result+="\n#line 1 \"Engine.generated.hlsl\"\ncbuffer "+std::string(Sampling::BufferName)+Register(found->second)+" {\n";
+        for(const auto& d:model.declarations) if(d.kind==DeclarationKind::Texture && d.textureRole==TextureRole::Color)
+            result+=" float4 EngineRegion_"+d.name+"; float4 EngineInfo_"+d.name+";\n";
+        result+="};\n";
+        result+=Sampling::Definitions(model);
+    }
+    result+=DrawState(bindings);
     if(vertex) {
         if(!model.hasVertex) result+=DefaultVertex;
         result+=Adapter;
@@ -494,10 +529,10 @@ ValueType ReflectedType(ID3D12ShaderReflectionType* type) {
         if(desc.Type==D3D_SVT_INT) return ValueType::Int;
         if(desc.Type==D3D_SVT_UINT) return ValueType::UInt;
     }
-    throw std::invalid_argument("uniform type cannot be mapped to the Solongo Shader ABI");
+    throw std::invalid_argument("uniform type cannot be mapped to the Engine Shader ABI");
 }
 Stage BuildStage(Compiler& compiler,const Model& model,bool vertex) {
-    const char* entry=vertex?"SolongoVertexEntry":"SolongoFragmentEntry";
+    const char* entry=vertex?"EngineVertexEntry":"EngineFragmentEntry";
     const std::vector<std::wstring> options{Wide("./"+compiler.path),L"-T",vertex?L"vs_6_0":L"ps_6_0",
         L"-E",Wide(entry),L"-HV",L"2021",L"-O3",L"-Zpc",L"-Ges"};
     const auto initial=Assign(model,vertex,nullptr);
@@ -561,9 +596,10 @@ Compiled Compile(std::shared_ptr<const File::FileSystem> files,std::string_view 
     Compiler compiler(files,*normalized,cancelled);
     auto preprocessed=compiler.Preprocess();
     if(!compiler.includes->builtinIncluded)
-        throw std::invalid_argument(*normalized+":1:1: Shader must #include \"Solongo.hlsl\" for the public ABI");
+        throw std::invalid_argument(*normalized+":1:1: Shader must #include \"Engine.hlsl\" for the public ABI");
     Compiled result; result.path=*normalized;
     result.model=Parse(std::move(preprocessed),*normalized);
+    result.model.sampling=Sampling::Analyze(result.model,cancelled);
     result.vertex=BuildStage(compiler,result.model,true);
     result.fragment=BuildStage(compiler,result.model,false);
     CheckCancelled(cancelled);

@@ -1,5 +1,6 @@
 #include "ShaderCommands.h"
 #include "core/modules/Graphic/shader/Builtins.h"
+#include "core/modules/Graphic/shader/Sampling.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -14,21 +15,50 @@ float Float(double v) {
     return result;
 }
 std::vector<ShaderUniform> Uniforms(const Shader::Stage& stage,const ShaderStageData& user,
-    const Canvas::Info& info,const Geometry::SpatialState& spatial,bool fullscreen) {
+    const Canvas::Info& info,const Geometry::SpatialState& spatial,bool fullscreen,const ShaderCommand& command) {
     auto builtins=Shader::Builtins::Pack(info,spatial,fullscreen,stage);
     std::vector<ShaderUniform> result;
     result.reserve(stage.buffers.size());
     for(auto& value:builtins) result.push_back({value.slot,std::move(value.bytes)});
     std::size_t used{};
     for(const auto& buffer:stage.buffers) {
-        if(buffer.name=="SolongoBuiltins") continue;
+        if(buffer.name=="EngineBuiltins") continue;
         if(buffer.name=="Params") {
             const auto match=std::find_if(user.params.begin(),user.params.end(),[&](const auto& p){return p.slot==buffer.slot;});
             if(match==user.params.end() || match->bytes.size()!=buffer.size)
                 throw std::invalid_argument("Shader Params snapshot does not match reflection");
             result.push_back(*match); ++used; continue;
         }
-        if(buffer.name!="SolongoDrawState" || buffer.size>65536 || !buffer.size)
+        if(buffer.name==Shader::Sampling::BufferName) {
+            if(!buffer.size || buffer.size>65536) throw std::invalid_argument("Invalid Shader sampling metadata size");
+            ShaderUniform value{buffer.slot,std::vector<std::uint8_t>(buffer.size)};
+            for(const auto& field:buffer.fields) {
+                const bool region=field.name.starts_with("EngineRegion_");
+                const bool infoField=field.name.starts_with("EngineInfo_");
+                if((!region && !infoField) || field.type!=Shader::ValueType::Float4 || field.size!=16 ||
+                    field.offset>value.bytes.size() || field.size>value.bytes.size()-field.offset)
+                    throw std::invalid_argument("Invalid reflected Shader sampling metadata field");
+                if(!field.used) continue;
+                const auto name=field.name.substr(region?13:11);
+                const auto texture=std::find_if(stage.textures.begin(),stage.textures.end(),[&](const auto& t){return t.name==name && !t.engine;});
+                if(texture==stage.textures.end()) throw std::invalid_argument("Shader sampling metadata has no reflected texture");
+                const auto input=std::find_if(user.textures.begin(),user.textures.end(),[&](const auto& t){return t.slot==texture->slot;});
+                if(input==user.textures.end() || input->part!=TexturePart::Color || input->source>=command.draw.sources.size())
+                    throw std::invalid_argument("Shader sampling metadata has no color input");
+                std::array<float,4> data{};
+                if(const auto* image=std::get_if<Image>(&command.draw.sources[input->source])) {
+                    if(region) data={Float(image->insetX),Float(image->insetY),Float(image->LogicalWidth()),Float(image->LogicalHeight())};
+                    else data={Float(image->width),Float(image->height),Float(image->mipLevels?image->mipLevels:image->textureLevels),
+                        float((image->filter==Filter::Linear?2:0)+(image->address==Address::Repeat?1:0))};
+                } else if(const auto canvas=command.canvases[input->source]) {
+                    if(region) data={0,0,Float(canvas->info.width),Float(canvas->info.height)};
+                    else data={Float(canvas->info.width),Float(canvas->info.height),1,2};
+                } else throw std::invalid_argument("Shader sampling metadata requires a live color input");
+                std::memcpy(value.bytes.data()+field.offset,data.data(),sizeof(data));
+            }
+            result.push_back(std::move(value));continue;
+        }
+        if(buffer.name!="EngineDrawState" || buffer.size>65536 || !buffer.size)
             throw std::invalid_argument("Unknown private Shader uniform buffer");
         ShaderUniform value{buffer.slot,std::vector<std::uint8_t>(buffer.size)};
         std::array<float,4> range{},color{},ops{};
@@ -42,12 +72,14 @@ std::vector<ShaderUniform> Uniforms(const Shader::Stage& stage,const ShaderStage
             ops={float(fog.rgb),float(fog.alpha),0,0};
         }
         const std::array<float,4> camera{Float(spatial.camera.position[0]),Float(spatial.camera.position[1]),Float(spatial.camera.position[2]),0};
+        const std::array<float,4> targetKind{info.threeD?1.f:0.f,0,0,0};
         for(const auto& field:buffer.fields) {
             const std::array<float,4>* data{};
-            if(field.name=="SolongoFogRange") data=&range;
-            else if(field.name=="SolongoFogColor") data=&color;
-            else if(field.name=="SolongoFogOps") data=&ops;
-            else if(field.name=="SolongoCameraPosition") data=&camera;
+            if(field.name=="EngineFogRange") data=&range;
+            else if(field.name=="EngineFogColor") data=&color;
+            else if(field.name=="EngineFogOps") data=&ops;
+            else if(field.name=="EngineCameraPosition") data=&camera;
+            else if(field.name=="EngineTargetKind") data=&targetKind;
             if(!data || field.type!=Shader::ValueType::Float4 || field.size!=sizeof(*data) ||
                 field.offset>value.bytes.size() || field.size>value.bytes.size()-field.offset)
                 throw std::invalid_argument("Invalid private Shader field reflection");
@@ -71,10 +103,13 @@ void ShaderCommands::Prepare(ShaderCommand& command,const Geometry::SpatialState
     const auto& draw=command.draw;
     const auto& metadata=draw.program->Metadata();
     const bool fullscreen=!draw.mesh;
-    command.vertexUniforms=Uniforms(metadata.vertex,draw.vertex,command.info,spatial,fullscreen);
-    command.fragmentUniforms=Uniforms(metadata.fragment,draw.fragment,command.info,spatial,fullscreen);
+    command.vertexUniforms=Uniforms(metadata.vertex,draw.vertex,command.info,spatial,fullscreen,command);
+    command.fragmentUniforms=Uniforms(metadata.fragment,draw.fragment,command.info,spatial,fullscreen,command);
     command.pipeline=pipelines_.Get(draw.program,format,target->depthFormat,spatial.depthEnabled,fullscreen);
-    command.mesh=meshes_.Acquire(draw.mesh ? draw.mesh:triangle_);
+    // Empty geometry keeps full validation and geometry pipeline semantics;
+    // Renderer records only its target marker after Prepare, with no GPU draw.
+    if(!draw.mesh || !draw.mesh->Vertices().empty()) command.mesh=meshes_.Acquire(draw.mesh ? draw.mesh:triangle_);
+    else command.mesh.reset();
     command.images.resize(draw.sources.size()); command.colors.resize(draw.sources.size());
     auto prepareStage=[&](const Shader::Stage& stage,const ShaderStageData& values,auto& bindings){
         bindings.resize(stage.textures.size());
@@ -85,7 +120,7 @@ void ShaderCommands::Prepare(ShaderCommand& command,const Geometry::SpatialState
                 throw std::invalid_argument("Invalid Shader texture slot reflection");
             slots[texture.slot]=true;
             if(texture.engine) {
-                if(texture.name!="SolongoFogDistance") throw std::invalid_argument("Unknown engine Shader texture");
+                if(texture.name!="EngineFogDistance") throw std::invalid_argument("Unknown engine Shader texture");
                 if(command.info.threeD && fullscreen && spatial.fog)
                     command.history=canvases_.Acquire(target,Shader::CanvasViews::Kind::Distance);
                 if(!emptyDistance_) {

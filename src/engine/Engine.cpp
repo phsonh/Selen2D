@@ -150,6 +150,8 @@ bool Run(std::uint64_t frameLimit) {
             if(!recording) break;
             if(!Pump()) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             Event::EndFrame();
+            const auto windowMetrics=core::modules::Window::GetFrameMetrics();
+            renderer.Canvases().PublishWindowMetrics(windowMetrics.logicalSize.width,windowMetrics.logicalSize.height);
             if(quitRequested) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             clock.BeginFrame(SDL_GetTicksNS(),Lua::HasFrameFunction());
             audio.SetRuntimeFrame(clock.FrameCount());

@@ -9,7 +9,7 @@ struct Uniform {
     std::uint32_t slot{};
     std::vector<std::uint8_t> bytes;
 };
-// CPU-only snapshots for reflected SolongoBuiltins buffers; does not include
+// CPU-only snapshots for reflected EngineBuiltins buffers; does not include
 // Params, own GPU resources, or alter Canvas/Camera/depth/history. Numeric and
 // matrix inputs are validated even if this particular stage optimized them out.
 // Canvas3D always validates through Geometry::MakeView, including fullscreen.

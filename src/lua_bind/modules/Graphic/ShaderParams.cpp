@@ -160,7 +160,7 @@ void InspectTextures(const Context& context, const S::Stage& stage, const Textur
         if (binding.slot >= 16 || !slots.insert(binding.slot).second || !names.insert(binding.name).second)
             context.Error(binding.name, "invalid reflected texture binding");
         if (binding.engine) {
-            if (binding.name != "SolongoFogDistance") context.Error(binding.name, "unknown internal texture binding");
+            if (binding.name != "EngineFogDistance") context.Error(binding.name, "unknown internal texture binding");
             continue; // Renderer supplies history; Lua cannot fill a reserved field.
         }
         const auto found = textures.find(binding.name);
@@ -184,7 +184,7 @@ void PackBuffers(const S::Stage& stage, const Values& values, Stage& output) {
     std::sort(output.params.begin(), output.params.end(), [](const auto& a, const auto& b) { return a.slot < b.slot; });
 }
 }
-Snapshot Pack(lua_State* lua, int paramsIndex, const S::Compiled& shader, const ResolveTexture& resolve) {
+Snapshot Pack(lua_State* lua, int paramsIndex, const S::Compiled& shader, bool targetThreeD, const ResolveTexture& resolve) {
     if (!lua) throw std::invalid_argument("Shader params require a Lua state");
     const int originalTop = lua_gettop(lua);
     if (paramsIndex < 0 && paramsIndex > LUA_REGISTRYINDEX) paramsIndex = originalTop + paramsIndex + 1;
@@ -208,29 +208,11 @@ Snapshot Pack(lua_State* lua, int paramsIndex, const S::Compiled& shader, const 
         if (declaration.kind == S::DeclarationKind::Texture) {
             if (values.contains(declaration.name) || !textures.emplace(declaration.name, Texture{}).second)
                 context.Error(declaration.name, "duplicate declared texture or parameter");
+            auto& texture=textures.at(declaration.name);
+            texture.base=declaration.mainTexture;
+            if(declaration.textureRole==S::TextureRole::Depth) texture.part=TexturePart::Depth;
+            else if(declaration.textureRole==S::TextureRole::Distance) texture.part=TexturePart::Distance;
         } else if (declaration.kind == S::DeclarationKind::Sampler) samplers.insert(declaration.name);
-    }
-    // Derivation depends on main declarations, never declaration or GPU slot
-    // order. Classify shorter names first: foo_depth derives from foo, but is
-    // no longer a main. Thus foo_depth_distance is an ordinary main unless its
-    // exact suffix base is itself a main. Derived data never recursively becomes
-    // a Canvas3D, and no new naming ban is imposed on otherwise ordinary names.
-    std::vector<std::string_view> names;
-    names.reserve(textures.size());
-    for (const auto& [name, texture] : textures) names.push_back(name);
-    std::sort(names.begin(), names.end(), [](auto a, auto b) {
-        return a.size() == b.size() ? a < b : a.size() < b.size();
-    });
-    for (const auto name : names) {
-        auto& texture = textures.find(name)->second;
-        for (const auto& [suffix, part] : {std::pair<std::string_view, TexturePart>{"_depth", TexturePart::Depth},
-             {"_distance", TexturePart::Distance}}) {
-            if (name.ends_with(suffix)) {
-                const std::string base(name.substr(0, name.size() - suffix.size()));
-                const auto found = textures.find(base);
-                if (found != textures.end() && found->second.base.empty()) { texture.base = base; texture.part = part; }
-            }
-        }
     }
     for (const auto& declaration : shader.model.declarations) {
         if (declaration.kind != S::DeclarationKind::Texture) continue;
@@ -238,6 +220,7 @@ Snapshot Pack(lua_State* lua, int paramsIndex, const S::Compiled& shader, const 
         if (!texture.base.empty()) continue;
         texture.root = result.textures.size();
         result.textures.push_back({declaration.name});
+        if(targetThreeD && declaration.name=="texture") result.textures.back().required=true;
     }
     for (auto& [name, texture] : textures) {
         if (texture.base.empty()) continue;
@@ -257,7 +240,7 @@ Snapshot Pack(lua_State* lua, int paramsIndex, const S::Compiled& shader, const 
         std::size_t size{};
         const char* key = lua_tolstring(lua, -2, &size); // Already a string; no coercion/allocation.
         const std::string_view name(key, size); // Do not copy arbitrary-length unknown Lua keys.
-        if (name.starts_with("Solongo")) context.Error(name, "engine builtin fields cannot be supplied");
+        if (name.starts_with("Engine")) context.Error(name, "engine builtin fields cannot be supplied");
         if (samplers.contains(name)) context.Error(name, "sampler is automatically managed");
         if (const auto found = values.find(name); found != values.end()) Read(context, lua_gettop(lua), name, found->second);
         else if (const auto textureFound = textures.find(name); textureFound != textures.end()) {

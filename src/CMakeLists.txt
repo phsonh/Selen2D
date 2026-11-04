@@ -52,8 +52,12 @@ target_include_directories(engine_upload PUBLIC .)
 target_link_libraries(engine_upload PUBLIC SDL3::SDL3-static)
 include("${PROJECT_SOURCE_DIR}/tools/ImageShaders.cmake")
 include("${PROJECT_SOURCE_DIR}/tools/CanvasViewShaders.cmake")
-add_library(engine_shader_compiler STATIC core/modules/Graphic/shader/Model.cpp core/modules/Graphic/shader/Compiler.cpp)
-target_include_directories(engine_shader_compiler PUBLIC .)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/image_sampling.hlsli")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/image_sampling.hlsli" ENGINE_IMAGE_SAMPLING_SOURCE)
+configure_file(core/modules/Graphic/shader/ImageSamplingSource.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/ImageSamplingSource.h" @ONLY)
+add_library(engine_shader_compiler STATIC core/modules/Graphic/shader/Model.cpp core/modules/Graphic/shader/Compiler.cpp
+    core/modules/Graphic/shader/Sampling.cpp)
+target_include_directories(engine_shader_compiler PUBLIC . PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(engine_shader_compiler PUBLIC engine_file DependencyDXC)
 add_library(engine_shader_programs STATIC core/modules/Graphic/shader/Program.cpp)
 target_include_directories(engine_shader_programs PUBLIC .)
@@ -88,10 +92,11 @@ add_library(engine_renderer STATIC
     core/modules/Graphic/backend/ImagePipeline.cpp
     core/modules/Graphic/backend/ShaderPipeline.cpp
     core/modules/Graphic/canvas/Canvas.cpp
+    core/modules/Graphic/render/GlyphTextures.cpp
     core/modules/Graphic/render/ShaderCommands.cpp
     core/modules/Graphic/render/Renderer.cpp)
 target_include_directories(engine_renderer PUBLIC . PRIVATE "${image_shader_dir}")
-target_link_libraries(engine_renderer PUBLIC SDL3::SDL3-static engine_geometry engine_render_values engine_shader_views engine_shader_programs engine_shader_builtins engine_readback engine_log)
+target_link_libraries(engine_renderer PUBLIC SDL3::SDL3-static engine_geometry engine_render_values engine_shader_views engine_shader_programs engine_shader_builtins engine_readback engine_log engine_text_layout)
 add_library(engine_image_sources STATIC core/modules/Resource/ImageSources.cpp)
 target_include_directories(engine_image_sources PUBLIC .)
 target_link_libraries(engine_image_sources PUBLIC engine_jobs engine_png engine_file)
@@ -106,6 +111,10 @@ add_subdirectory(core/modules/Audio)
 add_library(engine_font STATIC core/modules/Resource/Font.cpp)
 target_include_directories(engine_font PUBLIC .)
 target_link_libraries(engine_font PUBLIC engine_resource engine_file engine_jobs PRIVATE DependencyFreeType)
+add_library(engine_text_layout STATIC core/modules/Graphic/text/Text.cpp core/modules/Graphic/text/FontFace.cpp
+    core/modules/Graphic/text/Unicode.cpp)
+target_include_directories(engine_text_layout PUBLIC .)
+target_link_libraries(engine_text_layout PUBLIC engine_font PRIVATE DependencyFreeType DependencyHarfBuzz DependencySheenBidi DependencyUnibreak)
 add_library(engine_cpu_provider STATIC core/modules/Resource/CpuProvider.cpp)
 target_include_directories(engine_cpu_provider PUBLIC .)
 target_link_libraries(engine_cpu_provider PUBLIC engine_resource engine_file engine_jobs engine_audio engine_font)
@@ -139,6 +148,7 @@ add_library(engine_core STATIC
     lua_bind/modules/Object/Object.cpp
     lua_bind/modules/Resource/Resource.cpp
     lua_bind/modules/Graphic/Graphic.cpp
+    lua_bind/modules/Graphic/TextBinding.cpp
     lua_bind/modules/Debug/Debug.cpp)
 target_include_directories(engine_core PUBLIC . PRIVATE "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(engine_core PUBLIC SDL3::SDL3-static LuaJIT::LuaJIT engine_object engine_input_state engine_file engine_lua_scripts engine_text engine_audio engine_image_provider engine_cpu_provider engine_shader_provider engine_renderer engine_graphic_values engine_clock engine_time engine_log)
@@ -200,6 +210,7 @@ if(MSVC)
     target_compile_options(engine_file PRIVATE /W4 /utf-8)
     target_compile_options(engine_resource PRIVATE /W4 /utf-8)
     target_compile_options(engine_font PRIVATE /W4 /utf-8)
+    target_compile_options(engine_text_layout PRIVATE /W4 /utf-8)
     target_compile_options(engine_cpu_provider PRIVATE /W4 /utf-8)
     target_compile_options(engine_jobs PRIVATE /W4 /utf-8)
     target_compile_options(engine_png PRIVATE /W4 /utf-8)

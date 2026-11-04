@@ -181,7 +181,7 @@ public:
             if(Is("Texture2D") || Is("SamplerState")) { Resource(); continue; }
             General();
         }
-        if(!publicVertex || !publicPixel) Error(Current(), "include \"Solongo.hlsl\" to use the public VSInput/PSInput ABI");
+        if(!publicVertex || !publicPixel) Error(Current(), "include \"Engine.hlsl\" to use the public VSInput/PSInput ABI");
         if(!pixelDefined) Error(Current(), "missing definition: float4 PSMain(PSInput input) : SV_Target0");
         for(const auto& declaration : model.declarations) {
             if(declaration.kind == DeclarationKind::Texture && !samplers.contains(declaration.name + "Sampler"))
@@ -191,6 +191,23 @@ public:
                 const std::string_view name = declaration.name;
                 if(!name.ends_with(suffix) || !textures.contains(std::string(name.substr(0, name.size() - suffix.size()))))
                     throw std::invalid_argument(Describe(declaration.location) + ": SamplerState '" + declaration.name + "' has no matching Texture2D");
+            }
+        }
+        std::vector<Declaration*> texturesByLength;
+        for(auto& declaration:model.declarations)
+            if(declaration.kind==DeclarationKind::Texture) texturesByLength.push_back(&declaration);
+        std::sort(texturesByLength.begin(),texturesByLength.end(),[](const auto* a,const auto* b) {
+            return a->name.size()==b->name.size() ? a->name<b->name : a->name.size()<b->name.size();
+        });
+        for(auto* declaration:texturesByLength) {
+            for(const auto& [suffix,role]:{std::pair<std::string_view,TextureRole>{"_depth",TextureRole::Depth},
+                    {"_distance",TextureRole::Distance}}) {
+                if(!declaration->name.ends_with(suffix)) continue;
+                const auto base=declaration->name.substr(0,declaration->name.size()-suffix.size());
+                const auto found=std::find_if(texturesByLength.begin(),texturesByLength.end(),[&](const auto* candidate) {
+                    return candidate->name==base && candidate->mainTexture.empty();
+                });
+                if(found!=texturesByLength.end()) {declaration->mainTexture=base; declaration->textureRole=role;}
             }
         }
         return std::move(model);
@@ -207,7 +224,7 @@ private:
     std::string_view Text(const Token& token) const { return std::string_view(model.source).substr(token.begin, token.end - token.begin); }
     bool Is(std::string_view value) const { return Text(Current()) == value; }
     bool Eat(std::string_view value) { if(!Is(value)) return false; ++cursor; return true; }
-    bool Trusted(const Token& token) const { return lexer.At(token.where).file == "Solongo.hlsl"; }
+    bool Trusted(const Token& token) const { return lexer.At(token.where).file == "Engine.hlsl"; }
     [[noreturn]] void Error(const Token& token, std::string_view reason) const {
         throw std::invalid_argument(Describe(lexer.At(token.where)) + ": " + std::string(reason));
     }
@@ -218,7 +235,7 @@ private:
     }
     void Name(const Token& token, bool function = false) {
         const auto name = Text(token);
-        if(name.starts_with("Solongo") && !Trusted(token)) Error(token, "the Solongo identifier prefix is reserved");
+        if(name.starts_with("Engine") && !Trusted(token)) Error(token, "the Engine identifier prefix is reserved");
         const auto [found, added] = globals.emplace(std::string(name), function);
         if(!added && !(function && found->second)) Error(token, "duplicate or conflicting global name '" + std::string(name) + "'");
     }
@@ -251,7 +268,7 @@ private:
     void Buffer() {
         ++cursor;
         const auto name = Identifier();
-        const bool builtin = Text(name) == "SolongoBuiltins" && Trusted(name);
+        const bool builtin = Text(name) == "EngineBuiltins" && Trusted(name);
         if(!builtin && Text(name) != "Params") Error(name, "only the user cbuffer Params is supported");
         Name(name);
         Annotation();
@@ -284,7 +301,7 @@ private:
         ++cursor;
         const auto name = Identifier();
         if(!Trusted(name) && (Text(name) == "VSInput" || Text(name) == "PSInput"))
-            Error(name, "VSInput/PSInput are defined by the engine; include \"Solongo.hlsl\" instead");
+            Error(name, "VSInput/PSInput are defined by the engine; include \"Engine.hlsl\" instead");
         Name(name);
         if(Trusted(name)) {
             if(Text(name) == "VSInput") publicVertex = true;

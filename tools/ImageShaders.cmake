@@ -25,7 +25,7 @@ foreach(stage IN ITEMS vert frag)
     add_custom_command(OUTPUT "${image_shader_dir}/${stage}.bin"
         COMMAND "${SOLONGO_DXC}" -T ${profile} -E main -O3 -WX ${image_shader_options}
             -Fo "${image_shader_dir}/${stage}.bin" "${image_shader_source}/image.${stage}.hlsl"
-        DEPENDS "${image_shader_source}/image.${stage}.hlsl" VERBATIM)
+        DEPENDS "${image_shader_source}/image.${stage}.hlsl" "${image_shader_source}/image_sampling.hlsli" VERBATIM)
 endforeach()
 add_custom_command(OUTPUT "${image_shader_dir}/ImageShaders.h"
     COMMAND "${CMAKE_COMMAND}" "-DVERTEX=${image_shader_dir}/vert.bin" "-DFRAGMENT=${image_shader_dir}/frag.bin"

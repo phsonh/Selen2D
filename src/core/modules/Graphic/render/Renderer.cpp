@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "ShaderCommands.h"
+#include "GlyphTextures.h"
 #include "core/modules/Graphic/readback/Readback.h"
 #include "core/runtime/Log/Log.h"
 #include "core/modules/Graphic/backend/ImagePipeline.h"
@@ -81,7 +82,12 @@ SDL_FColor Pma(std::uint32_t argb) {
 }
 }
 struct Renderer::Impl {
-    enum class Kind { Target, Clear, Image, Shader };
+    enum class Kind { Target, Clear, Image, Shader, Text };
+    struct TextPart {
+        GlyphTextures::Lease glyph;
+        Uint32 inputVertex{},firstVertex{};
+        bool outline{};
+    };
     struct Command {
         Kind kind;
         std::shared_ptr<Attachment> target;
@@ -97,6 +103,8 @@ struct Renderer::Impl {
         SDL_GPUSampler* sampler{};
         Geometry::SpatialState spatial;
         std::shared_ptr<detail::ShaderCommand> shader;
+        std::shared_ptr<const Text::PreparedText> text;
+        std::vector<TextPart> textParts;
     };
     struct Frame {
         std::vector<Command> commands;
@@ -108,6 +116,7 @@ struct Renderer::Impl {
         SDL_GPUFence* fence{};
         Clock::time_point submitted;
         std::size_t shaderBytes{};
+        std::vector<GlyphTextures::Lease> glyphUploads;
         SDL_GPUCommandBuffer* presentCommand{};
         SDL_GPUTexture* swapchain{};
         SDL_GPUTexture* mirror{};
@@ -123,6 +132,8 @@ struct Renderer::Impl {
     std::vector<Frame> frames;
     std::unique_ptr<backend::ImagePipeline> imagePipeline;
     std::unique_ptr<detail::ShaderCommands> shaderCommands;
+    Text::GlyphCache glyphMasks;
+    std::unique_ptr<GlyphTextures::Store> glyphTextures;
     std::uint64_t contentSerial{};
     Geometry::RibbonBuilder ribbonBuilder;
     std::vector<detail::Vertex> ribbonVertices;
@@ -163,6 +174,10 @@ struct Renderer::Impl {
         Command command{}; command.kind=kind; command.target=std::move(pin); command.argb=argb;
         frame.commands.push_back(std::move(command));
     }
+    bool SkipWindow(const Attachment& output) const {
+        return output.info.window && (!window ||
+            (SDL_GetWindowFlags(window)&SDL_WINDOW_MINIMIZED));
+    }
     Render::Image CanvasImage(Canvas::Handle handle) {
         auto pin=canvases.Acquire(handle);
         if(pin->info.window) throw std::invalid_argument("Window Canvas cannot be sampled");
@@ -173,15 +188,16 @@ struct Renderer::Impl {
         image.alpha=Alpha::Premultiplied;
         return image;
     }
-    void Commit(const Render::Image& image, Paint paint, std::span<const detail::Vertex> vertices,
+    void Commit(Canvas::Handle destination, const Render::Image& image, Paint paint, std::span<const detail::Vertex> vertices,
         std::shared_ptr<Attachment> sourceCanvas={}, bool ribbon=false) {
         auto& frame=Recording();
         detail::Validate(image,paint);
         const auto maximum=config.maxVertexBytes/sizeof(detail::Vertex);
         if(frame.commands.size()>=config.maxCommands || vertices.size()>maximum-frame.recordedVertices.size())
             throw std::length_error("Renderer draw command/vertex budget exhausted");
-        auto output=canvases.Acquire(target);
+        auto output=canvases.Acquire(destination);
         if(image.texture==output->texture) throw std::invalid_argument("Canvas cannot sample itself while it is the output target");
+        if(SkipWindow(*output)) {Append(Kind::Target,destination);return;}
         Command command{};
         command.kind=Kind::Image; command.target=std::move(output); command.image=image;
         command.spatial=command.target->spatial;
@@ -223,8 +239,7 @@ struct Renderer::Impl {
             v.sampling=4.f+(image.filter==Filter::Linear ? 2.f:0.f)+(image.address==Address::Repeat ? 1.f:0.f);
             v.mipLevels=static_cast<float>(image.mipLevels);
             v.mipExtrusion=static_cast<float>(image.mipExtrusion);
-        } else if (image.textureLevels>1 && (image.insetX!=0 || image.insetY!=0 ||
-            image.LogicalWidth()!=image.width || image.LogicalHeight()!=image.height)) {
+        } else if (image.textureLevels>1) {
             // Large Images use ordinary physical mip chains; logical bounds
             // still need to be mapped/addressed separately at every level.
             v.sampling=8.f+(image.filter==Filter::Linear ? 2.f:0.f)+(image.address==Address::Repeat ? 1.f:0.f);
@@ -238,11 +253,11 @@ struct Renderer::Impl {
         }
         return v;
     }
-    void Draw(const Render::Image& image, const std::array<std::array<double,2>,4>& corners, Paint paint,
+    void Draw(Canvas::Handle destination, const Render::Image& image, const std::array<std::array<double,2>,4>& corners, Paint paint,
         std::shared_ptr<Attachment> sourceCanvas={}, const QuadVertices* explicitVertices=nullptr,
         const std::array<double,4>* weights=nullptr) {
         Recording(); detail::Validate(image,paint);
-        const auto info=canvases.Describe(target);
+        const auto info=canvases.Describe(destination);
         if(info.threeD) throw std::invalid_argument("2D drawing requires a 2D Canvas target");
         const auto bounds=info.bounds;
         const std::array<Geometry::Point,4> uv{{{1,0},{0,0},{0,1},{1,1}}};
@@ -255,22 +270,22 @@ struct Renderer::Impl {
             quad[i]=Project(image,bounds,corners[i],u,t,q,color);
         }
         const std::array<detail::Vertex,6> triangles{quad[0],quad[1],quad[2],quad[0],quad[2],quad[3]};
-        Commit(image,paint,triangles,std::move(sourceCanvas));
+        Commit(destination,image,paint,triangles,std::move(sourceCanvas));
     }
-    void Ribbon(const Render::Image& image,std::span<const Geometry::Point> points,double width,Paint paint,bool closedPath,
+    void Ribbon(Canvas::Handle destination, const Render::Image& image,std::span<const Geometry::Point> points,double width,Paint paint,bool closedPath,
         std::shared_ptr<Attachment> sourceCanvas={}) {
         Recording(); detail::Validate(image,paint);
-        const auto info=canvases.Describe(target);
+        const auto info=canvases.Describe(destination);
         if(info.threeD) throw std::invalid_argument("RenderRibbon requires a 2D Canvas target");
         const auto bounds=info.bounds;
         const auto mesh=ribbonBuilder.Build(points,width,closedPath);
         ribbonVertices.clear(); ribbonVertices.reserve(mesh.size());
         for(const auto& vertex:mesh) ribbonVertices.push_back(Project(image,bounds,vertex.position,vertex.u,vertex.v,1,paint.color));
-        Commit(image,paint,ribbonVertices,std::move(sourceCanvas),true);
+        Commit(destination,image,paint,ribbonVertices,std::move(sourceCanvas),true);
     }
-    void Draw3D(const Render::Image& image,const QuadVertices3& points,Blend blend,std::shared_ptr<Attachment> sourceCanvas={}) {
+    void Draw3D(Canvas::Handle destination, const Render::Image& image,const QuadVertices3& points,Blend blend,std::shared_ptr<Attachment> sourceCanvas={}) {
         Recording(); detail::Validate(image,{0xFFFFFFFF,blend,0});
-        const auto output=canvases.Acquire(target);
+        const auto output=canvases.Acquire(destination);
         if(!output->info.threeD) throw std::invalid_argument("3D drawing requires a Canvas3D target");
         const auto& state=output->spatial;
         const auto view=Geometry::MakeView(state.camera,state.perspective,output->info.width,output->info.height);
@@ -301,7 +316,7 @@ struct Renderer::Impl {
             v.relativeX=GpuFloat(p.relative[0]); v.relativeY=GpuFloat(p.relative[1]); v.relativeZ=GpuFloat(p.relative[2]);
         }
         const std::array<detail::Vertex,6> triangles{quad[0],quad[1],quad[2],quad[0],quad[2],quad[3]};
-        Commit(image,{0xFFFFFFFF,blend,0},triangles,std::move(sourceCanvas));
+        Commit(destination,image,{0xFFFFFFFF,blend,0},triangles,std::move(sourceCanvas));
     }
     struct Version { std::uint64_t color{},distance{}; };
     struct Encoding {
@@ -326,6 +341,12 @@ struct Renderer::Impl {
         Encoding& state,Attachment* readSource=nullptr) {
         auto& initialized=state.initialized; auto& versions=state.versions;
         auto& windowInitialized=state.windowInitialized;
+        if(glyphTextures) {
+            for(const auto& item:frame.commands) for(const auto& part:item.textParts) {
+                const std::array leases{part.glyph};
+                glyphTextures->EncodePending(command,leases);
+            }
+        }
         auto written=[&](Attachment& a,bool distance) {
             if(a.info.window) return;
             if(contentSerial==std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("Canvas content serial exhausted");
@@ -393,15 +414,29 @@ struct Renderer::Impl {
                 ++stats.drawCalls;
                 stats.textureBindings+=item.shader->vertexTextures.size()+item.shader->fragmentTextures.size();
                 ++i;
+            } else if(item.kind==Kind::Text) {
+                SDL_GPUBufferBinding binding{frame.vertexBuffer,0};
+                SDL_BindGPUVertexBuffers(pass,0,&binding,1);
+                SDL_BindGPUGraphicsPipeline(pass,item.pipeline);
+                FogUniform fog{};fog.operations[2]=UsesAddColor(item.paint.blend)?1.f:0.f;
+                fog.operations[3]=1; // Zero mask coverage is not a rectangular fragment.
+                SDL_PushGPUFragmentUniformData(command,0,&fog,sizeof(fog));
+                for(const auto& part:item.textParts) {
+                    SDL_GPUTextureSamplerBinding sampled{part.outline?part.glyph->Ring(command):part.glyph->Fill(command),glyphTextures->Sampler()};
+                    SDL_BindGPUFragmentSamplers(pass,0,&sampled,1);
+                    SDL_DrawGPUPrimitives(pass,6,1,part.firstVertex,0);
+                    ++stats.drawCalls;++stats.textureBindings;
+                }
+                drew=!item.textParts.empty();++i;
             } else if(item.kind==Kind::Image) {
                 SDL_GPUBufferBinding binding{frame.vertexBuffer,0};
                 SDL_BindGPUVertexBuffers(pass,0,&binding,1);
-                while(i<frame.commands.size() && frame.commands[i].kind==Kind::Image) {
+                while(i<frame.commands.size() && frame.commands[i].kind==Kind::Image && frame.commands[i].target.get()==&attachment) {
                     const auto& first=frame.commands[i];
                     std::size_t last=i+1;
                     while(last<frame.commands.size()) {
                         const auto& next=frame.commands[last];
-                        if(next.kind!=Kind::Image || next.pipeline!=first.pipeline || next.sampler!=first.sampler ||
+                        if(next.kind!=Kind::Image || next.target!=first.target || next.pipeline!=first.pipeline || next.sampler!=first.sampler ||
                             next.image.texture!=first.image.texture || next.spatial.fog!=first.spatial.fog) break;
                         ++last;
                     }
@@ -432,6 +467,7 @@ struct Renderer::Impl {
     }
     void CommitEncoding(Frame& frame,SDL_GPUCommandBuffer* command,const Encoding& state) {
         if(shaderCommands) shaderCommands->Commit(command);
+        if(glyphTextures) frame.glyphUploads=glyphTextures->CommitEncoded(command);
         for(const auto& [attachment,version]:state.versions) {attachment->colorSerial=version.color;attachment->distanceSerial=version.distance;}
         for(auto* attachment:state.initialized) attachment->initialized=true;
         frame.windowInitialized=state.windowInitialized;
@@ -441,15 +477,16 @@ struct Renderer::Impl {
     void BlitPresentation(Frame& frame,SDL_GPUCommandBuffer* command);
     void RetirePresentation(Frame& frame);
     void ClearCommands(Frame& frame) {
-        frame.commands.clear();frame.recordedVertices.clear();frame.vertices.clear();frame.shaderBytes=0;
+        frame.commands.clear();frame.recordedVertices.clear();frame.vertices.clear();frame.shaderBytes=0;frame.glyphUploads.clear();
     }
     void Prepare(Frame& frame) {
         // All CPU sorting/allocation and lazy pipeline creation happens before CB
         // acquisition. Order is (Layer,original sequence), never texture order.
         for(auto first=frame.commands.begin();first!=frame.commands.end();) {
-            if(first->kind!=Kind::Image && first->kind!=Kind::Shader) { ++first; continue; }
+            if(first->kind!=Kind::Image && first->kind!=Kind::Shader && first->kind!=Kind::Text) { ++first; continue; }
             auto last=first;
-            while(last!=frame.commands.end() && (last->kind==Kind::Image || last->kind==Kind::Shader)) ++last;
+            while(last!=frame.commands.end() && last->target==first->target &&
+                (last->kind==Kind::Image || last->kind==Kind::Shader || last->kind==Kind::Text)) ++last;
             if(!first->target->info.threeD) std::sort(first,last,[](const Command& a,const Command& b) {
                 return a.paint.layer==b.paint.layer ? a.sequence<b.sequence : a.paint.layer<b.paint.layer;
             });
@@ -465,8 +502,17 @@ struct Renderer::Impl {
                 (void)command.shader->draw.program->Fragment();
                 continue;
             }
-            if(command.kind!=Kind::Image) continue;
+            if(command.kind!=Kind::Image && command.kind!=Kind::Text) continue;
             if(!imagePipeline) imagePipeline=std::make_unique<backend::ImagePipeline>(device);
+            if(command.kind==Kind::Text) {
+                command.pipeline=imagePipeline->Get(format,command.paint.blend);
+                for(auto& part:command.textParts) {
+                    part.firstVertex=static_cast<Uint32>(frame.vertices.size());
+                    const auto first=frame.recordedVertices.begin()+part.inputVertex;
+                    frame.vertices.insert(frame.vertices.end(),first,first+6);
+                }
+                continue;
+            }
             command.firstVertex=static_cast<Uint32>(frame.vertices.size());
             const auto first=frame.recordedVertices.begin()+command.inputVertex;
             frame.vertices.insert(frame.vertices.end(),first,first+command.vertexCount);
@@ -572,13 +618,14 @@ void Renderer::Poll() {
         if (!frame.fence) continue;
         if (SDL_QueryGPUFence(impl->device,frame.fence)) {
             SDL_ReleaseGPUFence(impl->device,frame.fence); frame.fence = nullptr;
-            frame.commands.clear(); frame.recordedVertices.clear(); frame.shaderBytes=0; --impl->stats.inFlight; ++impl->stats.completedFrames;
+            impl->ClearCommands(frame); --impl->stats.inFlight; ++impl->stats.completedFrames;
         } else if (Clock::now()-frame.submitted > std::chrono::milliseconds(impl->config.fenceTimeoutMs)) {
             impl->fatal = true;
             throw std::runtime_error("Renderer GPU frame fence timed out");
         }
     }
     if(impl->shaderCommands) impl->shaderCommands->Reclaim();
+    if(impl->glyphTextures) impl->glyphTextures->Reclaim();
     impl->canvases.Reclaim();
 }
 bool Renderer::TryBeginFrame() {
@@ -606,7 +653,7 @@ void Renderer::SetTargetCanvas(Canvas::Handle handle) {
 Canvas::Handle Renderer::GetTargetCanvas() {
     impl->Recording(); (void)impl->canvases.Describe(impl->target); return impl->target;
 }
-Canvas::Info Renderer::GetTargetInfo() { return impl->canvases.Describe(GetTargetCanvas()); }
+Canvas::Info Renderer::GetTargetInfo(std::optional<Canvas::Handle> requested) { impl->Recording(); return impl->canvases.Describe(requested.value_or(impl->target)); }
 Geometry::SpatialState Renderer::GetSpatialState(Canvas::Handle handle) const {
     impl->Check(); const auto value=impl->canvases.Acquire(handle);
     if(!value->info.threeD) throw std::invalid_argument("Camera, perspective, fog and ZBuffer require Canvas3D");
@@ -621,34 +668,34 @@ void Renderer::SetSpatialState(Canvas::Handle handle,const Geometry::SpatialStat
     if(before==state) return;
     // State may be configured during startup. During recording, an active target
     // change seals the preceding segment before publishing the new state.
-    if(impl->current!=noFrame && impl->target==handle) impl->Append(Impl::Kind::Target,handle);
+    if(impl->current!=noFrame) impl->Append(Impl::Kind::Target,handle);
     impl->canvases.Acquire(handle)->spatial=state;
 }
-void Renderer::Clear(std::uint32_t argb) { impl->Append(Impl::Kind::Clear,impl->target,argb); }
-void Renderer::RenderImage(const Image& image, Transform transform, Paint paint) {
-    impl->Draw(image,detail::ImageCorners(image,transform),paint);
+void Renderer::Clear(std::uint32_t argb, std::optional<Canvas::Handle> requested) { impl->Append(Impl::Kind::Clear,requested.value_or(impl->target),argb); }
+void Renderer::RenderImage(const Image& image, Transform transform, Paint paint, std::optional<Canvas::Handle> requested) {
+    impl->Draw(requested.value_or(impl->target),image,detail::ImageCorners(image,transform),paint);
 }
-void Renderer::RenderImage(Canvas::Handle source, Transform transform, Paint paint) {
+void Renderer::RenderImage(Canvas::Handle source, Transform transform, Paint paint, std::optional<Canvas::Handle> requested) {
     impl->Recording();
     const auto image=impl->CanvasImage(source);
-    impl->Draw(image,detail::ImageCorners(image,transform),paint,impl->canvases.Acquire(source));
+    impl->Draw(requested.value_or(impl->target),image,detail::ImageCorners(image,transform),paint,impl->canvases.Acquire(source));
 }
-void Renderer::RenderRect(const Image& image, double l,double r,double b,double t, Paint paint) {
-    impl->Draw(image,{{{r,t},{l,t},{l,b},{r,b}}},paint);
+void Renderer::RenderRect(const Image& image, double l,double r,double b,double t, Paint paint, std::optional<Canvas::Handle> requested) {
+    impl->Draw(requested.value_or(impl->target),image,{{{r,t},{l,t},{l,b},{r,b}}},paint);
 }
-void Renderer::RenderRect(Canvas::Handle source, double l,double r,double b,double t, Paint paint) {
+void Renderer::RenderRect(Canvas::Handle source, double l,double r,double b,double t, Paint paint, std::optional<Canvas::Handle> requested) {
     impl->Recording();
-    impl->Draw(impl->CanvasImage(source),{{{r,t},{l,t},{l,b},{r,b}}},paint,impl->canvases.Acquire(source));
+    impl->Draw(requested.value_or(impl->target),impl->CanvasImage(source),{{{r,t},{l,t},{l,b},{r,b}}},paint,impl->canvases.Acquire(source));
 }
-void Renderer::RenderQuad(const Image& image,const Geometry::Quad& corners,Paint paint) {
-    impl->Recording();
-    const auto weights=Geometry::ProjectiveWeights(corners,{{{1,0},{0,0},{0,1},{1,1}}});
-    impl->Draw(image,corners,paint,{},nullptr,&weights);
-}
-void Renderer::RenderQuad(Canvas::Handle source,const Geometry::Quad& corners,Paint paint) {
+void Renderer::RenderQuad(const Image& image,const Geometry::Quad& corners,Paint paint, std::optional<Canvas::Handle> requested) {
     impl->Recording();
     const auto weights=Geometry::ProjectiveWeights(corners,{{{1,0},{0,0},{0,1},{1,1}}});
-    impl->Draw(impl->CanvasImage(source),corners,paint,impl->canvases.Acquire(source),nullptr,&weights);
+    impl->Draw(requested.value_or(impl->target),image,corners,paint,{},nullptr,&weights);
+}
+void Renderer::RenderQuad(Canvas::Handle source,const Geometry::Quad& corners,Paint paint, std::optional<Canvas::Handle> requested) {
+    impl->Recording();
+    const auto weights=Geometry::ProjectiveWeights(corners,{{{1,0},{0,0},{0,1},{1,1}}});
+    impl->Draw(requested.value_or(impl->target),impl->CanvasImage(source),corners,paint,impl->canvases.Acquire(source),nullptr,&weights);
 }
 namespace {
 std::array<double,4> QuadMapping(const QuadVertices& vertices,Geometry::Quad& corners) {
@@ -657,15 +704,15 @@ std::array<double,4> QuadMapping(const QuadVertices& vertices,Geometry::Quad& co
     return Geometry::ProjectiveWeights(corners,uv);
 }
 }
-void Renderer::Render4V(const Image& image,const QuadVertices& vertices,Blend blend,double layer) {
+void Renderer::Render4V(const Image& image,const QuadVertices& vertices,Blend blend,double layer, std::optional<Canvas::Handle> requested) {
     impl->Recording();
     Geometry::Quad corners{}; const auto weights=QuadMapping(vertices,corners);
-    impl->Draw(image,corners,{0xFFFFFFFF,blend,layer},{},&vertices,&weights);
+    impl->Draw(requested.value_or(impl->target),image,corners,{0xFFFFFFFF,blend,layer},{},&vertices,&weights);
 }
-void Renderer::Render4V(Canvas::Handle source,const QuadVertices& vertices,Blend blend,double layer) {
+void Renderer::Render4V(Canvas::Handle source,const QuadVertices& vertices,Blend blend,double layer, std::optional<Canvas::Handle> requested) {
     impl->Recording();
     Geometry::Quad corners{}; const auto weights=QuadMapping(vertices,corners);
-    impl->Draw(impl->CanvasImage(source),corners,{0xFFFFFFFF,blend,layer},impl->canvases.Acquire(source),&vertices,&weights);
+    impl->Draw(requested.value_or(impl->target),impl->CanvasImage(source),corners,{0xFFFFFFFF,blend,layer},impl->canvases.Acquire(source),&vertices,&weights);
 }
 namespace {
 QuadVertices3 Quad3Points(const Geometry::Quad3& corners,std::uint32_t color) {
@@ -675,27 +722,88 @@ QuadVertices3 Quad3Points(const Geometry::Quad3& corners,std::uint32_t color) {
     return result;
 }
 }
-void Renderer::RenderQuad3D(const Image& image,const Geometry::Quad3& corners,std::uint32_t color,Blend blend) {
-    impl->Draw3D(image,Quad3Points(corners,color),blend);
+void Renderer::RenderQuad3D(const Image& image,const Geometry::Quad3& corners,std::uint32_t color,Blend blend, std::optional<Canvas::Handle> requested) {
+    impl->Draw3D(requested.value_or(impl->target),image,Quad3Points(corners,color),blend);
 }
-void Renderer::RenderQuad3D(Canvas::Handle source,const Geometry::Quad3& corners,std::uint32_t color,Blend blend) {
-    impl->Recording(); impl->Draw3D(impl->CanvasImage(source),Quad3Points(corners,color),blend,impl->canvases.Acquire(source));
+void Renderer::RenderQuad3D(Canvas::Handle source,const Geometry::Quad3& corners,std::uint32_t color,Blend blend, std::optional<Canvas::Handle> requested) {
+    impl->Recording(); impl->Draw3D(requested.value_or(impl->target),impl->CanvasImage(source),Quad3Points(corners,color),blend,impl->canvases.Acquire(source));
 }
-void Renderer::Render4V3D(const Image& image,const QuadVertices3& points,Blend blend) { impl->Draw3D(image,points,blend); }
-void Renderer::Render4V3D(Canvas::Handle source,const QuadVertices3& points,Blend blend) {
-    impl->Recording(); impl->Draw3D(impl->CanvasImage(source),points,blend,impl->canvases.Acquire(source));
+void Renderer::Render4V3D(const Image& image,const QuadVertices3& points,Blend blend, std::optional<Canvas::Handle> requested) { impl->Draw3D(requested.value_or(impl->target),image,points,blend); }
+void Renderer::Render4V3D(Canvas::Handle source,const QuadVertices3& points,Blend blend, std::optional<Canvas::Handle> requested) {
+    impl->Recording(); impl->Draw3D(requested.value_or(impl->target),impl->CanvasImage(source),points,blend,impl->canvases.Acquire(source));
 }
-void Renderer::RenderRibbon(const Image& image,std::span<const Geometry::Point> points,double width,Paint paint,bool closed) {
-    impl->Ribbon(image,points,width,paint,closed);
+void Renderer::RenderRibbon(const Image& image,std::span<const Geometry::Point> points,double width,Paint paint,bool closed, std::optional<Canvas::Handle> requested) {
+    impl->Ribbon(requested.value_or(impl->target),image,points,width,paint,closed);
 }
-void Renderer::RenderRibbon(Canvas::Handle source,std::span<const Geometry::Point> points,double width,Paint paint,bool closed) {
+void Renderer::RenderRibbon(Canvas::Handle source,std::span<const Geometry::Point> points,double width,Paint paint,bool closed, std::optional<Canvas::Handle> requested) {
     impl->Recording();
-    impl->Ribbon(impl->CanvasImage(source),points,width,paint,closed,impl->canvases.Acquire(source));
+    impl->Ribbon(requested.value_or(impl->target),impl->CanvasImage(source),points,width,paint,closed,impl->canvases.Acquire(source));
 }
-void Renderer::RenderShader(ShaderDraw draw) {
+void Renderer::RenderText(std::shared_ptr<const Text::LayoutResult> layout,double x,double y,
+    std::uint32_t color,Blend blend,double layer,std::optional<Canvas::Handle> requested) {
+    auto& frame=impl->Recording();
+    if(!layout || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(layer) || !IsValidBlend(blend))
+        throw std::invalid_argument("Text drawing requires layout, finite coordinates/layer and a valid blend");
+    const auto handle=requested.value_or(impl->target);
+    auto target=impl->canvases.Acquire(handle);
+    const auto info=impl->canvases.Describe(handle);
+    if(info.threeD) throw std::invalid_argument("Text drawing requires a 2D Canvas");
+    if(impl->SkipWindow(*target)) {impl->Append(Impl::Kind::Target,handle);return;}
+    std::size_t bytes=sizeof(Impl::Command)+sizeof(Text::LayoutResult);
+    const auto account=[&](std::size_t size) {
+        if(size>impl->config.maxShaderBytes || bytes>impl->config.maxShaderBytes-size)
+            throw std::length_error("Renderer text snapshot budget exhausted");
+        bytes+=size;
+    };
+    account(layout->text.size());account(layout->lines.size()*sizeof(Text::Line));
+    account(layout->glyphs.size()*(sizeof(Text::Glyph)+sizeof(Text::PreparedGlyph)+sizeof(Impl::TextPart)*2));
+    if(frame.commands.size()>=impl->config.maxCommands || bytes>impl->config.maxShaderBytes-frame.shaderBytes)
+        throw std::length_error("Renderer text command/snapshot budget exhausted");
+    const double rasterScale=std::max(info.width/std::abs(info.bounds.right-info.bounds.left),
+        info.height/std::abs(info.bounds.top-info.bounds.bottom));
+    const auto prepared=impl->glyphMasks.Prepare(std::move(layout),rasterScale);
+    const auto anchor=prepared->layout->AnchorPoint();
+    std::size_t count{};
+    for(const auto& g:prepared->glyphs) if(g.bitmap->width && g.bitmap->height) ++count;
+    if(!count) return; // Layout and target validation still ran; no rectangular blank glyph.
+    const bool outline=prepared->layout->style.outlineWidth>0;
+    const auto vertexCount=count*6*(outline?2:1),maximum=impl->config.maxVertexBytes/sizeof(detail::Vertex);
+    if(vertexCount>maximum-frame.recordedVertices.size()) throw std::length_error("Renderer text vertex budget exhausted");
+    if(!impl->glyphTextures) impl->glyphTextures=std::make_unique<GlyphTextures::Store>(impl->device);
+    Impl::Command command{};command.kind=Impl::Kind::Text;command.target=std::move(target);
+    command.paint={color,blend,layer};command.sequence=frame.commands.size();command.text=prepared;
+    command.textParts.reserve(count*(outline?2:1));
+    std::vector<detail::Vertex> vertices;vertices.reserve(vertexCount);
+    // A text command remains one ordering unit. Every ring is emitted before
+    // every fill, so later glyph outlines never cover an earlier glyph's ink.
+    for(int phase=outline?0:1;phase<2;++phase) {
+        for(const auto& glyph:prepared->glyphs) {
+            const auto& bitmap=*glyph.bitmap;
+            if(!bitmap.width || !bitmap.height) continue;
+            const auto lease=impl->glyphTextures->Acquire(glyph.bitmap);
+            const double left=x+glyph.x-anchor.x+bitmap.left/bitmap.rasterScale;
+            const double top=y-(glyph.y-anchor.y+bitmap.top/bitmap.rasterScale);
+            const double right=left+bitmap.width/bitmap.rasterScale,bottom=top-bitmap.height/bitmap.rasterScale;
+            const std::array<Geometry::Point,4> corners{{{right,top},{left,top},{left,bottom},{right,bottom}}};
+            const std::array<Geometry::Point,4> uv{{{1,0},{0,0},{0,1},{1,1}}};
+            Image image;image.width=image.textureWidth=bitmap.width;image.height=image.textureHeight=bitmap.height;
+            std::array<detail::Vertex,4> quad;
+            const auto tint=phase==0?prepared->layout->style.outlineColor:color;
+            for(std::size_t i=0;i<4;++i) quad[i]=impl->Project(image,info.bounds,corners[i],uv[i][0],uv[i][1],1,tint);
+            command.textParts.push_back({lease,static_cast<Uint32>(frame.recordedVertices.size()+vertices.size()),0,phase==0});
+            for(const auto i:{0,1,2,0,2,3}) vertices.push_back(quad[i]);
+        }
+    }
+    // Admission is atomic: allocation or glyph failure never records a prefix.
+    frame.commands.reserve(frame.commands.size()+1);
+    frame.recordedVertices.reserve(frame.recordedVertices.size()+vertices.size());
+    frame.recordedVertices.insert(frame.recordedVertices.end(),vertices.begin(),vertices.end());
+    frame.commands.push_back(std::move(command));frame.shaderBytes+=bytes;
+}
+void Renderer::RenderShader(ShaderDraw draw, std::optional<Canvas::Handle> requested) {
     auto& frame=impl->Recording();
     if(!draw.program || !std::isfinite(draw.layer)) throw std::invalid_argument("Shader draw requires a live Program and finite layer");
-    const auto info=impl->canvases.Describe(impl->target);
+    const auto info=impl->canvases.Describe(requested.value_or(impl->target));
     if(info.threeD && draw.layer!=0) throw std::invalid_argument("Canvas3D Shader draw does not accept layer");
     std::size_t bytes=sizeof(detail::ShaderCommand);
     auto account=[&](std::size_t size) {
@@ -714,7 +822,7 @@ void Renderer::RenderShader(ShaderDraw draw) {
     for(const auto& value:draw.program->Metadata().fragment.buffers) account(value.size);
     if(frame.commands.size()>=impl->config.maxCommands || bytes>impl->config.maxShaderBytes-frame.shaderBytes)
         throw std::length_error("Renderer Shader command/snapshot budget exhausted");
-    auto output=impl->canvases.Acquire(impl->target);
+    auto output=impl->canvases.Acquire(requested.value_or(impl->target));
     auto shader=std::make_shared<detail::ShaderCommand>();
     shader->info=info; shader->canvases.resize(draw.sources.size());
     for(std::size_t i=0;i<draw.sources.size();++i) {
@@ -733,6 +841,9 @@ void Renderer::RenderShader(ShaderDraw draw) {
     // Prepare while handles are live. Destroy after acceptance invalidates new
     // access, but cannot invalidate a command already pinned for submission.
     impl->shaderCommands->Prepare(*shader,output->spatial,output,format);
+    if((shader->draw.mesh && shader->draw.mesh->Vertices().empty()) || impl->SkipWindow(*output)) {
+        impl->Append(Impl::Kind::Target,requested.value_or(impl->target));return;
+    }
     Impl::Command command{}; command.kind=Impl::Kind::Shader; command.target=std::move(output);
     command.spatial=command.target->spatial; command.paint.layer=shader->draw.layer;
     command.sequence=frame.commands.size(); command.shader=std::move(shader);
@@ -790,7 +901,7 @@ std::optional<std::string> Renderer::GetCanvasPNG(Canvas::Handle handle) {
     try {if(inside) impl->AcquirePresentation(frame);}
     catch(const std::exception& error) {failure(error);return {};}
     if(source->info.window && (!frame.swapchain || (SDL_GetWindowFlags(impl->window) & SDL_WINDOW_MINIMIZED)))
-        throw std::logic_error("WindowCanvas PNG has no valid swapchain image in this frame");
+        return {}; // A legal window readback has no presentable image this frame.
     SDL_GPUCommandBuffer* command{};
     bool submitted{};
     try {
@@ -850,7 +961,7 @@ bool Renderer::Shutdown() {
     impl->captureFence=nullptr;impl->capture.reset();impl->captureSource.reset();
     for (auto& frame : impl->frames) {
         if (frame.fence) SDL_ReleaseGPUFence(impl->device,frame.fence);
-        frame.fence=nullptr; frame.commands.clear(); frame.recordedVertices.clear(); frame.vertices.clear();
+        frame.fence=nullptr; impl->ClearCommands(frame);
         if(frame.vertexBuffer) SDL_ReleaseGPUBuffer(impl->device,frame.vertexBuffer);
         if(frame.transfer) SDL_ReleaseGPUTransferBuffer(impl->device,frame.transfer);
         if(frame.mirror) SDL_ReleaseGPUTexture(impl->device,frame.mirror);
@@ -858,6 +969,7 @@ bool Renderer::Shutdown() {
         frame.vertexBuffer=nullptr; frame.transfer=nullptr;
     }
     impl->shaderCommands.reset();
+    impl->glyphTextures.reset();impl->glyphMasks.Clear();
     impl->imagePipeline.reset();
     impl->canvases.Shutdown(); impl->stats.inFlight=0;
     return impl->shutdownResult;

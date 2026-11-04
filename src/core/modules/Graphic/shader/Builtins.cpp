@@ -34,19 +34,19 @@ Matrix CanvasMatrix(const Canvas::Bounds& b) {
     // value component independent: the same signed, finite range rules apply.
     if (!std::isfinite(b.left) || !std::isfinite(b.right) || !std::isfinite(b.bottom) || !std::isfinite(b.top) ||
         !std::isfinite(b.right-b.left) || !std::isfinite(b.top-b.bottom) || b.left == b.right || b.bottom == b.top)
-        Error("SolongoCanvasToClip", "Canvas bounds must be finite nonzero ranges");
+        Error("EngineCanvasToClip", "Canvas bounds must be finite nonzero ranges");
     auto result = Identity();
     const auto width = b.right-b.left, height = b.top-b.bottom;
-    result[0] = Finite(2/width, "SolongoCanvasToClip");
-    result[5] = Finite(2/height, "SolongoCanvasToClip");
+    result[0] = Finite(2/width, "EngineCanvasToClip");
+    result[5] = Finite(2/height, "EngineCanvasToClip");
     // Avoid left+right or 2*left overflowing before division when the final
     // affine offset is representable. Reversed ranges deliberately retain sign.
-    result[3] = Finite(-1-2*(b.left/width), "SolongoCanvasToClip");
-    result[7] = Finite(-1-2*(b.bottom/height), "SolongoCanvasToClip");
+    result[3] = Finite(-1-2*(b.left/width), "EngineCanvasToClip");
+    result[7] = Finite(-1-2*(b.bottom/height), "EngineCanvasToClip");
     return result;
 }
 double Dot(const Geometry::Point3& a, const Geometry::Point3& b) {
-    return Finite(std::fma(a[0], b[0], std::fma(a[1], b[1], a[2]*b[2])), "SolongoView");
+    return Finite(std::fma(a[0], b[0], std::fma(a[1], b[1], a[2]*b[2])), "EngineView");
 }
 Matrix ViewMatrix(const Geometry::View& view) {
     // Reuse MakeView's orthonormal basis. No second camera/up normalization.
@@ -59,7 +59,7 @@ Matrix ProjectionMatrix(const Geometry::View& view) {
     // Right-handed view points forward along -Z. Project's positive distance
     // z=dot(point-origin,forward) is therefore -viewPosition.z.
     return {view.sx,0,0,0, 0,view.sy,0,0,
-        0,0,-view.depthScale,Finite(-view.nearPlane*view.depthScale, "SolongoProjection"),
+        0,0,-view.depthScale,Finite(-view.nearPlane*view.depthScale, "EngineProjection"),
         0,0,-1,0};
 }
 Matrix Multiply(const Matrix& a, const Matrix& b) {
@@ -67,7 +67,7 @@ Matrix Multiply(const Matrix& a, const Matrix& b) {
     for (std::size_t row = 0; row < 4; ++row) for (std::size_t column = 0; column < 4; ++column) {
         double value{};
         for (std::size_t k = 0; k < 4; ++k)
-            value = Finite(std::fma(a[row*4+k], b[k*4+column], value), "SolongoViewProjection");
+            value = Finite(std::fma(a[row*4+k], b[k*4+column], value), "EngineViewProjection");
         result[row*4+column] = value;
     }
     return result;
@@ -81,10 +81,10 @@ PackedMatrix Columns(const Matrix& matrix, std::string_view name) {
 struct Values {
     PackedMatrix view, projection, combined, canvas;
     std::array<float,2> size, inverse;
-    std::uint32_t fullscreen, threeD;
+    std::uint32_t fullscreen;
 };
 Values Build(const Canvas::Info& info, const Geometry::SpatialState& spatial, bool fullscreen) {
-    if (!info.width || !info.height) Error("SolongoTargetSize", "target dimensions must be positive");
+    if (!info.width || !info.height) Error("EngineTargetSize", "target dimensions must be positive");
     auto view = Identity(), projection = Identity();
     if (info.threeD) {
         // Fullscreen only changes the generated vertex source. It neither skips
@@ -94,11 +94,11 @@ Values Build(const Canvas::Info& info, const Geometry::SpatialState& spatial, bo
         projection = ProjectionMatrix(source);
     }
     const auto combined = Multiply(projection, view);
-    return {Columns(view,"SolongoView"), Columns(projection,"SolongoProjection"),
-        Columns(combined,"SolongoViewProjection"), Columns(CanvasMatrix(info.bounds),"SolongoCanvasToClip"),
-        {Float(info.width,"SolongoTargetSize"),Float(info.height,"SolongoTargetSize")},
-        {Float(1./info.width,"SolongoTargetInvSize"),Float(1./info.height,"SolongoTargetInvSize")},
-        fullscreen?1u:0u,info.threeD?1u:0u};
+    return {Columns(view,"EngineView"), Columns(projection,"EngineProjection"),
+        Columns(combined,"EngineViewProjection"), Columns(CanvasMatrix(info.bounds),"EngineCanvasToClip"),
+        {Float(info.width,"EngineTargetSize"),Float(info.height,"EngineTargetSize")},
+        {Float(1./info.width,"EngineTargetInvSize"),Float(1./info.height,"EngineTargetInvSize")},
+        fullscreen?1u:0u};
 }
 struct Source {
     ValueType type;
@@ -108,14 +108,13 @@ template<class T> Source Data(ValueType type, const T& value) {
     return {type, {reinterpret_cast<const std::uint8_t*>(&value),sizeof(value)}};
 }
 Source Lookup(const Values& values, std::string_view name) {
-    if (name == "SolongoView") return Data(ValueType::Matrix4, values.view);
-    if (name == "SolongoProjection") return Data(ValueType::Matrix4, values.projection);
-    if (name == "SolongoViewProjection") return Data(ValueType::Matrix4, values.combined);
-    if (name == "SolongoCanvasToClip") return Data(ValueType::Matrix4, values.canvas);
-    if (name == "SolongoTargetSize") return Data(ValueType::Float2, values.size);
-    if (name == "SolongoTargetInvSize") return Data(ValueType::Float2, values.inverse);
-    if (name == "SolongoIsFullscreen") return Data(ValueType::UInt, values.fullscreen);
-    if (name == "SolongoIs3D") return Data(ValueType::UInt, values.threeD);
+    if (name == "EngineView") return Data(ValueType::Matrix4, values.view);
+    if (name == "EngineProjection") return Data(ValueType::Matrix4, values.projection);
+    if (name == "EngineViewProjection") return Data(ValueType::Matrix4, values.combined);
+    if (name == "EngineCanvasToClip") return Data(ValueType::Matrix4, values.canvas);
+    if (name == "EngineTargetSize") return Data(ValueType::Float2, values.size);
+    if (name == "EngineTargetInvSize") return Data(ValueType::Float2, values.inverse);
+    if (name == "EngineIsFullscreen") return Data(ValueType::UInt, values.fullscreen);
     Error(name, "unknown reflected builtin");
 }
 }
@@ -125,8 +124,8 @@ std::vector<Uniform> Pack(const Canvas::Info& info, const Geometry::SpatialState
     std::unordered_set<std::uint32_t> slots;
     for (const auto& buffer : stage.buffers) {
         if (!slots.insert(buffer.slot).second || buffer.slot >= 4) Error("buffer", "invalid reflected uniform slots");
-        if (buffer.name != "SolongoBuiltins") continue;
-        if (!result.empty()) Error("buffer", "duplicate SolongoBuiltins buffer");
+        if (buffer.name != "EngineBuiltins") continue;
+        if (!result.empty()) Error("buffer", "duplicate EngineBuiltins buffer");
         if (!buffer.size || buffer.size > 64*1024) Error("buffer", "invalid reflected builtin buffer size");
         Uniform output{buffer.slot,std::vector<std::uint8_t>(buffer.size)};
         std::unordered_set<std::string> names;

@@ -42,7 +42,7 @@ using ResolveTexture = std::function<void(std::string_view name, int absoluteVal
 
 // Preserves the Lua stack on success/C++ failure; does not call Lua metamethods.
 // Numeric data is copied and validated now, not read again when encoding a draw.
-// Only Params is packed here; Renderer supplies reflected SolongoBuiltins data.
+// Only Params is packed here; Renderer supplies reflected EngineBuiltins data.
 Snapshot Pack(lua_State*, int paramsIndex, const core::modules::Graphic::Shader::Compiled&,
-    const ResolveTexture& = {});
+    bool targetThreeD, const ResolveTexture& = {});
 }

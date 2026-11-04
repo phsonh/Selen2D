@@ -1,4 +1,4 @@
-#include "Solongo.hlsl"
+#include "Engine.hlsl"
 #include "palette.hlsl"
 
 // Lua keys match these field names exactly. The engine assigns GPU bindings.
@@ -14,9 +14,9 @@ cbuffer Params
 float4 PSMain(PSInput input) : SV_Target0
 {
     // Coordinates use the target height as one unit: center is (0,0), Y is up.
-    float2 position = (input.uv - 0.5) * float2(SolongoTargetSize.x / SolongoTargetSize.y, 1.0);
+    float2 position = (input.uv - 0.5) * float2(EngineTargetSize.x / EngineTargetSize.y, 1.0);
     position.y = -position.y;
-    float edge = max(1.25 * SolongoTargetInvSize.y, 0.0001);
+    float edge = max(1.25 * EngineTargetInvSize.y, 0.0001);
     float activeRadius = radius * (1.0 + 0.045 * sin(elapsed * 2.4));
     float distanceFromCenter = length(position - center);
     float disk = SoftDisk(distanceFromCenter, activeRadius, edge);

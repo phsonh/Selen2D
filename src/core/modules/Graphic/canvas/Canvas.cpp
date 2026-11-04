@@ -1,5 +1,6 @@
 #include "Canvas.h"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -38,7 +39,7 @@ struct Store::Impl {
     std::vector<Slot> slots;
     std::vector<std::shared_ptr<detail::Attachment>> retired;
     Stats stats;
-    bool closed{};
+    bool closed{}, windowPublished{};
 
     Impl(SDL_GPUDevice* d, SDL_Window* w, Config c) : device(d), window(w), config(c) {
         if (!device || !c.maxCanvases || c.maxCanvases >= std::numeric_limits<std::uint32_t>::max() ||
@@ -74,13 +75,27 @@ Handle Store::GetWindowCanvas() const { impl->Check(); return {impl->owner, impl
 std::shared_ptr<detail::Attachment> Store::Acquire(Handle h) const { return impl->Lookup(h).attachment; }
 Info Store::Describe(Handle h) const {
     auto info = Acquire(h)->info;
-    if (info.window && impl->window) {
+    if (info.window && impl->window && !impl->windowPublished) {
         int w{}, height{};
         if (!SDL_GetWindowSizeInPixels(impl->window, &w, &height)) throw std::runtime_error(SDL_GetError());
         info.width = static_cast<std::uint32_t>(w); info.height = static_cast<std::uint32_t>(height);
-        info.bounds = Centered(info.width, info.height);
+        if (!SDL_GetWindowSize(impl->window, &w, &height)) throw std::runtime_error(SDL_GetError());
+        info.logicalWidth=static_cast<std::uint32_t>(std::max(w,1));
+        info.logicalHeight=static_cast<std::uint32_t>(std::max(height,1));
+        info.bounds = Centered(info.logicalWidth, info.logicalHeight);
     }
     return info;
+}
+void Store::PublishWindowMetrics(std::uint32_t width,std::uint32_t height) {
+    impl->Check();
+    if(!width || !height) throw std::invalid_argument("Window logical dimensions must be positive");
+    if(!impl->window) return;
+    int w{},h{};
+    if(!SDL_GetWindowSizeInPixels(impl->window,&w,&h)) throw std::runtime_error(SDL_GetError());
+    auto& info=impl->slots[0].attachment->info;
+    info.width=static_cast<std::uint32_t>(std::max(w,0)); info.height=static_cast<std::uint32_t>(std::max(h,0));
+    info.logicalWidth=width;info.logicalHeight=height;info.bounds=Centered(width,height);
+    impl->windowPublished=true;
 }
 Handle Store::Create(std::uint32_t w, std::uint32_t h, std::optional<Bounds> requested) {
     return Allocate(w,h,requested,false);
@@ -90,7 +105,7 @@ Handle Store::Allocate(std::uint32_t w, std::uint32_t h, std::optional<Bounds> r
     impl->Check();
     if (!w || !h || w > impl->config.maxDimension || h > impl->config.maxDimension)
         throw std::invalid_argument("Canvas pixel dimensions exceed the configured range");
-    const Info info{w, h, requested.value_or(Centered(w,h)), false, threeD};
+    const Info info{w, h, requested.value_or(Centered(w,h)), false, threeD, w, h};
     Validate(info.bounds);
     Reclaim();
     if (Bytes(info) > impl->config.maxBytes - impl->stats.bytes ||

@@ -2,6 +2,7 @@
 #include "core/modules/Graphic/canvas/Canvas.h"
 #include "Image.h"
 #include "ShaderDraw.h"
+#include "core/modules/Graphic/text/Text.h"
 #include <span>
 #include <cstddef>
 #include <cstdint>
@@ -40,25 +41,27 @@ public:
     bool TryBeginFrame();
     void SetTargetCanvas(Canvas::Handle);
     Canvas::Handle GetTargetCanvas(); // Pure query, valid only inside an engine frame.
-    Canvas::Info GetTargetInfo(); // Requires an active frame, including for argument layout selection.
+    Canvas::Info GetTargetInfo(std::optional<Canvas::Handle> output = {}); // Requires an active frame, including for argument layout selection.
     Geometry::SpatialState GetSpatialState(Canvas::Handle) const;
     void SetSpatialState(Canvas::Handle, const Geometry::SpatialState&);
-    void Clear(std::uint32_t argb); // Input straight ARGB; Canvas storage is PMA.
-    void RenderImage(const Image&, Transform, Paint = {});
-    void RenderImage(Canvas::Handle, Transform, Paint = {});
-    void RenderRect(const Image&, double left, double right, double bottom, double top, Paint = {});
-    void RenderRect(Canvas::Handle, double left, double right, double bottom, double top, Paint = {});
-    void RenderQuad(const Image&, const Geometry::Quad&, Paint = {});
-    void RenderQuad(Canvas::Handle, const Geometry::Quad&, Paint = {});
-    void Render4V(const Image&, const QuadVertices&, Blend = Blend::MulAlpha, double layer = 0);
-    void Render4V(Canvas::Handle, const QuadVertices&, Blend = Blend::MulAlpha, double layer = 0);
-    void RenderQuad3D(const Image&, const Geometry::Quad3&, std::uint32_t color = 0xFFFFFFFF, Blend = Blend::MulAlpha);
-    void RenderQuad3D(Canvas::Handle, const Geometry::Quad3&, std::uint32_t color = 0xFFFFFFFF, Blend = Blend::MulAlpha);
-    void Render4V3D(const Image&, const QuadVertices3&, Blend = Blend::MulAlpha);
-    void Render4V3D(Canvas::Handle, const QuadVertices3&, Blend = Blend::MulAlpha);
-    void RenderRibbon(const Image&, std::span<const Geometry::Point>, double width, Paint = {}, bool closed = false);
-    void RenderRibbon(Canvas::Handle, std::span<const Geometry::Point>, double width, Paint = {}, bool closed = false);
-    void RenderShader(ShaderDraw); // Explicit values; no implicit current Object or shared material state.
+    void Clear(std::uint32_t argb, std::optional<Canvas::Handle> output = {}); // Input straight ARGB; Canvas storage is PMA.
+    void RenderImage(const Image&, Transform, Paint = {}, std::optional<Canvas::Handle> output = {});
+    void RenderImage(Canvas::Handle, Transform, Paint = {}, std::optional<Canvas::Handle> output = {});
+    void RenderRect(const Image&, double left, double right, double bottom, double top, Paint = {}, std::optional<Canvas::Handle> output = {});
+    void RenderRect(Canvas::Handle, double left, double right, double bottom, double top, Paint = {}, std::optional<Canvas::Handle> output = {});
+    void RenderQuad(const Image&, const Geometry::Quad&, Paint = {}, std::optional<Canvas::Handle> output = {});
+    void RenderQuad(Canvas::Handle, const Geometry::Quad&, Paint = {}, std::optional<Canvas::Handle> output = {});
+    void Render4V(const Image&, const QuadVertices&, Blend = Blend::MulAlpha, double layer = 0, std::optional<Canvas::Handle> output = {});
+    void Render4V(Canvas::Handle, const QuadVertices&, Blend = Blend::MulAlpha, double layer = 0, std::optional<Canvas::Handle> output = {});
+    void RenderQuad3D(const Image&, const Geometry::Quad3&, std::uint32_t color = 0xFFFFFFFF, Blend = Blend::MulAlpha, std::optional<Canvas::Handle> output = {});
+    void RenderQuad3D(Canvas::Handle, const Geometry::Quad3&, std::uint32_t color = 0xFFFFFFFF, Blend = Blend::MulAlpha, std::optional<Canvas::Handle> output = {});
+    void Render4V3D(const Image&, const QuadVertices3&, Blend = Blend::MulAlpha, std::optional<Canvas::Handle> output = {});
+    void Render4V3D(Canvas::Handle, const QuadVertices3&, Blend = Blend::MulAlpha, std::optional<Canvas::Handle> output = {});
+    void RenderRibbon(const Image&, std::span<const Geometry::Point>, double width, Paint = {}, bool closed = false, std::optional<Canvas::Handle> output = {});
+    void RenderRibbon(Canvas::Handle, std::span<const Geometry::Point>, double width, Paint = {}, bool closed = false, std::optional<Canvas::Handle> output = {});
+    void RenderShader(ShaderDraw, std::optional<Canvas::Handle> output = {}); // Explicit values; no implicit current Object or shared material state.
+    void RenderText(std::shared_ptr<const Text::LayoutResult>, double x, double y, std::uint32_t color,
+        Blend blend, double layer, std::optional<Canvas::Handle> output = {});
     std::optional<std::string> GetCanvasPNG(Canvas::Handle);
     bool HasAcquiredSwapchain() const; // Native presentation reconfiguration guard; not a Lua API.
     void EndFrame(); // Encode only after CPU recording succeeds, then submit.

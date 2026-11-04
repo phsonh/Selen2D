@@ -146,4 +146,4 @@ New-Item -ItemType Directory -Force build/game-deploy
 
 宿主 stdio、`io.popen/os.execute`、FFI、`load/loadstring` 与无文件名的 stdin 代码加载仍按实际 LuaJIT 能力暴露。这些能力不构成完整不可信脚本沙箱，字符串或流不会因此被标为已认证包代码。认证加密的目标是提高直接解包与简单替换的门槛，不提供反调试、签名发行者证明或防止持密钥者重打包的保证。
 
-Shader 示例继续使用内建 `Solongo.hlsl` 与现有渲染接口，见 [Shader 指南](shader.md)。File 与包的 CPU/互操作结果不能代替后续 Resource、Graphic、Audio 的接口迁移或 GPU、音频设备验收。
+Shader 示例继续使用内建 `Engine.hlsl` 与现有渲染接口，见 [Shader 指南](shader.md)。File 与包的 CPU/互操作结果不能代替 Resource、Graphic、Audio 的组合测试或 GPU、音频设备验收。

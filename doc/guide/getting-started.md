@@ -26,7 +26,7 @@ Lua 使用相对 VFS 根的虚拟路径。默认配置将 `example/...` 映射�
 
 默认运行不需要资源包、SDK、tools 目录或 Python。缺少 `example/main.lua` 会导致启动失败。`output/` 可以不存在，启动不会自动创建；需要写入时先调用 `File.CreateDirectory('output')`。标准 Lua 的文件名形式 `io.open/input/output/lines`、`loadfile/dofile` 和 `os.remove/rename` 也经过 VFS，仍保持各自的 LuaJIT 返回形式。FFI、`popen`、`os.execute` 和主动编译字符串不是完整沙箱保证，详见 [File 与启动配置](file-launch.md)。
 
-关闭程序，修改 EXE 旁的 `example/main.lua`，保存后重新运行即可。在默认授权不变时，修改 Lua 或 HLSL 不需要重新编译 C++；示例没有自动热重载。更改入口、授权目录或包记录需要更改构建期 `launch.h` 并重新构建；操作方法见 [启动配置指南](file-launch.md)。Shader 的内置 include 仍为 `Solongo.hlsl`。
+关闭程序，修改 EXE 旁的 `example/main.lua`，保存后重新运行即可。在默认授权不变时，修改 Lua 或 HLSL 不需要重新编译 C++；示例没有自动热重载。更改入口、授权目录或包记录需要更改构建期 `launch.h` 并重新构建；操作方法见 [启动配置指南](file-launch.md)。Shader 的内置 include 为 `Engine.hlsl`。
 
 源码普通构建只刷新对应 `build/<配置>/bin` 中的引擎与示例，不写入正式发行目录。Debug 不能发布正式包。先完成 Release 构建，再显式运行发布目标：
 

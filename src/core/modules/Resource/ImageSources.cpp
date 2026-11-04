@@ -122,6 +122,18 @@ void Prepare(const std::shared_ptr<SourceState>& source, const std::shared_ptr<M
         const_cast<Jobs::StopToken*>(&stop));
     stop.Check();
     std::string{}.swap(snapshot.bytes); // Free capacity BEFORE returning memory credit.
+    // PNG decoding preserves source bytes. GPU working pixels instead filter
+    // in premultiplied RGBA8, before extrusion and mip generation. Quantization
+    // is explicit; source files, dimensions and logical metadata stay unchanged.
+    for(std::uint32_t y=0;y<pixels.height;++y) {
+        stop.Check();
+        auto* row=pixels.pixels.get()+std::size_t(y)*pixels.width*4;
+        for(std::uint32_t x=0;x<pixels.width;++x) {
+            auto* p=row+std::size_t(x)*4;
+            for(int channel=0;channel<3;++channel)
+                p[channel]=static_cast<std::uint8_t>((unsigned(p[channel])*p[3]+127)/255);
+        }
+    }
     if (!pixels.residentBytes || pixels.residentBytes > allocationLimit)
         throw std::runtime_error("PNG decoder returned invalid resident allocation accounting");
     credit.Shrink(pixels.residentBytes);

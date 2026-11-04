@@ -45,9 +45,11 @@ tools for SLPK v1 packages and authenticated SLPK v2 packages. The Python
 packages in `tools/requirements-tools.txt` are needed only when running those
 source tools. Ordinary engine builds need the build tools listed above, without
 those extra Python packages; the running engine does not need Python.
-The staged Resource/Graphic/Audio API migration remains separate work.
+Resource options, atomic Loader publication, explicit audio players, Canvas dual
+entry points, Mesh versions, Engine.hlsl sampling and ordinary text are now
+implemented. The integration acceptance is recorded separately from API coverage.
 
 See [running the example](doc/guide/getting-started.md) and
 [File, packages and compiled startup configuration](doc/guide/file-launch.md).
-The Shader example still uses the built-in `Solongo.hlsl` declarations described
+The Shader example uses the built-in `Engine.hlsl` declarations described
 in the [Shader guide](doc/guide/shader.md).
