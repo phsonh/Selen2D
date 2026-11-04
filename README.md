@@ -2,7 +2,9 @@
   <img src="src/res/image/selen2d-logo.png" alt="Selen2D logo" width="104" />
 </p>
 <h1 align="center">Selen2D</h1>
+
 ![Selen2D Banner](src/res/image/Selen2D_banner_2048x1024.png)
+
 <p align="center">
   <strong>A lightweight, LuaJIT-driven game engine for 2D games.</strong><br />
   <strong>轻量级 LuaJIT 驱动的 2D 游戏引擎。</strong><br />
