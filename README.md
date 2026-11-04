@@ -4,7 +4,7 @@
 
 A lightweight 2D game engine.
 
-The 2.1.0 release candidate implements the frozen second API revision. Windows x64/D3D12
+Version 2.1.0 implements the frozen second API revision. Windows x64/D3D12
 validation and remaining platform limits are recorded separately from API coverage. `v2.0.0` remains the published first-revision baseline.
 The editor definitions in `doc/api` describe the interfaces actually implemented
 in the current source, and are updated alongside each module.
@@ -13,8 +13,7 @@ in the current source, and are updated alongside each module.
 
 - `main` contains accepted stable releases; experimental work does not go directly into it.
 - `develop` is the long-lived branch for features, fixes and intermediate revisions.
-  The current second-revision work remains on `v2-development` until its approved
-  release, after which that branch will become `develop` with its history preserved.
+  It continues the former `v2-development` history and includes the accepted main state.
 - CMake supplies the single product-version value. Planned feature releases use
   versions such as `2.1.0`; development revisions normally remain untagged.
   An explicitly approved stable hotfix may use a patch version and must also
@@ -25,6 +24,16 @@ in the current source, and are updated alongside each module.
 
 The full maintainer workflow is recorded locally in `devs/log/development-workflow.md`.
 Local tests, design records, builds and release artifacts remain excluded by `.gitignore`.
+
+The source tools are organized by purpose:
+
+```text
+tools/
+  build.ps1   # configure and build the engine
+  cmake/      # dependency, Shader, notice and packaging build rules
+  info/       # product metadata template and third-party notices
+  pack/       # resource packaging and launch-header Python tools
+```
 
 ## Windows build
 
@@ -61,7 +70,7 @@ file in the default development layout only requires restarting it.
 
 Stage C adds the File/VFS contract, compiled startup configuration, and Python
 tools for SLPK v1 packages and authenticated SLPK v2 packages. The Python
-packages in `tools/requirements-tools.txt` are needed only when running those
+packages in `tools/pack/requirements-tools.txt` are needed only when running those
 source tools. Ordinary engine builds need the build tools listed above, without
 those extra Python packages; the running engine does not need Python.
 Resource options, atomic Loader publication, explicit audio players, Canvas dual

@@ -8,7 +8,7 @@ from functools import lru_cache
 try:
     import unicodedata2 as unicode
 except ImportError as exc:
-    raise RuntimeError("Install tools/requirements-tools.txt before using the build tools") from exc
+    raise RuntimeError("Install tools/pack/requirements-tools.txt before using the build tools") from exc
 if unicode.unidata_version != "18.0.0":
     raise RuntimeError("Build tools require Unicode 18.0.0; install the pinned requirements")
 

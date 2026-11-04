@@ -30,6 +30,6 @@ endforeach()
 add_custom_command(OUTPUT "${image_shader_dir}/ImageShaders.h"
     COMMAND "${CMAKE_COMMAND}" "-DVERTEX=${image_shader_dir}/vert.bin" "-DFRAGMENT=${image_shader_dir}/frag.bin"
         "-DOUTPUT=${image_shader_dir}/ImageShaders.h" "-DFORMAT=${image_shader_format}"
-        -P "${PROJECT_SOURCE_DIR}/tools/EmbedShaders.cmake"
-    DEPENDS "${image_shader_dir}/vert.bin" "${image_shader_dir}/frag.bin" "${PROJECT_SOURCE_DIR}/tools/EmbedShaders.cmake"
+        -P "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
+    DEPENDS "${image_shader_dir}/vert.bin" "${image_shader_dir}/frag.bin" "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
     VERBATIM)

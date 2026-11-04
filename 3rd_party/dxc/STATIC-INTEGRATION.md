@@ -25,7 +25,7 @@ Local modifications are recorded in `patches/static-embedding.patch`:
   DXIL hash implementation are unchanged. No validation-skip option, preview
   bypass, DLL extraction, or runtime download is used.
 
-The integration code in `../../tools/DxcStatic.cmake` and
+The integration code in `../../tools/cmake/DxcStatic.cmake` and
 `../cmake/dxc` is project-owned. It builds the dependency in a separate CMake
 tree, walks the actual static target link graph, and uses Microsoft's librarian
 to combine implementation archives (including DIA GUID constants) into

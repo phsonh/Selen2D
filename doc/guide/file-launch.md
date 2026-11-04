@@ -54,7 +54,7 @@ Python 工具只在构建时使用；默认 CMake 构建不需要安装这些 Py
 
 ```powershell
 python -m venv build/tools-venv
-.\build\tools-venv\Scripts\python.exe -m pip install -r tools/requirements-tools.txt
+.\build\tools-venv\Scripts\python.exe -m pip install -r tools/pack/requirements-tools.txt
 New-Item -ItemType Directory -Force launch, build/launch
 ```
 
@@ -69,9 +69,9 @@ New-Item -ItemType Directory -Force launch, build/launch
 ```
 
 ```powershell
-.\build\tools-venv\Scripts\python.exe tools/make_launch.py build --config launch/game.source.json --output build/launch/launch.h
-.\build\tools-venv\Scripts\python.exe tools/make_launch.py inspect --config launch/game.source.json
-.\build\tools-venv\Scripts\python.exe tools/make_launch.py verify --config launch/game.source.json --header build/launch/launch.h
+.\build\tools-venv\Scripts\python.exe tools/pack/make_launch.py build --config launch/game.source.json --output build/launch/launch.h
+.\build\tools-venv\Scripts\python.exe tools/pack/make_launch.py inspect --config launch/game.source.json
+.\build\tools-venv\Scripts\python.exe tools/pack/make_launch.py verify --config launch/game.source.json --header build/launch/launch.h
 ```
 
 `build` 在目标旁生成临时文件，成功后替换输出；输出父目录须已存在。`inspect` 不显示 secret 或摘要。`verify` 比较配置与固定生成内容，不执行 C++，不解析任意手写头文件。这三条命令只校验配置，不访问部署树、验证包内容或运行引擎。
@@ -96,15 +96,15 @@ cmake --build --preset selen2d-release
 
 ## 打包、检查与部署
 
-`tools/pack_resources.py` 支持明文 SLPK v1 与认证加密 SLPK v2。输入是稳定的普通物理目录；包内路径相对该目录，不包含目录名或挂载 target。文件扩展名不参与格式识别，ZIP 不是本工具的输入或输出格式。
+`tools/pack/pack_resources.py` 支持明文 SLPK v1 与认证加密 SLPK v2。输入是稳定的普通物理目录；包内路径相对该目录，不包含目录名或挂载 target。文件扩展名不参与格式识别，ZIP 不是本工具的输入或输出格式。
 
 假设游戏输入为 `assets/scripts/main.lua` 等资源，下面的 `build/game-deploy/` 是另行准备的部署目录：
 
 ```powershell
 New-Item -ItemType Directory -Force build/game-deploy
-.\build\tools-venv\Scripts\python.exe tools/pack_resources.py pack --source assets --output build/game-deploy/data.bin
-.\build\tools-venv\Scripts\python.exe tools/pack_resources.py inspect --input build/game-deploy/data.bin
-.\build\tools-venv\Scripts\python.exe tools/pack_resources.py verify --input build/game-deploy/data.bin
+.\build\tools-venv\Scripts\python.exe tools/pack/pack_resources.py pack --source assets --output build/game-deploy/data.bin
+.\build\tools-venv\Scripts\python.exe tools/pack/pack_resources.py inspect --input build/game-deploy/data.bin
+.\build\tools-venv\Scripts\python.exe tools/pack/pack_resources.py verify --input build/game-deploy/data.bin
 ```
 
 默认块大小为 262144 字节、Zstd 等级为 6；`--block-size` 支持 65536～1048576 的二次幂，`--level` 接受工具所用 Zstd 支持的范围。每块独立压缩，压缩不变小时存原始数据；空文件和空目录保留。输入树中的重定向链接、NFC/大小写冲突和源树内的输出路径会被拒绝。工具不会默认忽略 `.git` 或临时文件，应只传干净的资源目录。
@@ -127,9 +127,9 @@ New-Item -ItemType Directory -Force build/game-deploy
 ```
 
 ```powershell
-.\build\tools-venv\Scripts\python.exe tools/pack_resources.py pack --source assets --output build/game-deploy/data.bin --encrypt --config launch/game.source.json
-.\build\tools-venv\Scripts\python.exe tools/pack_resources.py inspect --input build/game-deploy/data.bin --config launch/game.source.json
-.\build\tools-venv\Scripts\python.exe tools/pack_resources.py verify --input build/game-deploy/data.bin --config launch/game.source.json
+.\build\tools-venv\Scripts\python.exe tools/pack/pack_resources.py pack --source assets --output build/game-deploy/data.bin --encrypt --config launch/game.source.json
+.\build\tools-venv\Scripts\python.exe tools/pack/pack_resources.py inspect --input build/game-deploy/data.bin --config launch/game.source.json
+.\build\tools-venv\Scripts\python.exe tools/pack/pack_resources.py verify --input build/game-deploy/data.bin --config launch/game.source.json
 ```
 
 再用同一配置生成并编译 `launch.h`。将所得 EXE 与 `data.bin` 放入匹配的部署目录，并保留项目和第三方许可；不要部署 JSON、生成头文件或 Python 环境。

@@ -16,6 +16,6 @@ endforeach()
 add_custom_command(OUTPUT "${canvas_view_shader_dir}/CanvasViewShaders.h"
     COMMAND "${CMAKE_COMMAND}" "-DVERTEX=${canvas_view_shader_dir}/vert.bin" "-DFRAGMENT=${canvas_view_shader_dir}/frag.bin"
         "-DOUTPUT=${canvas_view_shader_dir}/CanvasViewShaders.h" "-DFORMAT=${image_shader_format}"
-        -DNAMESPACE=canvas_view_shader_bytecode -P "${PROJECT_SOURCE_DIR}/tools/EmbedShaders.cmake"
-    DEPENDS "${canvas_view_shader_dir}/vert.bin" "${canvas_view_shader_dir}/frag.bin" "${PROJECT_SOURCE_DIR}/tools/EmbedShaders.cmake"
+        -DNAMESPACE=canvas_view_shader_bytecode -P "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
+    DEPENDS "${canvas_view_shader_dir}/vert.bin" "${canvas_view_shader_dir}/frag.bin" "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
     VERBATIM)

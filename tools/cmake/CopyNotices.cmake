@@ -41,7 +41,7 @@ function(engine_copy_notices source_root destination)
     string(SHA256 destination_key "${destination}")
     file(LOCK "${state_root}/notices-${destination_key}.lock" GUARD FUNCTION TIMEOUT 60)
 
-    foreach(required IN ITEMS "${source_root}/LICENSE" "${source_root}/tools/THIRD_PARTY_NOTICES.txt"
+    foreach(required IN ITEMS "${source_root}/LICENSE" "${source_root}/tools/info/THIRD_PARTY_NOTICES.txt"
             "${source_root}/3rd_party/dxc/source/LICENSE.TXT"
             "${source_root}/3rd_party/dxc/source/ThirdPartyNotices.txt")
         if(NOT EXISTS "${required}" OR IS_DIRECTORY "${required}")
@@ -49,7 +49,7 @@ function(engine_copy_notices source_root destination)
         endif()
     endforeach()
     file(COPY_FILE "${source_root}/LICENSE" "${destination}/licenses/project/LICENSE" ONLY_IF_DIFFERENT)
-    file(COPY_FILE "${source_root}/tools/THIRD_PARTY_NOTICES.txt"
+    file(COPY_FILE "${source_root}/tools/info/THIRD_PARTY_NOTICES.txt"
         "${destination}/licenses/project/THIRD_PARTY_NOTICES.txt" ONLY_IF_DIFFERENT)
 
     file(GLOB_RECURSE candidates LIST_DIRECTORIES FALSE "${source_root}/3rd_party/*")
