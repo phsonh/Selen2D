@@ -1,7 +1,7 @@
 ![Selen2D Banner](src/res/image/Selen2D_banner_2048x1024.png)
 
 <p align="center">
-  <strong>Selen2D, A lightweight, LuaJIT-driven 2D game engine.</strong><br />
+  <strong>Selen2D, A lightweight, LuaJIT-driven game engine for 2D games.</strong><br />
   <strong>Selen2D, 轻量级 LuaJIT 驱动的 2D 游戏引擎。</strong><br />
   <strong>Selen2D, LuaJIT を中心とした軽量な 2D ゲームエンジン。</strong>
 </p>
@@ -10,14 +10,12 @@
 </p>
 <p align="center">
   <a href="https://github.com/phsonh/Selen2D/releases/latest">Latest release</a> ·
-  <a href="https://github.com/phsonh/Selen2D/blob/develop/doc/guide/README.md">Guides</a> ·
-  <a href="https://github.com/phsonh/Selen2D/blob/develop/doc/api">Lua API</a> ·
-  <a href="https://github.com/phsonh/Selen2D/blob/develop/LICENSE">MIT License</a>
+  <a href="doc/guide/README.md">Guides</a> ·
+  <a href="doc/api/">Lua API</a> ·
+  <a href="LICENSE">MIT License</a>
 </p>
 <p align="center">
-  <a href="https://github.com/phsonh/Selen2D/tree/develop#english">English</a> ·
-  <a href="https://github.com/phsonh/Selen2D/tree/develop#%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87">简体中文</a> ·
-  <a href="https://github.com/phsonh/Selen2D/tree/develop#%E6%97%A5%E6%9C%AC%E8%AA%9E">日本語</a>
+  <a href="#english">English</a> · <a href="#简体中文">简体中文</a> · <a href="#日本語">日本語</a>
 </p>
 
 ---
@@ -25,29 +23,17 @@
 <a id="english"></a>
 ## English
 
-### Make the game yours. Keep the engine small.
+### Selen2D
 
-**Selen2D** is a C++20 / LuaJIT game engine for developers who want to build 2D games with direct control over their update loop, rendering, and resource lifetimes. It uses **SDL3 / SDL_GPU**, supports programmable **HLSL shaders** and offscreen canvases, and includes selected 3D rendering features for effects and experiments.
+Selen2D is a C++20 game engine with **LuaJIT** scripting and **SDL3 / SDL_GPU** rendering. It provides windowing, input, graphics, audio, resources, and file access through Lua. Game code controls the frame loop, object updates, and draw order.
 
-You write the game in Lua. Selen2D provides the native foundation; it does **not** require a scene editor, enforce a particular game-object architecture, or manage your game loop behind your back. This makes it a natural fit for hand-authored 2D action games, bullet-hell/STG gameplay, and projects where render order and simulation steps matter.
+The v2.2.0 release targets **Windows x64 / Direct3D 12**. The executable includes its shader compiler and other native runtime components; running a game requires no Python installation or separate third-party runtime DLLs.
 
-> **Versions:** The latest published stable release is **v2.1.0** (Windows x64 / Direct3D 12). The `develop` branch contains **unreleased 2.1.1 development changes** being prepared for a future v2.2.0 release. Do not assume every feature described for `develop` is available in the v2.1.0 ZIP.
+[LÖVE](https://love2d.org/) provides a Lua game framework with conventional callbacks. [Defold](https://defold.com/) combines Lua scripting with an editor and content pipeline. Selen2D keeps its workflow close to Lua code, explicit rendering targets, and a small set of native systems.
 
-### Where Selen2D fits
+### Hello World
 
-Selen2D does not try to replace other Lua engines feature for feature. The difference is the workflow you want:
-
-| Engine | Primary approach | A good choice when… |
-|:--|:--|:--|
-| **Selen2D** | Lua-managed frame and object lifecycle, native SDL_GPU rendering, explicit resource ownership and optional compiled-in package configuration | You prefer writing your own game structure and controlling the rendering/simulation order. |
-| [**LÖVE**](https://love2d.org/) | A friendly, code-first Lua 2D framework built around callbacks | You want a widely used Lua framework and a straightforward start without a dedicated editor. |
-| [**Defold**](https://defold.com/) | An integrated game engine, visual editor and deployment pipeline, with Lua game logic | You want an integrated scene/UI/editor workflow and broad platform tooling. |
-
-These are different trade-offs, not performance rankings. Selen2D is **not API-compatible** with LÖVE or Defold, and its currently validated binary target is Windows x64—not a claim of equivalent cross-platform support.
-
-### Hello World — your first `main.lua`
-
-Save these **10 lines** as `main.lua` in the unpacked **new development/public-layout build**. They use the font shipped in `example/assets/` and draw directly to the window canvas:
+Download the [Windows release](https://github.com/phsonh/Selen2D/releases/latest), extract it, and replace the root `main.lua` with this example. Keep `example/assets/NotoSans-Regular.ttf`, which is included in the ZIP.
 
 ```lua
 Window.SetTitle("Selen2D | Hello World")
@@ -62,174 +48,153 @@ Runtime.SetFrameFunction(function()
 end)
 ```
 
-**Using the currently published v2.1.0?** Its compiled entry is **`example/main.lua`**, not the root `main.lua`. Back up and replace `example/main.lua` with this code to try it on v2.1.0. The upcoming default layout starts the **root `main.lua`**, which normally delegates to `example/main.lua` using `File.RunLuaFile()`. Close and restart the EXE after editing: there is no automatic Lua hot reload.
-
-**Real result — captured on Windows:**
-
 <p align="center">
-  <a href="doc/example/hello_world_test2.png"><img src="doc/example/hello_world_test2.png" alt="Selen2D running the Hello World Lua example on Windows" width="640" /></a>
+  <a href="doc/example/hello_world_test2.png"><img src="doc/example/hello_world_test2.png" width="640" alt="Selen2D Hello World running on Windows" /></a>
 </p>
-<p align="center"><sub>Actual engine output, not a concept render. Click to view the image.</sub></p>
+<p align="center"><sub>Actual Windows runtime capture · Click to view at full size</sub></p>
 
 <details>
-<summary>View the Lua source screenshot</summary>
+<summary>Source code screenshot</summary>
 
-![The 10-line Selen2D Hello World Lua script in an editor](doc/example/hello_world_test1.png)
+![The Hello World source in a Lua editor](doc/example/hello_world_test1.png)
 
 </details>
 
-### What is included?
+### Features
 
-- **Lua-driven runtime:** one explicit frame callback; your code chooses when to call `Object.Commit()`, update objects, resolve collisions, and render.
-- **2D graphics and effects:** window and offscreen canvases, Canvas3D, dynamic meshes, custom HLSL via `Engine.hlsl`, configurable blending and fog, text layout, and PNG readback.
-- **Resources and audio:** asynchronous batch loaders, atomic resource publication, image/font/shader/sound/music resources, and explicit audio players.
-- **Input, math and files:** keyboard/mouse/gamepad state, frame-based utilities, independent random streams, and an authorized virtual filesystem.
-- **Optional packaged games:** Zstd-backed SLPK v1 packages or authenticated encrypted SLPK v2 packages; package overlay order is set by `parts` in the startup configuration.
-- **Readable Lua APIs:** editor declarations in [`doc/api/`](doc/api/) and task-oriented guides in [`doc/guide/`](doc/guide/).
+- **Lua-controlled runtime** — Register frame and exit callbacks, choose when to advance objects, and use `Object.Commit()` to apply lifecycle changes.
+- **2D rendering and Canvas3D** — Draw to the window or offscreen canvases, use meshes and blend modes, and compile custom HLSL shaders with `Engine.hlsl`.
+- **Text and audio** — Load fonts, render and measure text, and control sound or music through independent audio players.
+- **Resource loading** — Load images, shaders, fonts, and audio through the resource system, with asynchronous batch loading when needed.
+- **Files and packages** — Access authorized virtual paths; read plain SLPK v1 packages or authenticated encrypted SLPK v2 packages.
+- **Development tools** — Edit build-time startup settings, pack resources, and compile a project-specific executable with the PyQt6 tool. Lua API definitions are available in [`doc/api/`](doc/api/).
 
-Selen2D supplies the building blocks, not a built-in scene editor, visual scripting environment, or full UI framework.
+### Use the ready-made release
 
-### Choose a path
-
-| | **A. Release user** | **B. Game project developer** |
-|:--|:--|:--|
-| Get started | Download the ready-to-run ZIP | Clone and build Selen2D source |
-| Write game logic | Edit the distributed Lua files | Keep Lua/resources in an independent game folder |
-| Build C++ | **No** | **Yes**, for a custom startup configuration |
-| Package encryption | Not required | Optional SLPK v2 encryption |
-| Python / Qt | Not required | PyQt6 tool and Python build dependencies (on the dev machine) |
-
-### A — Download, edit Lua, play
-
-1. Download the Windows x64 ZIP from [Releases](https://github.com/phsonh/Selen2D/releases/latest) and extract it to a writable folder.
-2. Run `Selen2D.exe`. The included **Orbit Garden** example demonstrates a menu, loading screen, movement, pause, audio, and cleanup.
-3. Change a Lua or HLSL file and restart the executable. No engine rebuild is required for ordinary authorized game files.
-
-**Current v2.1.0 layout:**
+The standard release is the quickest way to start. Extract the ZIP and run `Selen2D.exe`:
 
 ```text
 Selen2D/
 ├── Selen2D.exe
+├── main.lua
 ├── example/
-│   ├── main.lua             # v2.1.0 compiled entry
-│   ├── effect.hlsl
-│   ├── palette.hlsl
-│   └── assets/
-└── doc/
-    ├── guide/
-    └── api/
-```
-
-**Upcoming default layout on `develop` / for v2.2.0:**
-
-```text
-Selen2D/
-├── Selen2D.exe
-├── main.lua                 # minimal startup: File.RunLuaFile("example/main.lua")
-├── example/                 # complete, editable Orbit Garden project
 │   ├── main.lua
 │   ├── effect.hlsl
 │   ├── palette.hlsl
 │   └── assets/
 └── doc/
-    ├── guide/
-    └── api/
+    ├── api/
+    └── guide/
 ```
 
-In the upcoming default layout, the compiled entry is the root `main.lua`, and the ordinary deployment-root files can be accessed through safe relative VFS paths. To run your own game, replace the root startup script or place your scripts in subdirectories. The `example/` folder remains available as a reference; you do not have to use it.
+The root `main.lua` initially contains:
 
-**Orbit Garden controls:** `Enter` starts; `WASD` / arrow keys move; `P` or `Space` pauses; `Esc` returns to the menu or quits. The standard ZIP needs no Python, GUI, resource encryption, or SDK.
+```lua
+local ok, err = File.RunLuaFile("example/main.lua")
+if not ok then
+    Debug.Error(err.message)
+end
+```
 
-### B — Build a dedicated executable for a separate game
+This starts **Orbit Garden**, the included interactive example. Press **Enter** to begin, move with **WASD / arrow keys**, pause with **P / Space**, and use **Esc** to return to the menu or exit.
 
-**Keep the engine and your game independent.** Selen2D is the engine repository, not the place to commit your game's code or assets.
+Edit `main.lua` to launch your own Lua files. You can create `scripts/`, `assets/`, `shaders/`, or other folders beside the executable. The default configuration permits access to safe relative paths inside that directory. Changes to Lua and HLSL files take effect after restarting the game.
+
+There is no setup step for the standard release. Python, the project JSON, and the packaging GUI stay in the source checkout.
+
+### Build an executable for your own project
+
+Keep the engine checkout and game content in separate directories. One possible layout is:
 
 ```text
 Workspace/
-├── Selen2D/                 # engine source, build scripts, PyQt6 tools
-└── MyGame/                  # your separate project / repository
+├── Selen2D/                # Engine source and build tools
+└── MyGame/
     ├── content/
-    │   ├── main.lua
-    │   └── assets/
-    └── dist/
-        ├── Selen2D.exe     # custom engine build
-        └── data.slpk       # packaged game content
+    │   └── main.lua
+    └── dist/                # Executable and packages for the game
 ```
 
-For the **unreleased development tooling**, the intended workflow is:
-
-1. Clone the engine source and switch to `develop`. Install Visual Studio C++ tools, the supported Windows SDK, CMake, Ninja and Python.
-2. Install the optional PyQt6 tools into an isolated Python environment, then launch the desktop UI.
-3. Configure **one private file**: `Selen2D/launch/launch.json`. Set the virtual entry, package mounts, `parts`, optional encryption secret and writable directories. Save and validate.
-4. Run `tools/build.ps1 -Configuration Release` (or use the GUI Build tab). The build embeds the chosen JSON configuration into `Selen2D.exe`; the game does **not** load JSON at runtime.
-5. In the GUI Package tab, pack your external `MyGame/content/` directory, reusing the **same secret** for encrypted SLPK v2 output. Verify the result.
-6. Copy the built EXE and the packaged file(s) into `MyGame/dist/`, and launch them together. Distribute the applicable license notices too.
+**1. Install and open Selen2D Tools.** From the engine repository, with Python 3.10+ and the Windows C++ build toolchain installed:
 
 ```powershell
-# In the Selen2D repository (the current development branch):
-git switch develop
 python -m venv build/tools-venv
 .\build\tools-venv\Scripts\python.exe -m pip install -r tools/pack/requirements-gui.txt
 .\build\tools-venv\Scripts\python.exe -B tools/pack/main.py
-.\tools\build.ps1 -Configuration Release
 ```
 
-**Current development JSON schema (2.1.1)**: directory types are `root` (EXE directory) and `local_app_data` (Windows LocalAppData, not Roaming AppData). The GUI asks before migrating old `deployment` / `user_data` configurations and preserves a private backup.
+The PyQt6 window edits the single private file `launch/launch.json`. It creates that file from the public default on first use. Configure the entry, package mounts, optional encryption secret, and directory mappings, then click **Save configuration**. The engine build reads the same JSON file.
+
+For a project using an encrypted `data.slpk`, a typical configuration is:
 
 ```json
 {
-  "secret": "replace-with-your-private-project-secret",
+  "secret": "replace-with-your-own-secret",
   "mounts": [
     { "source": "data.slpk", "target": "game", "parts": 0, "encrypted": true }
   ],
   "directories": [
-    { "base": "local_app_data", "path": "ExampleStudio/MyGame", "target": "save" }
+    { "base": "local_app_data", "path": "MyStudio/MyGame", "target": "save" }
   ],
   "entry": "game/main.lua"
 }
 ```
 
-The packed `content/main.lua` becomes `game/main.lua` in the VFS. `source` names a file relative to the **deployed EXE**, not the input folder selected in the GUI. `local_app_data` maps to `%LOCALAPPDATA%` on Windows; Lua accesses it using paths such as `save/settings.json`. A development project may use a different authorized mapping. The **official public Release** is built separately with a secret-free example configuration and never inherits a private project secret.
+Here `source` is relative to the final EXE directory; `target` is the path visible to Lua. The package's `main.lua` becomes `game/main.lua`. Files under `save/...` map to `%LOCALAPPDATA%\MyStudio\MyGame\...` on Windows. `parts` controls priority between packages: higher values override lower values at the same virtual path.
 
-Need CLI automation instead of the GUI? See [JSON / packaging](doc/guide/file-launch.md). Neither Python nor PyQt6 is required on the player's machine. Encryption raises the difficulty of direct inspection; it is **not** a guarantee against reverse engineering or tampering.
+**2. Build the engine with those settings.** The build validates JSON, generates an internal C++ header, and embeds the startup configuration in `Selen2D.exe`.
 
-### Platform, documentation and licensing
+```powershell
+.\tools\build.ps1 -Configuration Release
+```
 
-- **Validated binaries:** Windows x64, Direct3D 12. Other platforms are not claimed as equivalent release targets.
-- **Start here:** [Getting started](doc/guide/getting-started.md), [Orbit Garden](doc/guide/example.md), [Shader guide](doc/guide/shader.md), [Runtime & objects](doc/guide/runtime.md).
-- **Specialized guides:** [File / VFS / launch JSON](doc/guide/file-launch.md), [PyQt6 tools](doc/guide/tools-gui.md), [Audio](doc/guide/audio.md), [Text](doc/guide/text.md), [Console & diagnostics](doc/guide/debug-console.md).
-- **Reference:** [`doc/api/`](doc/api/) contains Lua language-server/editor declarations, **not Lua implementations to execute**.
-- **License:** engine-owned code is available under the [MIT License](LICENSE), copyright © 2026 Lonely Owl. The ZIP also contains third-party licenses and notices; preserve them when redistributing. PyQt6 used by the optional developer GUI has separate GPL/commercial terms.
-- **Contributing:** development branches, release policy and source-building guidelines are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+The executable is written to `build/release/bin/Selen2D.exe`. You can also start the build from the GUI. `Debug` is available in place of `Release`.
+
+**3. Pack your game files.** In Selen2D Tools, select `MyGame/content/` as the source and `MyGame/dist/data.slpk` as the output. Choose **SLPK v2 encrypted** to use the secret from `launch/launch.json`. The tool verifies the package after writing it. Plain SLPK v1 packages are also supported.
+
+**4. Deploy.** Copy the built executable beside the package:
+
+```text
+MyGame/dist/
+├── Selen2D.exe
+└── data.slpk
+```
+
+The executable loads the compiled entry and mounts the named package at startup. Neither the JSON file nor Python is needed on the player's machine. Keep project secrets private; a secret embedded in an executable can still be extracted by someone analyzing that binary.
+
+When `launch/launch.json` has not been created, source builds use `src/res/development/launch.json`: entry `main.lua` and the `root / . → .` directory mapping. The official release build always uses an isolated public configuration, regardless of private project settings.
+
+### Source builds and documentation
+
+Windows source builds require **MSVC (Visual Studio C++ tools)**, the **Windows SDK**, **CMake**, **Ninja**, and Python for build-time configuration. Normal source builds use:
+
+```powershell
+.\tools\build.ps1 -Configuration Debug
+.\tools\build.ps1 -Configuration Release
+```
+
+For debugging, `Debug.SetConsoleVisible(true)` opens the engine's diagnostic console; `Debug.SetConsoleVisible(false)` hides it. The console starts hidden, and `engine.log` is written next to the executable.
+
+Documentation: [Getting started](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shaders](doc/guide/shader.md) · [Resources and startup configuration](doc/guide/file-launch.md) · [Lua API](doc/api/).
+
+**License:** Selen2D engine code is licensed under [MIT](LICENSE), Copyright © 2026 Lonely Owl. Retain the bundled third-party notices when redistributing the engine. PyQt6 is an optional developer-tool dependency with its own GPL/commercial licensing terms.
 
 ---
 
 <a id="简体中文"></a>
 ## 简体中文
 
-### 用 Lua 写游戏，把控制权留给自己
+### Selen2D
 
-**Selen2D** 是基于 **C++20、LuaJIT 和 SDL3 / SDL_GPU** 的轻量级游戏引擎，主要面向 2D 游戏，也提供 Canvas3D 等部分 3D 绘制能力。它特别适合希望自己安排游戏流程、对象更新、弹幕碰撞和画面合成顺序的开发者。
+Selen2D 是一款使用 **LuaJIT** 编写游戏逻辑、以 **C++20** 和 **SDL3 / SDL_GPU** 实现底层功能的轻量级游戏引擎。窗口、输入、图形、音频、资源和文件访问都有对应的 Lua 接口。每帧要更新什么、何时处理对象生命周期、按什么顺序绘制，都由 Lua 代码安排。
 
-游戏逻辑由 Lua 编写，引擎负责原生窗口、输入、图形、音频、资源与文件服务。**Selen2D 不强制使用场景编辑器、固定的游戏对象体系或自动调度框架。** 你决定什么时候更新、碰撞和绘制。
+v2.2.0 提供经过验证的 **Windows x64 / Direct3D 12** 版本。Shader 编译器及所需原生运行组件集成在可执行文件中，运行游戏无需安装 Python，也无需额外部署第三方运行库 DLL。
 
-> **版本说明：** 当前已经正式发布的是 **v2.1.0**（Windows x64 / Direct3D 12）。`develop` 上的 **2.1.1 为尚未发布的开发修订**，正为后续 v2.2.0 做准备。请勿把开发分支的新功能误认为已经包含在 v2.1.0 ZIP 中。
+[LÖVE](https://love2d.org/) 提供基于 Lua 回调的游戏框架；[Defold](https://defold.com/) 提供编辑器和资源构建流程。Selen2D 的使用方式更接近直接编写 Lua，通过明确的 API 控制对象、画布、资源和帧流程。
 
-### 与 LÖVE、Defold 的区别
+### Hello World
 
-Selen2D 并非要在所有功能上取代其他 Lua 引擎，而是提供不同的工作方式。
-
-| 引擎 | 主要定位 | 适合什么开发者 |
-|:--|:--|:--|
-| **Selen2D** | Lua 自行控制帧与对象生命周期，SDL_GPU 原生渲染、HLSL 和可选的编译期资源包配置 | 希望自行组织游戏结构，精确控制模拟和渲染顺序。 |
-| [**LÖVE**](https://love2d.org/) | 以 Lua 回调为核心、易于上手的代码式 2D 框架 | 希望快速编写 Lua 2D 游戏，不需要专门的可视化编辑器。 |
-| [**Defold**](https://defold.com/) | 集成编辑器、游戏引擎和发布工具链，使用 Lua 开发游戏逻辑 | 希望使用完整的场景、UI、编辑器与多平台发布工作流。 |
-
-这些是设计取舍，不是性能排行榜。Selen2D 与 LÖVE、Defold 的 API **并不兼容**；目前也没有宣称具备后两者全部平台与编辑器能力。
-
-### 十行 Lua：Hello World
-
-在**新开发版 / 即将采用的标准发行布局**中，把下面十行代码保存到 EXE 同目录的 `main.lua`。它调用发行包内已有的字体，直接在窗口里绘制文字：
+下载 [Windows 发行包](https://github.com/phsonh/Selen2D/releases/latest)，解压后用下面的代码替换根目录 `main.lua`。保留发行包自带的 `example/assets/NotoSans-Regular.ttf` 字体文件。
 
 ```lua
 Window.SetTitle("Selen2D | Hello World")
@@ -244,174 +209,153 @@ Runtime.SetFrameFunction(function()
 end)
 ```
 
-**如果使用当前 v2.1.0 Release：** 它实际执行的是 `example/main.lua`，不是根目录的 `main.lua`。请先备份并替换 `example/main.lua` 来测试这段代码。新的开发版会把根目录 `main.lua` 设为入口，默认通过 `File.RunLuaFile("example/main.lua")` 启动示例。修改 Lua 后关闭并重新运行 EXE 即可，当前没有自动热重载。
-
-**实际运行效果（Windows 实机截图）：**
-
 <p align="center">
-  <a href="doc/example/hello_world_test2.png"><img src="doc/example/hello_world_test2.png" alt="Selen2D 在 Windows 上实际运行 Hello World 的画面" width="640" /></a>
+  <a href="doc/example/hello_world_test2.png"><img src="doc/example/hello_world_test2.png" width="640" alt="Selen2D 在 Windows 上运行 Hello World 的实际画面" /></a>
 </p>
-<p align="center"><sub>这是引擎真实运行画面，并非概念效果图。点击图片可查看原图。</sub></p>
+<p align="center"><sub>Windows 实际运行截图 · 点击查看原图</sub></p>
 
 <details>
-<summary>展开查看 Lua 源码截图</summary>
+<summary>查看代码截图</summary>
 
-![Selen2D 十行 Hello World Lua 源码截图](doc/example/hello_world_test1.png)
+![编辑器中的 Hello World Lua 源码](doc/example/hello_world_test1.png)
 
 </details>
 
-### 功能一览
+### 主要功能
 
-- **Lua 主导的运行循环**：注册帧回调，显式调用 `Object.Commit()`，自行控制对象更新、碰撞检查与绘制顺序。
-- **2D 渲染与特效**：窗口画布、离屏 Canvas、Canvas3D、动态 Mesh、`Engine.hlsl` 自定义 HLSL Shader、混合模式、雾效、文字排版与 PNG 读回。
-- **资源与音频**：支持异步批量加载及整批发布，图片、字体、Shader、Sound、Music 和显式 Audio Player。
-- **输入、数学与文件**：键盘／鼠标／手柄输入、帧计时、独立随机数流和受授权的虚拟文件系统（VFS）。
-- **可选资源包**：普通 SLPK v1 或认证加密 SLPK v2；`parts` 定义包之间的挂载覆盖优先级。
-- **完整参考资料**：[`doc/api/`](doc/api/) 编辑器声明和 [`doc/guide/`](doc/guide/) 实用教程。
+- **Lua 主导的运行流程**：注册帧回调和退出回调，通过 `Object.Commit()` 明确处理对象生命周期。
+- **2D 绘制与 Canvas3D**：窗口和离屏画布、Mesh、Blend、Fog，以及通过 `Engine.hlsl` 使用自定义 HLSL Shader。
+- **文字与音频**：字体加载、文字绘制和测量；独立播放器控制音效、音乐和声像。
+- **资源管理**：图像、Shader、字体、音频资源及支持整批发布的异步加载器。
+- **文件与资源包**：受授权范围约束的虚拟文件系统，SLPK v1 明文包和 SLPK v2 认证加密包。
+- **开发工具**：PyQt6 图形化配置、资源打包与构建，配套 [`doc/api/`](doc/api/) Lua 编辑器声明。
 
-它提供的是可组合的原生模块，而不是一整套内建场景编辑器、可视化脚本或高级 UI 框架。
+### 路线一：下载 Release，直接编写 Lua
 
-### 两种开发路线
-
-| | **A. 普通开发者** | **B. 独立游戏项目开发者** |
-|:--|:--|:--|
-| 开始方式 | 下载 Release ZIP | 克隆 Selen2D 源码 |
-| 游戏源码 | 直接修改已授权 Lua 文件 | 放在引擎仓库之外的独立目录 |
-| 编译 C++ | **不需要** | **需要**，用于定制启动配置 |
-| 资源加密 | 不要求 | 可选 SLPK v2 加密 |
-| Python / PyQt6 | 不需要 | 仅开发机需要工具依赖 |
-
-### A — 下载 Release，直接写 Lua
-
-1. 从 [Releases](https://github.com/phsonh/Selen2D/releases/latest) 下载 Windows x64 ZIP，解压到有写入权限的文件夹。
-2. 双击 `Selen2D.exe`。自带的 **Orbit Garden** 示例展示菜单、资源加载、移动、暂停、音频和清理流程。
-3. 修改游戏 Lua 或 HLSL，保存后重启 EXE。只修改获准访问的游戏资源，不必重新编译引擎。
-
-**当前正式版 v2.1.0 的结构：**
+从 [Releases](https://github.com/phsonh/Selen2D/releases/latest) 下载 Windows ZIP，解压后运行 `Selen2D.exe`。
 
 ```text
 Selen2D/
 ├── Selen2D.exe
+├── main.lua
 ├── example/
-│   ├── main.lua             # v2.1.0 的编译期入口
-│   ├── effect.hlsl
-│   ├── palette.hlsl
-│   └── assets/
-└── doc/
-    ├── guide/
-    └── api/
-```
-
-**`develop` 已实现、准备供 v2.2.0 使用的新默认结构：**
-
-```text
-Selen2D/
-├── Selen2D.exe
-├── main.lua                 # File.RunLuaFile("example/main.lua")
-├── example/                 # 完整独立的 Orbit Garden 示例
 │   ├── main.lua
 │   ├── effect.hlsl
 │   ├── palette.hlsl
 │   └── assets/
 └── doc/
-    ├── guide/
-    └── api/
+    ├── api/
+    └── guide/
 ```
 
-新结构里，EXE 首先执行根目录 `main.lua`，它默认加载 `example/main.lua`。普通开发者可以直接修改根入口，让引擎运行自己放在任意子目录的 Lua 游戏；`example/` 仍然作为参考样例保留。默认部署根只接受安全的相对虚拟路径，不允许通过绝对路径、`..` 或链接越权访问系统文件。
+根目录 `main.lua` 默认负责启动示例：
 
-**Orbit Garden 操作：** `Enter` 开始；`WASD`／方向键移动；`P`／空格暂停；`Esc` 返回菜单或退出。标准发行包不需要加密、Python、GUI 或 Windows SDK。
+```lua
+local ok, err = File.RunLuaFile("example/main.lua")
+if not ok then
+    Debug.Error(err.message)
+end
+```
 
-### B — 在独立游戏项目中定制自己的引擎
+首次运行会进入 **Orbit Garden** 示例。按 **Enter** 开始，使用 **WASD / 方向键**移动，按 **P / 空格**暂停，按 **Esc** 返回菜单或退出。
 
-**引擎仓库只用于引擎开发。** 具体游戏（例如 THKTNT）应放在独立的文件夹或仓库，不把其 Lua 源码、素材和发行文件提交到 Selen2D 仓库。
+你可以直接修改根目录 `main.lua`，让它加载自己的 Lua 文件；也可以在 EXE 旁创建 `scripts/`、`assets/`、`shaders/` 等目录。默认配置允许访问部署目录中的合法相对路径。修改 Lua、HLSL 后重新启动程序即可生效。
+
+普通发行包不需要手动配置 JSON、安装 Python 或编译引擎。
+
+### 路线二：从源码构建独立游戏项目
+
+引擎源码和游戏内容建议分别存放。例如：
 
 ```text
 Workspace/
-├── Selen2D/                 # 引擎源码、构建脚本、PyQt6 工具
-└── MyGame/                  # 独立游戏项目
+├── Selen2D/                # 引擎源码及构建工具
+└── MyGame/
     ├── content/
-    │   ├── main.lua
-    │   └── assets/
-    └── dist/
-        ├── Selen2D.exe     # 为该游戏编译的引擎
-        └── data.slpk       # 游戏资源包
+    │   └── main.lua
+    └── dist/                # 游戏部署目录
 ```
 
-**当前未发布开发工具的设计流程：**
-
-1. 克隆 Selen2D 源码并切换至 `develop`。准备 Visual Studio C++ 工具链、Windows SDK、CMake、Ninja、Python。
-2. 为 PyQt6 工具安装独立 Python 环境，并打开图形界面。
-3. GUI 只编辑**唯一私有配置** `Selen2D/launch/launch.json`。设置 Lua 入口、资源包挂载、`parts`、可选密钥及写入目录，然后保存、验证。
-4. 执行 `tools/build.ps1 -Configuration Release` 或通过 GUI 构建。系统将 JSON 配置编译进 `Selen2D.exe`；游戏运行时**不读取外部 JSON**。
-5. 在同一 GUI 中选择外部 `MyGame/content/` 资源文件夹，用相同密钥生成加密 SLPK v2 包，完成后校验。
-6. 把自定义 EXE 和资源包放到 `MyGame/dist/`，即可运行。分发时保留必要许可证文件。
+**1. 安装并打开 Selen2D Tools。** 在引擎仓库根目录执行以下命令，需要 Python 3.10+。编译 EXE 还需 Windows C++ 构建工具链。
 
 ```powershell
-# 在 Selen2D 仓库根目录执行：
-git switch develop
 python -m venv build/tools-venv
 .\build\tools-venv\Scripts\python.exe -m pip install -r tools/pack/requirements-gui.txt
 .\build\tools-venv\Scripts\python.exe -B tools/pack/main.py
-.\tools\build.ps1 -Configuration Release
 ```
 
-**当前开发版 2.1.1 的 JSON 格式**：目录类型为 `root`（EXE 目录）和 `local_app_data`（Windows LocalAppData，不是 Roaming AppData）。旧 `deployment` / `user_data` 配置由 GUI 询问确认后迁移，并保留私有备份。
+PyQt6 GUI 只维护一份私有启动配置：`launch/launch.json`。首次打开会从公开模板创建。设置入口、资源包挂载、加密密钥和目录映射后，点击**保存配置**。后续构建直接读取这份 JSON。
+
+例如，需要加密资源包和用户存档目录时，可以使用：
 
 ```json
 {
-  "secret": "replace-with-your-private-project-secret",
+  "secret": "replace-with-your-own-secret",
   "mounts": [
     { "source": "data.slpk", "target": "game", "parts": 0, "encrypted": true }
   ],
   "directories": [
-    { "base": "local_app_data", "path": "ExampleStudio/MyGame", "target": "save" }
+    { "base": "local_app_data", "path": "MyStudio/MyGame", "target": "save" }
   ],
   "entry": "game/main.lua"
 }
 ```
 
-资源文件夹 `content/main.lua` 在挂载后对应 `game/main.lua`。其中 `source` 表示资源包相对于**最终 EXE 所在目录**的路径，不是 GUI 所选择的资源输入目录。Windows 下 `local_app_data` 对应 `%LOCALAPPDATA%`，Lua 通过 `save/settings.json` 这样的虚拟路径访问存档。官方 Release 使用独立的无密钥默认配置，绝不能带入任何私有项目密钥。
+`source` 是相对于最终 EXE 目录的包文件位置，`target` 是 Lua 看到的虚拟目录。包内 `main.lua` 对应 `game/main.lua`。Lua 的 `save/...` 路径在 Windows 上指向 `%LOCALAPPDATA%\MyStudio\MyGame\...`。多个包使用不同的 `parts`：值越大，同虚拟路径的覆盖优先级越高。
 
-如果需要自动化命令行打包，请参考 [JSON 与资源包指南](doc/guide/file-launch.md)。玩家不需要安装 Python 或 PyQt6。加密只增加直接解包、简单替换的难度，**不能保证防逆向、防篡改**。
+**2. 构建自定义引擎。** 构建过程会校验 JSON，生成内部 C++ 头文件，并把启动信息编译进 EXE。
 
-### 平台、文档与许可
+```powershell
+.\tools\build.ps1 -Configuration Release
+```
 
-- **已验证发行平台：** Windows x64 / Direct3D 12，其他平台尚未获得等价正式验收。
-- **新手入门：** [开始运行](doc/guide/getting-started.md)、[Orbit Garden 示例](doc/guide/example.md)、[Shader 指南](doc/guide/shader.md)、[帧调度](doc/guide/runtime.md)。
-- **专项指南：** [File / VFS / JSON 启动配置](doc/guide/file-launch.md)、[PyQt6 工具](doc/guide/tools-gui.md)、[音频](doc/guide/audio.md)、[文字](doc/guide/text.md)、[控制台与日志](doc/guide/debug-console.md)。
-- **API 参考：** [`doc/api/`](doc/api/) 是给编辑器／Lua 语言服务器使用的声明，**不能当作实际 Lua 实现来执行**。
-- **许可证：** 引擎自有代码采用 [MIT License](LICENSE)，Copyright © 2026 Lonely Owl。发行时仍须保留第三方许可证和声明。可选 PyQt6 开发 GUI 有独立 GPL／商业许可条件。
-- **参与开发：** 分支规则、维护者发行流程和贡献说明见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+输出位于 `build/release/bin/Selen2D.exe`。也可以在 GUI 中发起构建。需要调试版时改用 `-Configuration Debug`。
+
+**3. 打包资源。** 在 GUI 的资源包页面，选择独立游戏项目的 `MyGame/content/` 文件夹，输出到 `MyGame/dist/data.slpk`。选择 **SLPK v2 加密**即可使用同一份 JSON 中的密钥。工具会在生成资源包后验证内容。也可以选择不加密的 SLPK v1。
+
+**4. 整理发布文件。** 将构建好的 EXE 复制到游戏部署目录：
+
+```text
+MyGame/dist/
+├── Selen2D.exe
+└── data.slpk
+```
+
+引擎启动时使用已经编译进去的入口和挂载配置。玩家无需获取项目 JSON、Python 或 PyQt6。密钥请保存在私有配置中；将密钥编入 EXE 并不能阻止有能力分析二进制文件的人提取它。
+
+如果尚未创建私有 `launch/launch.json`，源码构建会使用公开的 `src/res/development/launch.json`，其入口为 `main.lua`，目录映射为 `root / . → .`。正式通用发行包始终使用独立的公开配置构建，不受私有项目 JSON 影响。
+
+### 源码构建与文档
+
+Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows SDK**、**CMake**、**Ninja** 以及用于编译期配置的 Python。常规构建命令：
+
+```powershell
+.\tools\build.ps1 -Configuration Debug
+.\tools\build.ps1 -Configuration Release
+```
+
+Windows 调试控制台默认隐藏。需要时可在 Lua 中调用 `Debug.SetConsoleVisible(true)` 显示，用 `Debug.SetConsoleVisible(false)` 隐藏；日志仍写入 EXE 同目录的 `engine.log`。
+
+详细资料：[入门指南](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [文件与启动配置](doc/guide/file-launch.md) · [Lua API](doc/api/)。
+
+**许可证：** 引擎自有代码采用 [MIT License](LICENSE)，Copyright © 2026 Lonely Owl。重新分发时请保留第三方许可与声明。PyQt6 为可选的开发工具依赖，其 GPL／商业许可需要单独遵守。
 
 ---
 
 <a id="日本語"></a>
 ## 日本語
 
-### Lua でゲームを作る。フレームの主導権はあなたに。
+### Selen2D
 
-**Selen2D** は、**C++20、LuaJIT、SDL3 / SDL_GPU** を使用する軽量なゲームエンジンです。主に 2D ゲーム向けですが、Canvas3D など一部の 3D 描画機能も備えています。更新順序、当たり判定、弾幕のシミュレーション、描画順序を自分で決めたい開発者を想定しています。
+Selen2D は **LuaJIT** でゲームロジックを記述できる軽量なゲームエンジンです。基盤には **C++20** と **SDL3 / SDL_GPU** を採用しています。ウィンドウ、入力、描画、音声、リソース、ファイル操作を Lua API から利用でき、フレーム処理やオブジェクトの更新、描画順序をゲーム側で組み立てられます。
 
-ゲームロジックは Lua で記述し、ウィンドウ、入力、描画、音声、リソース、ファイルアクセスの基盤はネイティブ側が提供します。**特定のシーンエディターやゲームオブジェクト構成、隠れた自動更新ループを強制しません。**
+v2.2.0 の対応・検証済み環境は **Windows x64 / Direct3D 12** です。Shader コンパイラと必要なネイティブランタイムは EXE に組み込まれており、実行時に Python や追加のサードパーティ製ランタイム DLL は必要ありません。
 
-> **バージョンについて：** 現在の正式公開版は **v2.1.0**（Windows x64 / Direct3D 12）です。`develop` の **2.1.1 は未公開の開発版**で、次の v2.2.0 に向けて作業中です。`develop` の機能が v2.1.0 の ZIP に含まれているとは限りません。
+[LÖVE](https://love2d.org/) は Lua のコールバックを中心としたフレームワークを提供し、[Defold](https://defold.com/) はエディタとアセット構築の環境を備えています。Selen2D は Lua コードからフレーム処理、描画先、リソースの扱いを明示的に指定するスタイルです。
 
-### LÖVE や Defold との違い
+### Hello World
 
-Selen2D は他の Lua エンジンの全機能を置き換えることを目的としていません。開発スタイルの違いがあります。
-
-| エンジン | 基本的なスタイル | 向いている用途 |
-|:--|:--|:--|
-| **Selen2D** | Lua 側でフレームとオブジェクトの寿命を管理。SDL_GPU、HLSL、ビルド時に組み込むパッケージ設定を利用可能 | ゲーム構成や描画・シミュレーション順を自分で制御したい場合。 |
-| [**LÖVE**](https://love2d.org/) | コールバックを中心とする、コード主体の Lua 2D フレームワーク | 専用のビジュアルエディターなしで Lua によるゲーム制作を始めたい場合。 |
-| [**Defold**](https://defold.com/) | Lua のゲームロジックに、統合エディターとビルド・配布ツールを組み合わせたエンジン | シーン／UI／エディター／マルチプラットフォームのワークフローを求める場合。 |
-
-これは性能の優劣ではなく、設計上の選択です。Selen2D の API は LÖVE・Defold と**互換ではなく**、対応プラットフォームも同一ではありません。
-
-### 10 行の Lua で Hello World
-
-**新しい開発版／次期公開レイアウト**では、次のコードを EXE と同じディレクトリの `main.lua` に保存してください。付属する `example/assets/` のフォントを使用して、ウィンドウに文字を描画します。
+[Windows リリース](https://github.com/phsonh/Selen2D/releases/latest)をダウンロードして展開し、ルートの `main.lua` を次のコードに置き換えてください。ZIP に含まれる `example/assets/NotoSans-Regular.ttf` はそのまま残します。
 
 ```lua
 Window.SetTitle("Selen2D | Hello World")
@@ -426,142 +370,133 @@ Runtime.SetFrameFunction(function()
 end)
 ```
 
-**現在公開されている v2.1.0 を使用する場合：** コンパイル済みの起動ファイルはルートの `main.lua` ではなく **`example/main.lua`** です。事前にバックアップし、このコードで `example/main.lua` を置き換えてください。次期レイアウトではルート `main.lua` から `File.RunLuaFile("example/main.lua")` でサンプルを起動します。ファイル変更後は EXE を再起動してください。自動ホットリロードはありません。
-
-**実際の実行画面（Windows で撮影）：**
-
 <p align="center">
-  <a href="doc/example/hello_world_test2.png"><img src="doc/example/hello_world_test2.png" alt="Windows 上で実際に動作する Selen2D Hello World" width="640" /></a>
+  <a href="doc/example/hello_world_test2.png"><img src="doc/example/hello_world_test2.png" width="640" alt="Windows で実行した Selen2D Hello World の画面" /></a>
 </p>
-<p align="center"><sub>コンセプト画像ではなく、エンジンの実際の実行画面です。クリックで原寸表示できます。</sub></p>
+<p align="center"><sub>Windows での実際の実行画面 · クリックで拡大</sub></p>
 
 <details>
-<summary>Lua ソースコードのスクリーンショットを表示</summary>
+<summary>ソースコードのスクリーンショット</summary>
 
-![Selen2D Hello World の 10 行 Lua ソースコード](doc/example/hello_world_test1.png)
+![Lua エディタに表示された Hello World のコード](doc/example/hello_world_test1.png)
 
 </details>
 
 ### 主な機能
 
-- **Lua 主導の実行ループ：** フレームコールバックを登録し、`Object.Commit()`、更新、当たり判定、描画の呼び出し順を自分で決められます。
-- **2D 描画とエフェクト：** ウィンドウ／オフスクリーン Canvas、Canvas3D、動的 Mesh、`Engine.hlsl` による HLSL Shader、ブレンド、Fog、文字レイアウト、PNG 読み戻し。
-- **リソースと音声：** 非同期バッチ読み込みと一括公開、画像・フォント・Shader・Sound・Music、独立した Audio Player。
-- **入力・数学・ファイル：** キーボード／マウス／ゲームパッド、フレーム時間ユーティリティ、独立した乱数ストリーム、許可範囲を持つ仮想ファイルシステム（VFS）。
-- **任意のリソースパッケージ：** 通常の SLPK v1 と認証暗号化の SLPK v2。`parts` によってパッケージ間の優先順位を設定します。
-- **ドキュメント：** [`doc/api/`](doc/api/) のエディター向け型宣言と [`doc/guide/`](doc/guide/) の実践ガイド。
+- **Lua 主導のランタイム**：フレーム・終了コールバックを登録し、`Object.Commit()` でオブジェクトの状態変更を反映します。
+- **2D 描画と Canvas3D**：ウィンドウ・オフスクリーン Canvas、Mesh、Blend、Fog、`Engine.hlsl` を使用した HLSL Shader。
+- **文字と音声**：フォントの読み込み、文字描画と計測、独立したプレイヤーによる効果音・音楽の制御。
+- **リソース管理**：画像、Shader、フォント、音声の読み込みと、バッチ単位で公開する非同期ローダー。
+- **ファイルとパッケージ**：許可範囲を持つ仮想ファイルシステム、平文 SLPK v1 と認証付き暗号化 SLPK v2。
+- **開発ツール**：PyQt6 による設定・パッケージ作成・ビルド、[`doc/api/`](doc/api/) にある Lua エディタ用定義。
 
-Selen2D はネイティブ機能を組み合わせるためのエンジンであり、統合シーンエディター、ビジュアルスクリプト、フル UI フレームワークではありません。
+### 方法 1：リリース版ですぐに Lua を書く
 
-### 2 つの使い方
-
-| | **A. Release 利用者** | **B. 独立ゲームプロジェクト開発者** |
-|:--|:--|:--|
-| 始め方 | 公開 ZIP をダウンロード | Selen2D のソースを取得・ビルド |
-| ゲームのコード | 配布された Lua を編集 | エンジンとは別のディレクトリで管理 |
-| C++ のビルド | **不要** | 起動設定をカスタマイズする場合は**必要** |
-| 暗号化 | 必須ではない | SLPK v2 を任意で使用 |
-| Python / PyQt6 | 不要 | 開発機にのみ必要 |
-
-### A — Release を展開して Lua を編集
-
-1. [Releases](https://github.com/phsonh/Selen2D/releases/latest) から Windows x64 の ZIP をダウンロードし、書き込み可能なディレクトリに展開します。
-2. `Selen2D.exe` を起動します。付属の **Orbit Garden** で、メニュー、読み込み、移動、ポーズ、音声、終了処理を確認できます。
-3. Lua や HLSL を編集して EXE を再起動します。通常のゲームファイルの変更でエンジンを再コンパイルする必要はありません。
-
-**公開中の v2.1.0 の構成：**
+[Releases](https://github.com/phsonh/Selen2D/releases/latest) から Windows ZIP を取得し、展開した `Selen2D.exe` を起動します。
 
 ```text
 Selen2D/
 ├── Selen2D.exe
+├── main.lua
 ├── example/
-│   ├── main.lua             # v2.1.0 の起動ファイル
-│   ├── effect.hlsl
-│   ├── palette.hlsl
-│   └── assets/
-└── doc/
-    ├── guide/
-    └── api/
-```
-
-**`develop` で実装済みの次期標準構成：**
-
-```text
-Selen2D/
-├── Selen2D.exe
-├── main.lua                 # File.RunLuaFile("example/main.lua")
-├── example/                 # 完全な Orbit Garden サンプル
 │   ├── main.lua
 │   ├── effect.hlsl
 │   ├── palette.hlsl
 │   └── assets/
 └── doc/
-    ├── guide/
-    └── api/
+    ├── api/
+    └── guide/
 ```
 
-次期構成では EXE がルートの `main.lua` を実行し、そこから `example/main.lua` を読み込みます。自分のスクリプトを起動する場合は、ルートの `main.lua` を編集するだけです。`example/` は参考用として残しても、使わなくても構いません。仮想パスは安全な相対パスのみを受け付けます。
+ルートの `main.lua` は最初からサンプルを起動するようになっています。
 
-**Orbit Garden の操作：** `Enter` で開始、`WASD`／矢印キーで移動、`P`／`Space` でポーズ、`Esc` でメニューに戻る／終了。標準 ZIP には Python、GUI、暗号化キー、SDK は不要です。
+```lua
+local ok, err = File.RunLuaFile("example/main.lua")
+if not ok then
+    Debug.Error(err.message)
+end
+```
 
-### B — 別のゲームプロジェクト用に専用 EXE を作成
+同梱の **Orbit Garden** が起動します。**Enter** で開始し、**WASD／方向キー**で移動、**P／Space** で一時停止、**Esc** でメニューへ戻るか終了します。
 
-**エンジンのリポジトリはエンジン開発専用です。** ゲーム（例：THKTNT）の Lua、素材、配布物は別のフォルダー／リポジトリで管理してください。
+ルートの `main.lua` を編集すれば、自分の Lua スクリプトを実行できます。EXE と同じ場所に `scripts/`、`assets/`、`shaders/` などのフォルダーを作成して利用できます。標準設定では配置先ディレクトリ内の安全な相対パスが許可されています。Lua や HLSL を変更した場合は、ゲームを再起動してください。
+
+通常のリリース版では JSON の設定、Python のインストール、エンジンのコンパイルは必要ありません。
+
+### 方法 2：ソースからプロジェクト専用 EXE を作る
+
+エンジンのソースとゲームのデータは別々のディレクトリに置くことを推奨します。
 
 ```text
 Workspace/
-├── Selen2D/                 # エンジンのソース、ビルドスクリプト、PyQt6 ツール
-└── MyGame/                  # 独立したゲームプロジェクト
+├── Selen2D/                # エンジンのソースとツール
+└── MyGame/
     ├── content/
-    │   ├── main.lua
-    │   └── assets/
-    └── dist/
-        ├── Selen2D.exe     # 専用ビルド
-        └── data.slpk       # リソースパッケージ
+    │   └── main.lua
+    └── dist/                # ゲームの配布先
 ```
 
-**未公開の開発ツールでの手順：**
-
-1. Selen2D のソースを取得し、`develop` に切り替えます。Visual Studio C++ ツール、Windows SDK、CMake、Ninja、Python を用意します。
-2. 仮想環境に PyQt6 ツールをインストールし、GUI を起動します。
-3. GUI で編集する設定は **`Selen2D/launch/launch.json` の 1 ファイルだけ**です。起動入口、パッケージ、`parts`、任意のキー、保存先を設定して保存・検証します。
-4. `tools/build.ps1 -Configuration Release` または GUI からビルドします。JSON の内容は EXE に組み込まれ、**ゲーム実行時には外部 JSON を読みません**。
-5. 同じ GUI で外部の `MyGame/content/` を選択し、同じ secret を使って暗号化 SLPK v2 を生成・検証します。
-6. EXE とパッケージを `MyGame/dist/` に配置して起動します。必要な第三者ライセンス文書も保持してください。
+**1. Selen2D Tools をインストールして起動します。** エンジンのリポジトリ直下で実行します。Python 3.10 以降が必要です。EXE のビルドには Windows C++ ビルドツールも必要です。
 
 ```powershell
-# Selen2D リポジトリのルートで実行：
-git switch develop
 python -m venv build/tools-venv
 .\build\tools-venv\Scripts\python.exe -m pip install -r tools/pack/requirements-gui.txt
 .\build\tools-venv\Scripts\python.exe -B tools/pack/main.py
-.\tools\build.ps1 -Configuration Release
 ```
 
-**開発版 2.1.1 の JSON 形式**：ディレクトリ種別は `root`（EXE のディレクトリ）と `local_app_data`（Windows LocalAppData、Roaming AppData ではありません）です。旧 `deployment` / `user_data` 設定は GUI で確認後に移行し、非公開のバックアップを保存します。
+PyQt6 の画面で編集する設定ファイルは `launch/launch.json` の一つだけです。初回起動時に公開テンプレートから作成されます。エントリースクリプト、パッケージのマウント、暗号化用の secret、ディレクトリの対応を設定して保存します。ビルドは同じ JSON を使用します。
+
+暗号化パッケージとユーザーデータを利用する場合の設定例：
 
 ```json
 {
-  "secret": "replace-with-your-private-project-secret",
+  "secret": "replace-with-your-own-secret",
   "mounts": [
     { "source": "data.slpk", "target": "game", "parts": 0, "encrypted": true }
   ],
   "directories": [
-    { "base": "local_app_data", "path": "ExampleStudio/MyGame", "target": "save" }
+    { "base": "local_app_data", "path": "MyStudio/MyGame", "target": "save" }
   ],
   "entry": "game/main.lua"
 }
 ```
 
-`content/main.lua` はパッケージ化後に VFS の `game/main.lua` になります。`source` は GUI で選択した入力フォルダーではなく、**最終配置の EXE に対する相対パス**です。Windows では `local_app_data` が `%LOCALAPPDATA%` に対応し、Lua は `save/settings.json` などの仮想パスでアクセスします。公開 Release は秘密鍵のない独立したデフォルト設定でビルドされ、プライベートな設定を使用しません。
+`source` は完成した EXE のディレクトリから見たパッケージの相対パス、`target` は Lua から見える仮想パスです。パッケージ内の `main.lua` は `game/main.lua` になります。`save/...` は Windows では `%LOCALAPPDATA%\MyStudio\MyGame\...` に対応します。同じ仮想パスに複数のパッケージがある場合は、`parts` の大きいものが優先されます。
 
-自動化向けの CLI は [JSON・パッケージガイド](doc/guide/file-launch.md) を参照してください。プレイヤーの環境に Python や PyQt6 は不要です。暗号化は解析や単純な置換を難しくするためのもので、**リバースエンジニアリングや改ざんを完全に防ぐものではありません**。
+**2. 設定を組み込んでビルドします。** JSON の検証と内部 C++ ヘッダーの生成を経て、起動設定が EXE に組み込まれます。
 
-### 対応環境・ドキュメント・ライセンス
+```powershell
+.\tools\build.ps1 -Configuration Release
+```
 
-- **正式に検証済みの環境：** Windows x64 / Direct3D 12。他のプラットフォームは同等の公開サポートを保証しません。
-- **入門：** [起動方法](doc/guide/getting-started.md)、[Orbit Garden](doc/guide/example.md)、[Shader](doc/guide/shader.md)、[フレーム処理](doc/guide/runtime.md)。
-- **詳しいガイド：** [File / VFS / JSON](doc/guide/file-launch.md)、[PyQt6 ツール](doc/guide/tools-gui.md)、[音声](doc/guide/audio.md)、[テキスト](doc/guide/text.md)、[コンソール・ログ](doc/guide/debug-console.md)。
-- **API リファレンス：** [`doc/api/`](doc/api/) は Lua 言語サーバー／エディター用の宣言です。**実行用 Lua ライブラリではありません**。
-- **ライセンス：** エンジン独自コードは [MIT License](LICENSE)、Copyright © 2026 Lonely Owl。再配布時は第三者ライセンスと通知を維持してください。任意の開発 GUI に使用する PyQt6 には別途 GPL／商用ライセンス条件があります。
-- **コントリビューション：** ブランチ、リリース、ビルドのルールは [`CONTRIBUTING.md`](CONTRIBUTING.md) を参照してください。
+完成した EXE は `build/release/bin/Selen2D.exe` にあります。GUI のビルド画面からも実行できます。デバッグビルドには `-Configuration Debug` を使用します。
+
+**3. ゲームデータをパッケージ化します。** GUI で `MyGame/content/` を入力、`MyGame/dist/data.slpk` を出力に指定します。**SLPK v2 暗号化**を選ぶと、同じ JSON に保存された secret を使ってパッケージを作成し、内容を検証します。平文の SLPK v1 も利用できます。
+
+**4. ファイルを配置します。** ビルドした EXE をパッケージの横にコピーします。
+
+```text
+MyGame/dist/
+├── Selen2D.exe
+└── data.slpk
+```
+
+起動時には EXE に組み込まれたエントリーとマウント設定が使われます。プレイヤー側に JSON、Python、PyQt6 は必要ありません。secret は非公開で管理してください。EXE に埋め込んだ secret は、バイナリ解析によって取り出される可能性があります。
+
+非公開の `launch/launch.json` がまだ作成されていない場合、ソースビルドは公開設定 `src/res/development/launch.json` を使用します。エントリーは `main.lua`、ディレクトリは `root / . → .` です。公式リリースは常に独立した公開設定でビルドされ、個別プロジェクトの JSON は組み込まれません。
+
+### ソースビルドとドキュメント
+
+Windows でソースをビルドするには、**Visual Studio C++ ツール（MSVC）**、**Windows SDK**、**CMake**、**Ninja**、ビルド時の設定に使う Python が必要です。
+
+```powershell
+.\tools\build.ps1 -Configuration Debug
+.\tools\build.ps1 -Configuration Release
+```
+
+Windows のデバッグコンソールは起動時に非表示です。Lua から `Debug.SetConsoleVisible(true)` で表示し、`Debug.SetConsoleVisible(false)` で隠せます。`engine.log` は EXE と同じディレクトリに保存されます。
+
+資料：[入門ガイド](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [ファイルと起動設定](doc/guide/file-launch.md) · [Lua API](doc/api/)。
+
+**ライセンス：** エンジン独自のコードは [MIT License](LICENSE)、Copyright © 2026 Lonely Owl。再配布時には同梱の第三者ライセンスと通知を保持してください。任意の開発ツール PyQt6 には別途 GPL／商用ライセンスが適用されます。
