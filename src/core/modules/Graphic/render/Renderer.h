@@ -23,6 +23,7 @@ struct Stats {
     std::uint64_t submittedFrames{}, completedFrames{}, renderPasses{}, clearPasses{}, preservedPasses{}, backpressure{};
     std::size_t inFlight{}, queuedCommands{};
     std::uint64_t drawCalls{}, sprites{}, textureBindings{}, bufferAllocations{}, vertexBytes{};
+    std::uint64_t parameterBytes{}; // Built-in sprite sampling-buffer uploads.
     std::uint64_t ribbons{};
     std::uint64_t readbacks{}, readbackSubmissions{};
 };

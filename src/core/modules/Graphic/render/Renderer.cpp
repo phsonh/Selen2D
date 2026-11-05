@@ -98,6 +98,7 @@ struct Renderer::Impl {
         Paint paint;
         Uint32 inputVertex{}, vertexCount{};
         bool ribbon{};
+        bool sprite2D{};
         std::size_t sequence{};
         Uint32 firstVertex{};
         SDL_GPUGraphicsPipeline* pipeline{};
@@ -111,9 +112,14 @@ struct Renderer::Impl {
         std::vector<Command> commands;
         std::vector<detail::Vertex> recordedVertices;
         std::vector<detail::Vertex> vertices;
+        std::vector<detail::SpriteVertex> recordedSprites;
+        std::vector<detail::SpriteVertex> sprites;
+        std::vector<detail::SpriteParameters> spriteParameters;
         SDL_GPUBuffer* vertexBuffer{};
+        SDL_GPUBuffer* parameterBuffer{};
         SDL_GPUTransferBuffer* transfer{};
         Uint32 bufferBytes{};
+        Uint32 parameterBufferBytes{}, transferBytes{};
         SDL_GPUFence* fence{};
         Clock::time_point submitted;
         std::size_t shaderBytes{};
@@ -201,7 +207,7 @@ struct Renderer::Impl {
         auto& frame=Recording();
         detail::Validate(image,paint);
         const auto maximum=config.maxVertexBytes/sizeof(detail::Vertex);
-        if(frame.commands.size()>=config.maxCommands || vertices.size()>maximum-frame.recordedVertices.size())
+        if(frame.commands.size()>=config.maxCommands || vertices.size()>maximum-frame.recordedVertices.size()-frame.recordedSprites.size())
             throw std::length_error("Renderer draw command/vertex budget exhausted");
         auto output=canvases.Acquire(destination);
         if(image.texture==output->texture) throw std::invalid_argument("Canvas cannot sample itself while it is the output target");
@@ -222,6 +228,72 @@ struct Renderer::Impl {
             std::max(size,std::min<std::size_t>(maximum,std::max<std::size_t>(256,frame.recordedVertices.capacity()*2))));
         frame.recordedVertices.insert(frame.recordedVertices.end(),vertices.begin(),vertices.end());
         frame.commands.push_back(std::move(command));
+    }
+    void CommitSprite(Canvas::Handle destination,const Render::Image& image,Paint paint,
+        std::span<const detail::SpriteVertex> vertices,const detail::SpriteParameters& parameters,
+        std::shared_ptr<Attachment> sourceCanvas) {
+        auto& frame=Recording();
+        detail::Validate(image,paint);
+        // Keep the generic B-layout admission limit even though these vertices
+        // and their parameter record need fewer actual bytes.
+        const auto maximum=config.maxVertexBytes/sizeof(detail::Vertex);
+        if(frame.commands.size()>=config.maxCommands || vertices.size()>maximum-frame.recordedVertices.size()-frame.recordedSprites.size())
+            throw std::length_error("Renderer draw command/vertex budget exhausted");
+        auto output=canvases.Acquire(destination);
+        if(image.texture==output->texture) throw std::invalid_argument("Canvas cannot sample itself while it is the output target");
+        if(SkipWindow(*output)) {Append(Kind::Target,destination);return;}
+        Command command{};
+        command.kind=Kind::Image;command.target=std::move(output);command.image=image;
+        command.spatial=command.target->spatial;command.sourceCanvas=std::move(sourceCanvas);
+        command.paint=paint;command.sequence=frame.commands.size();command.sprite2D=true;
+        command.inputVertex=static_cast<Uint32>(frame.recordedSprites.size());
+        command.vertexCount=static_cast<Uint32>(vertices.size());
+        if(frame.commands.size()==frame.commands.capacity())
+            frame.commands.reserve(std::min(config.maxCommands,std::max<std::size_t>(256,frame.commands.size()*2)));
+        const auto size=frame.recordedSprites.size()+vertices.size();
+        if(size>frame.recordedSprites.capacity()) frame.recordedSprites.reserve(
+            std::max(size,std::min<std::size_t>(maximum,std::max<std::size_t>(256,frame.recordedSprites.capacity()*2))));
+        if(frame.spriteParameters.size()==frame.spriteParameters.capacity()) frame.spriteParameters.reserve(
+            std::min<std::size_t>(maximum/6,std::max<std::size_t>(256,frame.spriteParameters.size()*2)));
+        // All reservations precede publication, including the parameter index.
+        frame.spriteParameters.push_back(parameters);
+        frame.recordedSprites.insert(frame.recordedSprites.end(),vertices.begin(),vertices.end());
+        frame.commands.push_back(std::move(command));
+    }
+    detail::SpriteParameters SpriteSampling(const Render::Image& image) const {
+        detail::SpriteParameters parameters;
+        parameters.region={float(image.x)/image.textureWidth,float(image.y)/image.textureHeight,
+            float(image.x+image.width)/image.textureWidth,float(image.y+image.height)/image.textureHeight};
+        parameters.logical={static_cast<float>(image.insetX),static_cast<float>(image.insetY),
+            static_cast<float>(image.LogicalWidth()),static_cast<float>(image.LogicalHeight())};
+        parameters.flags[0]=image.alpha==Alpha::Premultiplied ? 1.f:0.f;
+        if(image.mipLevels) {
+            parameters.flags[1]=4.f+(image.filter==Filter::Linear ? 2.f:0.f)+(image.address==Address::Repeat ? 1.f:0.f);
+            parameters.flags[2]=static_cast<float>(image.mipLevels);
+            parameters.flags[3]=static_cast<float>(image.mipExtrusion);
+        } else if(image.textureLevels>1) {
+            parameters.flags[1]=8.f+(image.filter==Filter::Linear ? 2.f:0.f)+(image.address==Address::Repeat ? 1.f:0.f);
+            parameters.flags[2]=static_cast<float>(image.textureLevels);
+        } else if(image.address==Address::Repeat) {
+            const bool whole=image.x==0 && image.y==0 && image.insetX==0 && image.insetY==0 &&
+                image.LogicalWidth()==image.textureWidth && image.LogicalHeight()==image.textureHeight;
+            parameters.flags[1]=whole ? 1.f : (image.filter==Filter::Point ? 2.f:3.f);
+        }
+        return parameters;
+    }
+    detail::SpriteVertex ProjectSprite(Canvas::Bounds bounds,Geometry::Point point,
+        double u,double t,double q,std::uint32_t color,std::uint32_t parameterIndex) const {
+        detail::SpriteVertex v{};
+        const auto p=Canvas::ToClip(bounds,{point[0],point[1]});
+        v.x=static_cast<float>(p.x);v.y=static_cast<float>(p.y);
+        if(!std::isfinite(v.x) || !std::isfinite(v.y)) throw std::invalid_argument("Image projection exceeds GPU float range");
+        v.u=static_cast<float>(u*q);v.v=static_cast<float>(t*q);v.q=static_cast<float>(q);
+        if(!std::isfinite(v.u) || !std::isfinite(v.v) || !std::isfinite(v.q) || v.q<=0)
+            throw std::invalid_argument("Image UV exceeds GPU interpolation range");
+        v.r=static_cast<std::uint8_t>((color>>16)&255);v.g=static_cast<std::uint8_t>((color>>8)&255);
+        v.b=static_cast<std::uint8_t>(color&255);v.a=static_cast<std::uint8_t>(color>>24);
+        v.parameterIndex=parameterIndex;
+        return v;
     }
     detail::Vertex Project(const Render::Image& image, Canvas::Bounds bounds, Geometry::Point point,
         double u,double t,double q,std::uint32_t color) {
@@ -264,21 +336,23 @@ struct Renderer::Impl {
     void Draw(Canvas::Handle destination, const Render::Image& image, const std::array<std::array<double,2>,4>& corners, Paint paint,
         std::shared_ptr<Attachment> sourceCanvas={}, const QuadVertices* explicitVertices=nullptr,
         const std::array<double,4>* weights=nullptr) {
-        Recording(); detail::Validate(image,paint);
+        auto& frame=Recording(); detail::Validate(image,paint);
         const auto info=canvases.Describe(destination);
         if(info.threeD) throw std::invalid_argument("2D drawing requires a 2D Canvas target");
         const auto bounds=info.bounds;
         const std::array<Geometry::Point,4> uv{{{1,0},{0,0},{0,1},{1,1}}};
-        std::array<detail::Vertex,4> quad;
+        const auto parameters=SpriteSampling(image);
+        const auto parameterIndex=static_cast<std::uint32_t>(frame.spriteParameters.size());
+        std::array<detail::SpriteVertex,4> quad;
         for(std::size_t i=0;i<4;++i) {
             const double q=weights ? (*weights)[i]:1;
             const double u=explicitVertices ? (*explicitVertices)[i].u:uv[i][0];
             const double t=explicitVertices ? (*explicitVertices)[i].v:uv[i][1];
             const auto color=explicitVertices ? (*explicitVertices)[i].color:paint.color;
-            quad[i]=Project(image,bounds,corners[i],u,t,q,color);
+            quad[i]=ProjectSprite(bounds,corners[i],u,t,q,color,parameterIndex);
         }
-        const std::array<detail::Vertex,6> triangles{quad[0],quad[1],quad[2],quad[0],quad[2],quad[3]};
-        Commit(destination,image,paint,triangles,std::move(sourceCanvas));
+        const std::array<detail::SpriteVertex,6> triangles{quad[0],quad[1],quad[2],quad[0],quad[2],quad[3]};
+        CommitSprite(destination,image,paint,triangles,parameters,std::move(sourceCanvas));
     }
     void Ribbon(Canvas::Handle destination, const Render::Image& image,std::span<const Geometry::Point> points,double width,Paint paint,bool closedPath,
         std::shared_ptr<Attachment> sourceCanvas={}) {
@@ -364,16 +438,24 @@ struct Renderer::Impl {
             auto& v=versions.at(&a); v.color=++contentSerial;
             if(distance) v.distance=v.color;
         };
-        if(!frame.vertices.empty()) {
+        if(!frame.vertices.empty() || !frame.sprites.empty()) {
 #ifdef ENGINE_SPRITE_PROFILE
             profile::Timer uploadTimer(profile::Phase::Upload);
 #endif
             auto* copy=SDL_BeginGPUCopyPass(command);
             if(!copy) throw std::runtime_error(std::string("Image vertex copy pass failed: ")+SDL_GetError());
             SDL_GPUTransferBufferLocation source{frame.transfer,0};
-            SDL_GPUBufferRegion destination{frame.vertexBuffer,0,static_cast<Uint32>(frame.vertices.size()*sizeof(detail::Vertex))};
-            SDL_UploadToGPUBuffer(copy,&source,&destination,false); SDL_EndGPUCopyPass(copy);
+            const auto vertexBytes=static_cast<Uint32>(frame.vertices.size()*sizeof(detail::Vertex)+frame.sprites.size()*sizeof(detail::SpriteVertex));
+            SDL_GPUBufferRegion destination{frame.vertexBuffer,0,vertexBytes};
+            SDL_UploadToGPUBuffer(copy,&source,&destination,false);
             stats.vertexBytes+=destination.size;
+            if(!frame.spriteParameters.empty()) {
+                source.offset=vertexBytes;
+                destination={frame.parameterBuffer,0,static_cast<Uint32>(frame.spriteParameters.size()*sizeof(detail::SpriteParameters))};
+                SDL_UploadToGPUBuffer(copy,&source,&destination,false);
+                stats.parameterBytes+=destination.size;
+            }
+            SDL_EndGPUCopyPass(copy);
         }
         // A newly created Canvas may be read before it is ever selected as a
         // target. Initialize those sources once, before any sorted draw segment.
@@ -443,18 +525,26 @@ struct Renderer::Impl {
                 }
                 drew=!item.textParts.empty();++i;
             } else if(item.kind==Kind::Image) {
-                SDL_GPUBufferBinding binding{frame.vertexBuffer,0};
-                SDL_BindGPUVertexBuffers(pass,0,&binding,1);
+                bool vertexBound{},lastSprite2D{},parametersBound{};
                 while(i<frame.commands.size() && frame.commands[i].kind==Kind::Image && frame.commands[i].target.get()==&attachment) {
                     const auto& first=frame.commands[i];
                     std::size_t last=i+1;
                     while(last<frame.commands.size()) {
                         const auto& next=frame.commands[last];
-                        if(next.kind!=Kind::Image || next.target!=first.target || next.pipeline!=first.pipeline || next.sampler!=first.sampler ||
+                        if(next.kind!=Kind::Image || next.target!=first.target || next.sprite2D!=first.sprite2D || next.pipeline!=first.pipeline || next.sampler!=first.sampler ||
                             next.image.texture!=first.image.texture || next.spatial.fog!=first.spatial.fog) break;
                         ++last;
                     }
                     SDL_BindGPUGraphicsPipeline(pass,first.pipeline);
+                    if(!vertexBound || lastSprite2D!=first.sprite2D) {
+                        SDL_GPUBufferBinding binding{frame.vertexBuffer,first.sprite2D ? static_cast<Uint32>(frame.vertices.size()*sizeof(detail::Vertex)):0};
+                        SDL_BindGPUVertexBuffers(pass,0,&binding,1);
+                        vertexBound=true;lastSprite2D=first.sprite2D;
+                    }
+                    if(first.sprite2D && !parametersBound) {
+                        SDL_BindGPUVertexStorageBuffers(pass,0,&frame.parameterBuffer,1);
+                        parametersBound=true;
+                    }
                     SDL_GPUTextureSamplerBinding textureBinding{first.image.texture,first.sampler};
                     SDL_BindGPUFragmentSamplers(pass,0,&textureBinding,1);
                     auto fog=FogData(first.spatial.fog);
@@ -492,26 +582,32 @@ struct Renderer::Impl {
     void RetirePresentation(Frame& frame);
     void ClearCommands(Frame& frame) {
         frame.commands.clear();frame.recordedVertices.clear();frame.vertices.clear();frame.shaderBytes=0;frame.glyphUploads.clear();
+        frame.recordedSprites.clear();frame.sprites.clear();frame.spriteParameters.clear();
     }
 #ifdef ENGINE_SPRITE_PROFILE
     void ProfileMemory(const Frame& frame) const {
         if(!profile::state.active) return;
         auto& sample=profile::state.current;
         sample.commandSize=sizeof(Command);sample.vertexSize=sizeof(detail::Vertex);
+        sample.spriteVertexSize=sizeof(detail::SpriteVertex);sample.parameterSize=sizeof(detail::SpriteParameters);
         sample.commandCount=frame.commands.size();
         sample.currentCommandBytes=frame.commands.size()*sizeof(Command);
-        sample.currentGeometryBytes=(frame.recordedVertices.size()+frame.vertices.size())*sizeof(detail::Vertex);
+        sample.currentGeometryBytes=(frame.recordedVertices.size()+frame.vertices.size())*sizeof(detail::Vertex)+
+            (frame.recordedSprites.size()+frame.sprites.size())*sizeof(detail::SpriteVertex)+frame.spriteParameters.size()*sizeof(detail::SpriteParameters);
         sample.currentCommandCapacityBytes=frame.commands.capacity()*sizeof(Command);
-        sample.currentGeometryCapacityBytes=(frame.recordedVertices.capacity()+frame.vertices.capacity())*sizeof(detail::Vertex);
-        sample.currentTransferCapacityBytes=frame.transfer ? frame.bufferBytes : 0;
-        sample.currentGpuCapacityBytes=frame.vertexBuffer ? frame.bufferBytes : 0;
+        sample.currentGeometryCapacityBytes=(frame.recordedVertices.capacity()+frame.vertices.capacity())*sizeof(detail::Vertex)+
+            (frame.recordedSprites.capacity()+frame.sprites.capacity())*sizeof(detail::SpriteVertex)+frame.spriteParameters.capacity()*sizeof(detail::SpriteParameters);
+        sample.currentTransferCapacityBytes=frame.transfer ? frame.transferBytes : 0;
+        sample.currentGpuCapacityBytes=(frame.vertexBuffer ? frame.bufferBytes : 0)+(frame.parameterBuffer ? frame.parameterBufferBytes:0);
         sample.retainedCommandCapacityBytes=sample.retainedGeometryCapacityBytes=0;
         sample.retainedTransferCapacityBytes=sample.retainedGpuCapacityBytes=0;
         for(const auto& slot:frames) {
             sample.retainedCommandCapacityBytes+=slot.commands.capacity()*sizeof(Command);
-            sample.retainedGeometryCapacityBytes+=(slot.recordedVertices.capacity()+slot.vertices.capacity())*sizeof(detail::Vertex);
-            if(slot.transfer) sample.retainedTransferCapacityBytes+=slot.bufferBytes;
+            sample.retainedGeometryCapacityBytes+=(slot.recordedVertices.capacity()+slot.vertices.capacity())*sizeof(detail::Vertex)+
+                (slot.recordedSprites.capacity()+slot.sprites.capacity())*sizeof(detail::SpriteVertex)+slot.spriteParameters.capacity()*sizeof(detail::SpriteParameters);
+            if(slot.transfer) sample.retainedTransferCapacityBytes+=slot.transferBytes;
             if(slot.vertexBuffer) sample.retainedGpuCapacityBytes+=slot.bufferBytes;
+            if(slot.parameterBuffer) sample.retainedGpuCapacityBytes+=slot.parameterBufferBytes;
         }
         sample.ribbonScratchCapacityBytes=ribbonVertices.capacity()*sizeof(detail::Vertex);
     }
@@ -534,6 +630,8 @@ struct Renderer::Impl {
         }
         frame.vertices.clear();
         frame.vertices.reserve(frame.recordedVertices.size());
+        frame.sprites.clear();
+        frame.sprites.reserve(frame.recordedSprites.size());
         for(auto& command:frame.commands) {
             const auto format=command.target->info.window ? SDL_GetGPUSwapchainTextureFormat(device,window) : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
             if(command.kind==Kind::Shader) {
@@ -553,35 +651,86 @@ struct Renderer::Impl {
                 }
                 continue;
             }
-            command.firstVertex=static_cast<Uint32>(frame.vertices.size());
-            const auto first=frame.recordedVertices.begin()+command.inputVertex;
-            frame.vertices.insert(frame.vertices.end(),first,first+command.vertexCount);
-            command.pipeline=imagePipeline->Get(format,command.paint.blend,command.target->depthFormat,command.spatial.depthEnabled);
+            if(command.sprite2D) {
+                command.firstVertex=static_cast<Uint32>(frame.sprites.size());
+                const auto first=frame.recordedSprites.begin()+command.inputVertex;
+                frame.sprites.insert(frame.sprites.end(),first,first+command.vertexCount);
+            } else {
+                command.firstVertex=static_cast<Uint32>(frame.vertices.size());
+                const auto first=frame.recordedVertices.begin()+command.inputVertex;
+                frame.vertices.insert(frame.vertices.end(),first,first+command.vertexCount);
+            }
+            command.pipeline=imagePipeline->Get(format,command.paint.blend,command.target->depthFormat,command.spatial.depthEnabled,command.sprite2D);
             command.sampler=imagePipeline->Sampler(command.image.filter,command.image.address);
         }
-        const auto bytes=static_cast<Uint32>(frame.vertices.size()*sizeof(detail::Vertex));
+        const auto genericBytes=static_cast<Uint32>(frame.vertices.size()*sizeof(detail::Vertex));
+        const auto spriteBytes=static_cast<Uint32>(frame.sprites.size()*sizeof(detail::SpriteVertex));
+        const auto vertexBytes=genericBytes+spriteBytes;
+        const auto parameterBytes=static_cast<Uint32>(frame.spriteParameters.size()*sizeof(detail::SpriteParameters));
+        const auto bytes=vertexBytes+parameterBytes;
         if(!bytes) return;
-        if(bytes>frame.bufferBytes) {
-            const auto capacity=std::min(config.maxVertexBytes,std::max(4096u,std::bit_ceil(bytes)));
-            SDL_GPUBufferCreateInfo bufferInfo{}; bufferInfo.usage=SDL_GPU_BUFFERUSAGE_VERTEX; bufferInfo.size=capacity;
-            auto* buffer=SDL_CreateGPUBuffer(device,&bufferInfo);
-            if(!buffer) throw std::runtime_error(std::string("Image vertex buffer allocation failed: ")+SDL_GetError());
-            SDL_GPUTransferBufferCreateInfo transferInfo{}; transferInfo.usage=SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD; transferInfo.size=capacity;
-            auto* transfer=SDL_CreateGPUTransferBuffer(device,&transferInfo);
-            if(!transfer) {
-                SDL_ReleaseGPUBuffer(device,buffer);
-                throw std::runtime_error(std::string("Image transfer allocation failed: ")+SDL_GetError());
+        // Both GPU buffers share the original byte ceiling. Transfer storage has
+        // the same independent ceiling as the original single transfer buffer.
+        const auto limit=config.maxVertexBytes&~Uint32(3);
+        if(bytes>limit) throw std::length_error("Renderer upload byte budget exhausted");
+        const auto grow=[&](Uint32 required,Uint32 retained) {
+            return required<=retained ? retained:std::min(limit,std::max(4096u,std::bit_ceil(required)));
+        };
+        auto vertexCapacity=grow(vertexBytes,frame.bufferBytes);
+        auto parameterCapacity=grow(parameterBytes,frame.parameterBufferBytes);
+        if(std::uint64_t(vertexCapacity)+parameterCapacity>limit) {
+            // A prior workload may have filled the other buffer. Exact sizes
+            // avoid retaining two separately rounded full-budget allocations.
+            vertexCapacity=vertexBytes;parameterCapacity=parameterBytes;
+        }
+        const auto transferCapacity=grow(bytes,frame.transferBytes);
+        if(vertexCapacity!=frame.bufferBytes || parameterCapacity!=frame.parameterBufferBytes || transferCapacity!=frame.transferBytes) {
+            SDL_GPUBuffer* vertex{};SDL_GPUBuffer* parameters{};SDL_GPUTransferBuffer* transfer{};
+            try {
+                if(vertexCapacity!=frame.bufferBytes && vertexCapacity) {
+                    SDL_GPUBufferCreateInfo info{};info.usage=SDL_GPU_BUFFERUSAGE_VERTEX;info.size=vertexCapacity;
+                    vertex=SDL_CreateGPUBuffer(device,&info);
+                    if(!vertex) throw std::runtime_error(std::string("Image vertex buffer allocation failed: ")+SDL_GetError());
+                }
+                if(parameterCapacity!=frame.parameterBufferBytes && parameterCapacity) {
+                    SDL_GPUBufferCreateInfo info{};info.usage=SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;info.size=parameterCapacity;
+                    parameters=SDL_CreateGPUBuffer(device,&info);
+                    if(!parameters) throw std::runtime_error(std::string("Sprite parameter buffer allocation failed: ")+SDL_GetError());
+                }
+                if(transferCapacity!=frame.transferBytes) {
+                    SDL_GPUTransferBufferCreateInfo info{};info.usage=SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;info.size=transferCapacity;
+                    transfer=SDL_CreateGPUTransferBuffer(device,&info);
+                    if(!transfer) throw std::runtime_error(std::string("Image transfer allocation failed: ")+SDL_GetError());
+                }
+            } catch(...) {
+                if(vertex) SDL_ReleaseGPUBuffer(device,vertex);
+                if(parameters) SDL_ReleaseGPUBuffer(device,parameters);
+                if(transfer) SDL_ReleaseGPUTransferBuffer(device,transfer);
+                throw;
             }
-            if(frame.vertexBuffer) SDL_ReleaseGPUBuffer(device,frame.vertexBuffer);
-            if(frame.transfer) SDL_ReleaseGPUTransferBuffer(device,frame.transfer);
-            frame.vertexBuffer=buffer; frame.transfer=transfer; frame.bufferBytes=capacity; ++stats.bufferAllocations;
+            if(vertexCapacity!=frame.bufferBytes) {
+                if(frame.vertexBuffer) SDL_ReleaseGPUBuffer(device,frame.vertexBuffer);
+                frame.vertexBuffer=vertex;frame.bufferBytes=vertexCapacity;
+            }
+            if(parameterCapacity!=frame.parameterBufferBytes) {
+                if(frame.parameterBuffer) SDL_ReleaseGPUBuffer(device,frame.parameterBuffer);
+                frame.parameterBuffer=parameters;frame.parameterBufferBytes=parameterCapacity;
+            }
+            if(transferCapacity!=frame.transferBytes) {
+                if(frame.transfer) SDL_ReleaseGPUTransferBuffer(device,frame.transfer);
+                frame.transfer=transfer;frame.transferBytes=transferCapacity;
+            }
+            ++stats.bufferAllocations;
         }
 #ifdef ENGINE_SPRITE_PROFILE
         profile::Timer uploadTimer(profile::Phase::Upload);
 #endif
         auto* destination=SDL_MapGPUTransferBuffer(device,frame.transfer,false);
         if(!destination) throw std::runtime_error(std::string("Image vertex transfer map failed: ")+SDL_GetError());
-        std::memcpy(destination,frame.vertices.data(),bytes);
+        auto* data=static_cast<std::byte*>(destination);
+        if(genericBytes) std::memcpy(data,frame.vertices.data(),genericBytes);
+        if(spriteBytes) std::memcpy(data+genericBytes,frame.sprites.data(),spriteBytes);
+        if(parameterBytes) std::memcpy(data+vertexBytes,frame.spriteParameters.data(),parameterBytes);
         SDL_UnmapGPUTransferBuffer(device,frame.transfer);
     }
 };
@@ -684,6 +833,7 @@ bool Renderer::TryBeginFrame() {
         auto window = impl->canvases.GetWindowCanvas();
         Impl::Command command{}; command.kind=Impl::Kind::Target; command.target=impl->canvases.Acquire(window);
         frame.commands.push_back(std::move(command)); frame.recordedVertices.clear();
+        frame.recordedSprites.clear();frame.spriteParameters.clear();
         frame.acquired=frame.mirrored=frame.windowInitialized=false;
         frame.swapchain=nullptr;frame.windowWidth=frame.windowHeight=0;
         impl->target = window; impl->current = i;
@@ -814,7 +964,7 @@ void Renderer::RenderText(std::shared_ptr<const Text::LayoutResult> layout,doubl
     if(!count) return; // Layout and target validation still ran; no rectangular blank glyph.
     const bool outline=prepared->layout->style.outlineWidth>0;
     const auto vertexCount=count*6*(outline?2:1),maximum=impl->config.maxVertexBytes/sizeof(detail::Vertex);
-    if(vertexCount>maximum-frame.recordedVertices.size()) throw std::length_error("Renderer text vertex budget exhausted");
+    if(vertexCount>maximum-frame.recordedVertices.size()-frame.recordedSprites.size()) throw std::length_error("Renderer text vertex budget exhausted");
     if(!impl->glyphTextures) impl->glyphTextures=std::make_unique<GlyphTextures::Store>(impl->device);
     Impl::Command command{};command.kind=Impl::Kind::Text;command.target=std::move(target);
     command.paint={color,blend,layer};command.sequence=frame.commands.size();command.text=prepared;
@@ -1036,10 +1186,11 @@ bool Renderer::Shutdown() {
         if (frame.fence) SDL_ReleaseGPUFence(impl->device,frame.fence);
         frame.fence=nullptr; impl->ClearCommands(frame);
         if(frame.vertexBuffer) SDL_ReleaseGPUBuffer(impl->device,frame.vertexBuffer);
+        if(frame.parameterBuffer) SDL_ReleaseGPUBuffer(impl->device,frame.parameterBuffer);
         if(frame.transfer) SDL_ReleaseGPUTransferBuffer(impl->device,frame.transfer);
         if(frame.mirror) SDL_ReleaseGPUTexture(impl->device,frame.mirror);
         frame.mirror=nullptr;
-        frame.vertexBuffer=nullptr; frame.transfer=nullptr;
+        frame.vertexBuffer=nullptr;frame.parameterBuffer=nullptr;frame.transfer=nullptr;
     }
     impl->shaderCommands.reset();
     impl->glyphTextures.reset();impl->glyphMasks.Clear();

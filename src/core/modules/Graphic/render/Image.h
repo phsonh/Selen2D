@@ -70,6 +70,16 @@ struct Vertex {
     // subtracting nearly equal Atlas UV bounds for crops smaller than a texel.
     float logicalX{}, logicalY{}, logicalWidth{}, logicalHeight{};
 };
+// Built-in 2D quads retain full-precision geometry and reference one immutable
+// sampling record. Text, Ribbon and 3D continue using Vertex.
+struct SpriteVertex {
+    float x{}, y{}, u{}, v{}, q{1};
+    std::uint8_t r{}, g{}, b{}, a{};
+    std::uint32_t parameterIndex{};
+};
+struct alignas(16) SpriteParameters {
+    std::array<float,4> region{}, flags{}, logical{};
+};
 void Validate(const Image&, Paint);
 std::array<std::array<double,2>,4> ImageCorners(const Image&, Transform);
 }

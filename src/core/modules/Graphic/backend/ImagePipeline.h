@@ -15,7 +15,7 @@ public:
     ImagePipeline(const ImagePipeline&)=delete;
     ImagePipeline& operator=(const ImagePipeline&)=delete;
     SDL_GPUGraphicsPipeline* Get(SDL_GPUTextureFormat, Render::Blend,
-        SDL_GPUTextureFormat depth = SDL_GPU_TEXTUREFORMAT_INVALID, bool depthEnabled = false);
+        SDL_GPUTextureFormat depth = SDL_GPU_TEXTUREFORMAT_INVALID, bool depthEnabled = false, bool sprite2D = false);
     SDL_GPUSampler* Sampler(Render::Filter, Render::Address);
 private:
     struct Impl;

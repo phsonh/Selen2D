@@ -89,6 +89,7 @@ target_include_directories(engine_readback PUBLIC .)
 target_link_libraries(engine_readback PUBLIC SDL3::SDL3-static)
 add_library(engine_renderer STATIC
     "${image_shader_dir}/ImageShaders.h"
+    "${image_shader_dir}/SpriteShaders.h"
     core/modules/Graphic/backend/ImagePipeline.cpp
     core/modules/Graphic/backend/ShaderPipeline.cpp
     core/modules/Graphic/canvas/Canvas.cpp

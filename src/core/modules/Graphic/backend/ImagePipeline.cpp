@@ -1,5 +1,6 @@
 #include "ImagePipeline.h"
 #include "ImageShaders.h"
+#include "SpriteShaders.h"
 #include <SDL3/SDL.h>
 #include <array>
 #include <cstddef>
@@ -54,8 +55,9 @@ SDL_GPUColorTargetBlendState MakeBlendState(Render::Blend blend) {
 struct ImagePipeline::Impl {
     SDL_GPUDevice* device;
     SDL_GPUShader* vertex{};
+    SDL_GPUShader* spriteVertex{};
     SDL_GPUShader* fragment{};
-    struct Entry { SDL_GPUTextureFormat format; Render::Blend blend; SDL_GPUTextureFormat depth; bool depthEnabled; SDL_GPUGraphicsPipeline* pipeline; };
+    struct Entry { SDL_GPUTextureFormat format; Render::Blend blend; SDL_GPUTextureFormat depth; bool depthEnabled; bool sprite2D; SDL_GPUGraphicsPipeline* pipeline; };
     std::vector<Entry> pipelines;
     std::array<SDL_GPUSampler*,4> samplers{};
     explicit Impl(SDL_GPUDevice* d):device(d) {}
@@ -63,6 +65,7 @@ struct ImagePipeline::Impl {
         for(auto entry:pipelines) SDL_ReleaseGPUGraphicsPipeline(device,entry.pipeline);
         for(auto* sampler:samplers) if(sampler) SDL_ReleaseGPUSampler(device,sampler);
         if(vertex) SDL_ReleaseGPUShader(device,vertex);
+        if(spriteVertex) SDL_ReleaseGPUShader(device,spriteVertex);
         if(fragment) SDL_ReleaseGPUShader(device,fragment);
     }
     void Init() {
@@ -74,6 +77,11 @@ struct ImagePipeline::Impl {
         create.code=image_shader_bytecode::vertex; create.code_size=sizeof(image_shader_bytecode::vertex);
         vertex=SDL_CreateGPUShader(device,&create);
         if(!vertex) throw std::runtime_error(std::string("Image vertex shader failed: ")+SDL_GetError());
+        create.num_storage_buffers=1;
+        create.code=sprite_shader_bytecode::vertex;create.code_size=sizeof(sprite_shader_bytecode::vertex);
+        spriteVertex=SDL_CreateGPUShader(device,&create);
+        if(!spriteVertex) throw std::runtime_error(std::string("Sprite vertex shader failed: ")+SDL_GetError());
+        create.num_storage_buffers=0;
         create.stage=SDL_GPU_SHADERSTAGE_FRAGMENT; create.num_samplers=1; create.num_uniform_buffers=1;
         create.code=image_shader_bytecode::fragment; create.code_size=sizeof(image_shader_bytecode::fragment);
         fragment=SDL_CreateGPUShader(device,&create);
@@ -83,8 +91,9 @@ struct ImagePipeline::Impl {
 };
 ImagePipeline::ImagePipeline(SDL_GPUDevice* d):impl(std::make_unique<Impl>(d)) { impl->Init(); }
 ImagePipeline::~ImagePipeline()=default;
-SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render::Blend blend, SDL_GPUTextureFormat depth, bool depthEnabled) {
-    for(auto entry:impl->pipelines) if(entry.format==format && entry.blend==blend && entry.depth==depth && entry.depthEnabled==depthEnabled) return entry.pipeline;
+SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render::Blend blend, SDL_GPUTextureFormat depth, bool depthEnabled, bool sprite2D) {
+    if(sprite2D && depth!=SDL_GPU_TEXTUREFORMAT_INVALID) throw std::invalid_argument("Sprite vertex layout requires a 2D target");
+    for(auto entry:impl->pipelines) if(entry.format==format && entry.blend==blend && entry.depth==depth && entry.depthEnabled==depthEnabled && entry.sprite2D==sprite2D) return entry.pipeline;
     // Bounded cache includes all 18 blends across 2D/depth-enabled/disabled
     // Canvas targets and swapchain formats. Do not precreate unused variants.
     if(impl->pipelines.size()>=256) throw std::length_error("Image pipeline variant limit exceeded");
@@ -100,7 +109,14 @@ SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render:
     static_assert(offsetof(V,premultiplied)==48 && offsetof(V,sampling)==52 && offsetof(V,mipLevels)==56 && offsetof(V,mipExtrusion)==60);
     static_assert(offsetof(V,relativeX)==64 && offsetof(V,relativeY)==68 && offsetof(V,relativeZ)==72);
     static_assert(offsetof(V,logicalX)==76 && offsetof(V,logicalY)==80 && offsetof(V,logicalWidth)==84 && offsetof(V,logicalHeight)==88);
-    SDL_GPUVertexBufferDescription buffer{0,sizeof(V),SDL_GPU_VERTEXINPUTRATE_VERTEX,0};
+    using S=Render::detail::SpriteVertex;
+    using P=Render::detail::SpriteParameters;
+    static_assert(std::is_standard_layout_v<S> && std::is_trivially_copyable_v<S> && sizeof(S)==28 && alignof(S)==4);
+    static_assert(offsetof(S,x)==0 && offsetof(S,y)==4 && offsetof(S,u)==8 && offsetof(S,v)==12 && offsetof(S,q)==16);
+    static_assert(offsetof(S,r)==20 && offsetof(S,g)==21 && offsetof(S,b)==22 && offsetof(S,a)==23 && offsetof(S,parameterIndex)==24);
+    static_assert(std::is_standard_layout_v<P> && std::is_trivially_copyable_v<P> && sizeof(P)==48 && alignof(P)==16);
+    static_assert(offsetof(P,region)==0 && offsetof(P,flags)==16 && offsetof(P,logical)==32);
+    SDL_GPUVertexBufferDescription buffer{0,static_cast<Uint32>(sprite2D ? sizeof(S):sizeof(V)),SDL_GPU_VERTEXINPUTRATE_VERTEX,0};
     const std::array<SDL_GPUVertexAttribute,7> attributes{{
         {0,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,x)},
         {1,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(V,u)},
@@ -109,6 +125,11 @@ SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render:
         {4,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,premultiplied)},
         {5,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(V,relativeX)},
         {6,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,logicalX)}}};
+    const std::array<SDL_GPUVertexAttribute,4> spriteAttributes{{
+        {0,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2,offsetof(S,x)},
+        {1,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(S,u)},
+        {2,0,SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM,offsetof(S,r)},
+        {3,0,SDL_GPU_VERTEXELEMENTFORMAT_UINT,offsetof(S,parameterIndex)}}};
     const bool threeD=depth!=SDL_GPU_TEXTUREFORMAT_INVALID;
     std::array<SDL_GPUColorTargetDescription,2> targets{};
     targets[0].format=format;
@@ -120,8 +141,9 @@ SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render:
     targets[1].blend_state.enable_color_write_mask=true;
     targets[1].blend_state.color_write_mask=depthEnabled ? SDL_GPU_COLORCOMPONENT_R : 0;
     SDL_GPUGraphicsPipelineCreateInfo create{};
-    create.vertex_shader=impl->vertex; create.fragment_shader=impl->fragment;
-    create.vertex_input_state={&buffer,1,attributes.data(),static_cast<Uint32>(attributes.size())};
+    create.vertex_shader=sprite2D ? impl->spriteVertex:impl->vertex; create.fragment_shader=impl->fragment;
+    create.vertex_input_state={&buffer,1,sprite2D ? spriteAttributes.data():attributes.data(),
+        static_cast<Uint32>(sprite2D ? spriteAttributes.size():attributes.size())};
     create.primitive_type=SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     create.rasterizer_state.fill_mode=SDL_GPU_FILLMODE_FILL;
     create.rasterizer_state.cull_mode=SDL_GPU_CULLMODE_NONE;
@@ -136,7 +158,7 @@ SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render:
     create.depth_stencil_state.compare_op=SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
     auto* pipeline=SDL_CreateGPUGraphicsPipeline(impl->device,&create);
     if(!pipeline) throw std::runtime_error(std::string("Image pipeline failed: ")+SDL_GetError());
-    impl->pipelines.push_back({format,blend,depth,depthEnabled,pipeline});
+    impl->pipelines.push_back({format,blend,depth,depthEnabled,sprite2D,pipeline});
     return pipeline;
 }
 SDL_GPUSampler* ImagePipeline::Sampler(Render::Filter filter, Render::Address address) {

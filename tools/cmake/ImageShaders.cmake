@@ -33,3 +33,13 @@ add_custom_command(OUTPUT "${image_shader_dir}/ImageShaders.h"
         -P "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
     DEPENDS "${image_shader_dir}/vert.bin" "${image_shader_dir}/frag.bin" "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
     VERBATIM)
+add_custom_command(OUTPUT "${image_shader_dir}/sprite.vert.bin"
+    COMMAND "${SOLONGO_DXC}" -T vs_6_0 -E main -O3 -WX ${image_shader_options}
+        -Fo "${image_shader_dir}/sprite.vert.bin" "${image_shader_source}/image_sprite.vert.hlsl"
+    DEPENDS "${image_shader_source}/image_sprite.vert.hlsl" VERBATIM)
+add_custom_command(OUTPUT "${image_shader_dir}/SpriteShaders.h"
+    COMMAND "${CMAKE_COMMAND}" "-DVERTEX=${image_shader_dir}/sprite.vert.bin" "-DFRAGMENT=${image_shader_dir}/frag.bin"
+        "-DOUTPUT=${image_shader_dir}/SpriteShaders.h" "-DFORMAT=${image_shader_format}" "-DNAMESPACE=sprite_shader_bytecode"
+        -P "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
+    DEPENDS "${image_shader_dir}/sprite.vert.bin" "${image_shader_dir}/frag.bin" "${PROJECT_SOURCE_DIR}/tools/cmake/EmbedShaders.cmake"
+    VERBATIM)
