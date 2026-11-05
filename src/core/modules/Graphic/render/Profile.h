@@ -20,8 +20,8 @@ struct Sample {
     std::uint64_t frame{};
     double recordMs{}, prepareMs{}, uploadMs{}, encodeMs{}, acquireMs{}, submitMs{};
     double hostFrameIntervalMs{-1};
-    std::uint64_t drawCalls{}, sprites{}, textureBindings{}, vertexBytes{}, parameterBytes{}, bufferAllocations{};
-    std::size_t commandSize{}, vertexSize{}, spriteVertexSize{}, parameterSize{}, commandCount{};
+    std::uint64_t drawCalls{}, sprites{}, textureBindings{}, vertexBytes{}, parameterBytes{}, indexBytes{}, bufferAllocations{};
+    std::size_t commandSize{}, vertexSize{}, spriteVertexSize{}, parameterSize{}, indexSize{}, commandCount{};
     std::size_t orderElementSize{}, currentOrderBytes{}, currentOrderCapacityBytes{}, retainedOrderCapacityBytes{};
     std::size_t currentCommandBytes{}, currentGeometryBytes{};
     std::size_t currentCommandCapacityBytes{}, currentGeometryCapacityBytes{};
@@ -102,6 +102,7 @@ inline void Finish(const Stats& after) {
     sample.textureBindings = after.textureBindings - state.before.textureBindings;
     sample.vertexBytes = after.vertexBytes - state.before.vertexBytes;
     sample.parameterBytes = after.parameterBytes - state.before.parameterBytes;
+    sample.indexBytes = after.indexBytes - state.before.indexBytes;
     sample.bufferAllocations = after.bufferAllocations - state.before.bufferAllocations;
     sample.inFlight = after.inFlight;
     sample.backpressure = after.backpressure - state.before.backpressure;
@@ -117,7 +118,7 @@ inline void Flush() {
     output.open(std::filesystem::path(std::u8string(state.path.begin(),state.path.end())), std::ios::binary | std::ios::trunc);
     output.imbue(std::locale::classic());
     output << "frame,record_ms,prepare_ms,upload_ms,encode_ms,acquire_ms,submit_ms,hostframeinterval_ms,gpu_ms,"
-        "draw_calls,sprites,texture_bindings,vertex_bytes,parameter_bytes,total_upload_bytes,buffer_allocations,command_size,vertex_size,sprite_vertex_size,parameter_size,command_count,"
+        "draw_calls,sprites,texture_bindings,vertex_bytes,parameter_bytes,index_bytes,total_upload_bytes,buffer_allocations,command_size,vertex_size,sprite_vertex_size,parameter_size,index_size,command_count,"
         "current_command_bytes,current_geometry_bytes,current_command_capacity_bytes,current_geometry_capacity_bytes,"
         "current_transfer_capacity_bytes,current_gpu_capacity_bytes,retained_command_capacity_bytes,"
         "retained_geometry_capacity_bytes,retained_transfer_capacity_bytes,retained_gpu_capacity_bytes,"
@@ -128,8 +129,8 @@ inline void Flush() {
     for (const auto& s : state.samples) {
         output << s.frame << ',' << s.recordMs << ',' << s.prepareMs << ',' << s.uploadMs << ','
             << s.encodeMs << ',' << s.acquireMs << ',' << s.submitMs << ',' << s.hostFrameIntervalMs << ",-1,"
-            << s.drawCalls << ',' << s.sprites << ',' << s.textureBindings << ',' << s.vertexBytes << ',' << s.parameterBytes << ',' << s.vertexBytes+s.parameterBytes << ','
-            << s.bufferAllocations << ',' << s.commandSize << ',' << s.vertexSize << ',' << s.spriteVertexSize << ',' << s.parameterSize << ',' << s.commandCount << ','
+            << s.drawCalls << ',' << s.sprites << ',' << s.textureBindings << ',' << s.vertexBytes << ',' << s.parameterBytes << ',' << s.indexBytes << ',' << s.vertexBytes+s.parameterBytes+s.indexBytes << ','
+            << s.bufferAllocations << ',' << s.commandSize << ',' << s.vertexSize << ',' << s.spriteVertexSize << ',' << s.parameterSize << ',' << s.indexSize << ',' << s.commandCount << ','
             << s.currentCommandBytes << ',' << s.currentGeometryBytes << ',' << s.currentCommandCapacityBytes << ','
             << s.currentGeometryCapacityBytes << ',' << s.currentTransferCapacityBytes << ',' << s.currentGpuCapacityBytes << ','
             << s.retainedCommandCapacityBytes << ',' << s.retainedGeometryCapacityBytes << ','
