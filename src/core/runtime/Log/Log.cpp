@@ -43,6 +43,50 @@ namespace core::runtime::Log
         bool HistoryTruncated = false;
         bool Initialized = false;
         std::mutex WriteMutex;
+#ifdef _WIN32
+        bool StandardStreamsChecked = false;
+
+        bool ValidHandle(HANDLE handle) noexcept
+        {
+            if (!handle || handle == INVALID_HANDLE_VALUE) return false;
+            SetLastError(ERROR_SUCCESS);
+            const DWORD type = GetFileType(handle);
+            // NUL is a valid CHAR sink even though GetConsoleMode fails.
+            // A broken pipe remains a pipe; do not replace deliberate routing
+            // just because a later write fails.
+            return type != FILE_TYPE_UNKNOWN || GetLastError() == ERROR_SUCCESS;
+        }
+
+        void PrepareStandardStreams() noexcept
+        {
+            if (StandardStreamsChecked) return;
+            StandardStreamsChecked = true;
+            constexpr DWORD ids[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+            HANDLE original[3];
+            bool valid[3];
+            for (std::size_t i = 0; i < 3; ++i)
+            {
+                original[i] = GetStdHandle(ids[i]);
+                valid[i] = ValidHandle(original[i]);
+            }
+            if (valid[1] && valid[2]) return;
+
+            // This is the OS's atomic check-and-attach to the immediate
+            // parent's EXISTING console. It cannot allocate a new console.
+            // Explorer/services without one simply fail; startup continues.
+            if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+
+            // AttachConsole may replace even valid redirected handles. Restore
+            // each inherited output independently and preserve stdin exactly.
+            // These are borrowed handles: never close them or rebind the CRT.
+            for (std::size_t i = 0; i < 3; ++i)
+                if ((i == 0 || valid[i]) && GetStdHandle(ids[i]) != original[i])
+                    SetStdHandle(ids[i], original[i]);
+            // Writes below use the resulting Win32 standard handles directly:
+            // Unicode console output, or unchanged UTF-8 file/pipe bytes.
+            // No console mode/code page/window or caller process is changed.
+        }
+#endif
 
         std::size_t Utf8Prefix(std::string_view text, std::size_t length) noexcept
         {
@@ -235,6 +279,9 @@ namespace core::runtime::Log
             std::lock_guard lock(WriteMutex);
             if (!Initialized)
             {
+#ifdef _WIN32
+                PrepareStandardStreams();
+#endif
                 Initialized = true;
                 WriteLocked("INFO ", "Log runtime initialized", false, false);
             }

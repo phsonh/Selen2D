@@ -1,12 +1,12 @@
 # 日志与 Windows 启动诊断
 
-引擎使用 Windows GUI 子系统，不自动创建或附着控制台。Info/Debug 实时输出到 stdout，Warn/Error/Fatal 实时输出到 stderr，包含启动验证、Lua 运行及 Lua VM 卸载后的原生清理日志。Windows 调试器仍可接收诊断镜像。引擎不创建、覆盖或写入 engine.log，已有同名文件保持原样。
+引擎使用 Windows GUI 子系统，不创建控制台窗口。Info/Debug 实时输出到 stdout，Warn/Error/Fatal 实时输出到 stderr，包含启动验证、Lua 运行及 Lua VM 卸载后的原生清理日志。Windows 调试器仍可接收诊断镜像。引擎不创建、覆盖或写入 engine.log，已有同名文件保持原样。
 
-引擎使用宿主传入的有效标准句柄，不改变调用者的窗口、句柄或编码设置。文件和管道接收 UTF-8 字节；可用的 Windows 控制台句柄接收 Unicode。没有接收方时不会创建窗口或弹出阻塞错误框。直接双击启动若失败，请用能够捕获标准流的宿主重新运行，或连接调试器。
+引擎优先使用宿主传入的有效标准句柄。启动时若 stdout 或 stderr 缺失，仅尝试一次 `AttachConsole(ATTACH_PARENT_PROCESS)`，由 Windows 检查并连接父进程已经存在的终端；父进程没有控制台时失败，启动照常继续，不调用 `AllocConsole()`。附着后保留原有有效的文件、管道、NUL 重定向及 stdin，不更改调用者的窗口或编码设置。文件和管道接收 UTF-8 字节；可用的 Windows 控制台句柄接收 Unicode。双击启动没有接收方时，不会创建窗口或弹出阻塞错误框；可用终端重新运行或连接调试器诊断。
 
-GUI 程序在某些 shell 中不会自动等待退出。自动化应等待进程并检查退出码，例如 CMD 的 `start /wait`，PowerShell 的 `Start-Process -Wait -PassThru` 配合 `-RedirectStandardOutput` / `-RedirectStandardError`，或 Python `subprocess.run(..., capture_output=True)`。仅有终端窗口不等于宿主一定向 GUI 子进程提供了可用输出句柄；可显式使用管道或文件重定向。
+GUI 程序在某些 shell 中不会自动等待退出。CMD 直接运行时提示符可能与日志交错，这不等于丢失日志。需要顺序显示及可靠退出码时使用 `start /wait "" Selen2D.exe`；自动化也可使用 PowerShell 的 `Start-Process -Wait -PassThru` 配合 `-RedirectStandardOutput` / `-RedirectStandardError`，或 Python `subprocess.run(..., capture_output=True)`。
 
-本机 VS Code / ConPTY 直接以 GUI EXE 为任务进程时未提供可用的终端输出；通过 PowerShell 管道可以可靠接收完整生命周期日志。可使用以下任务配置（只在任务宿主合并显示两路输出，引擎内部仍分别写 stdout/stderr）：
+若宿主既没有传入有效标准句柄、父进程也不拥有控制台，附着父进程不能产生输出。例如某些 VS Code 直接 GUI 进程任务。可以使用 shell 任务，或明确使用以下 PowerShell 管道任务（只在任务宿主合并显示两路输出，引擎内部仍分别写 stdout/stderr）：
 
 ```json
 {
