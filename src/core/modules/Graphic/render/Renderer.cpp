@@ -237,8 +237,8 @@ struct Renderer::Impl {
         v.v=static_cast<float>(t*q); v.q=static_cast<float>(q);
         if(!std::isfinite(v.u) || !std::isfinite(v.v) || !std::isfinite(v.q) || v.q<=0)
             throw std::invalid_argument("Image UV exceeds GPU interpolation range");
-        v.r=float((color>>16)&255)/255; v.g=float((color>>8)&255)/255;
-        v.b=float(color&255)/255; v.a=float(color>>24)/255;
+        v.r=static_cast<std::uint8_t>((color>>16)&255); v.g=static_cast<std::uint8_t>((color>>8)&255);
+        v.b=static_cast<std::uint8_t>(color&255); v.a=static_cast<std::uint8_t>(color>>24);
         v.minU=u0; v.minV=v0; v.maxU=u1; v.maxV=v1;
         v.logicalX=static_cast<float>(image.insetX); v.logicalY=static_cast<float>(image.insetY);
         v.logicalWidth=static_cast<float>(image.LogicalWidth()); v.logicalHeight=static_cast<float>(image.LogicalHeight());

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace core::modules::Graphic::backend {
@@ -90,11 +91,20 @@ SDL_GPUGraphicsPipeline* ImagePipeline::Get(SDL_GPUTextureFormat format, Render:
     // Reserve first so a successful GPU allocation cannot be lost to vector growth.
     impl->pipelines.reserve(impl->pipelines.size()+1);
     using V=Render::detail::Vertex;
+    static_assert(std::is_standard_layout_v<V> && std::is_trivially_copyable_v<V>);
+    static_assert(sizeof(V)==92 && alignof(V)==4);
+    static_assert(offsetof(V,x)==0 && offsetof(V,y)==4 && offsetof(V,z)==8 && offsetof(V,w)==12);
+    static_assert(offsetof(V,u)==16 && offsetof(V,v)==20 && offsetof(V,q)==24);
+    static_assert(offsetof(V,r)==28 && offsetof(V,g)==29 && offsetof(V,b)==30 && offsetof(V,a)==31);
+    static_assert(offsetof(V,minU)==32 && offsetof(V,minV)==36 && offsetof(V,maxU)==40 && offsetof(V,maxV)==44);
+    static_assert(offsetof(V,premultiplied)==48 && offsetof(V,sampling)==52 && offsetof(V,mipLevels)==56 && offsetof(V,mipExtrusion)==60);
+    static_assert(offsetof(V,relativeX)==64 && offsetof(V,relativeY)==68 && offsetof(V,relativeZ)==72);
+    static_assert(offsetof(V,logicalX)==76 && offsetof(V,logicalY)==80 && offsetof(V,logicalWidth)==84 && offsetof(V,logicalHeight)==88);
     SDL_GPUVertexBufferDescription buffer{0,sizeof(V),SDL_GPU_VERTEXINPUTRATE_VERTEX,0};
     const std::array<SDL_GPUVertexAttribute,7> attributes{{
         {0,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,x)},
         {1,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(V,u)},
-        {2,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,r)},
+        {2,0,SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM,offsetof(V,r)},
         {3,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,minU)},
         {4,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(V,premultiplied)},
         {5,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(V,relativeX)},

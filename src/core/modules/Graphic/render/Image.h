@@ -57,7 +57,8 @@ namespace detail {
 // Fixed shader layout. Vertex buffers are shared per frame slot, not per sprite.
 struct Vertex {
     float x{}, y{}, z{}, w{1}, u{}, v{}, q{1};
-    float r{}, g{}, b{}, a{};
+    // Explicit RGBA byte order; the vertex format normalizes the ARGB8 source tint.
+    std::uint8_t r{}, g{}, b{}, a{};
     float minU{}, minV{}, maxU{}, maxV{};
     // sampling: 0=local clamp, 1=whole-texture repeat, 2=local point repeat,
     // 3=local linear repeat; packed logical mips use 4/5=point clamp/repeat
