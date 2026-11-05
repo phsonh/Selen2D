@@ -142,8 +142,7 @@ int CSearcher(lua_State* L) {
 ScriptStatus LoadScript(lua_State* L,const modules::File::FileSystem& filesystem,std::string_view path,const char* mode) {
     VFS_PROFILE_SCOPE(ScriptLoad);
     const auto normalized=filesystem.NormalizePath(path);
-    filesystem.CheckCodeSource(*normalized);
-    const auto bytes=filesystem.Read(*normalized);
+    const auto bytes=filesystem.Read(*normalized,true);
     if(!bytes)return ScriptStatus::Unreadable;
     const auto name="@"+*normalized;
     {

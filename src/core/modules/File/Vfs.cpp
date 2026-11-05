@@ -411,6 +411,11 @@ struct FileSystem::Impl {
                 Fail("read_only","modify active package backend",path);
         }
     }
+    void CheckCode(const View& view,std::string_view path) const {
+        const auto* node=view.Resolve(path);
+        if(protectedCode&&node&&node->info.type==NodeType::File&&(!node->mount||!node->mount->encrypted))
+            throw AccessError("file code is not authenticated package content at '"+std::string(path)+"'");
+    }
     void AddDisk(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
         VFS_PROFILE_SCOPE(AddDisk);
         std::vector<std::pair<fs::path,std::string>> pending{{disk,path}};
@@ -606,13 +611,12 @@ std::optional<std::string> FileSystem::NormalizePath(std::string_view path) cons
 void FileSystem::CheckCodeSource(std::string_view path) const {
     VFS_PROFILE_SCOPE(CheckCodeSource);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
-    const auto* node=view.Resolve(p);
-    if(impl_->protectedCode&&node&&node->info.type==NodeType::File&&(!node->mount||!node->mount->encrypted))
-        throw AccessError("file code is not authenticated package content at '"+p+"'");
+    impl_->CheckCode(view,p);
 }
-NodeInfo FileSystem::Stat(std::string_view path) const {
+NodeInfo FileSystem::Stat(std::string_view path,bool codeSource) const {
     VFS_PROFILE_SCOPE(Stat);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    if(codeSource) impl_->CheckCode(view,p);
     const auto* node=view.Resolve(p); return node?node->info:NodeInfo{};
 }
 std::optional<std::vector<std::string>> FileSystem::ListDirectory(std::string_view path) const {
@@ -636,10 +640,14 @@ std::shared_ptr<const ReadSource> FileSystem::OpenReadSource(std::string_view pa
     return std::shared_ptr<const ReadSource>(new ReadSource(std::move(stream),name));
 }
 SDL_IOStream* FileSystem::Open(std::string_view path,const OpenMode& mode) const {
+    return OpenValidated(path,mode,false);
+}
+SDL_IOStream* FileSystem::OpenValidated(std::string_view path,const OpenMode& mode,bool codeSource) const {
     VFS_PROFILE_SCOPE(Open);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex);
     for(unsigned attempt=0;attempt!=2;++attempt) {
         const auto view=impl_->Scan();
+        if(codeSource) impl_->CheckCode(view,p);
         try { return impl_->OpenInView(view,p,mode); }
         catch(const detail::NativeViewChanged&) {
             // A replaced leaf must be re-authorized, never truncated via the
@@ -713,7 +721,15 @@ bool FileSystem::Copy(std::string_view source,std::string_view destination) cons
     if(to) Fail("already_exists","copy",b);
     const auto& d=impl_->Route(b); impl_->CheckNewName(view,b); impl_->RequireParent(view,d,b);
     impl_->CheckBacking(impl_->Destination(view,d,b),b,false);
-    Stream input(Open(a,"rb")),output(Open(b,"xb"));
+    Stream input,output;
+    try {
+        // The full view, including both parent anchors, is already validated.
+        // Opening either stream still verifies the actual file generation.
+        input.reset(impl_->OpenInView(view,a,ParseMode("rb")));
+        output.reset(impl_->OpenInView(view,b,ParseMode("xb")));
+    } catch(const detail::NativeViewChanged&) {
+        Fail("resource_busy","filesystem changed while copying",a);
+    }
     std::exception_ptr failure;
     try {
         std::array<char,64*1024> bytes{};
@@ -759,12 +775,12 @@ bool FileSystem::Replace(std::string_view source,std::string_view destination) c
     RenamePhysical(from->disk,disk,true,a);
     (void)impl_->Scan(); return true;
 }
-Snapshot FileSystem::ReadSnapshot(std::string_view path,const ReadOptions& options) const {
+Snapshot FileSystem::ReadSnapshot(std::string_view path,const ReadOptions& options,bool codeSource) const {
     VFS_PROFILE_SCOPE(ReadSnapshot);
     if(!options.maxBytes||!options.chunkBytes||options.chunkBytes>16*1024*1024||options.prefixBytes>4096)
         throw std::invalid_argument("invalid VFS snapshot read limits");
     const auto p=impl_->Authorize(path); Cancel(options);
-    Stream stream(Open(p,"rb"));
+    Stream stream(OpenValidated(p,ParseMode("rb"),codeSource));
     const auto modified=detail::NativeModified(stream.get(),p);
     const auto signedSize=SDL_GetIOSize(stream.get());
     if(signedSize<0) throw GetStreamError(stream.get(),"snapshot size",p);
@@ -796,8 +812,8 @@ Snapshot FileSystem::ReadSnapshot(std::string_view path,const ReadOptions& optio
     CloseStream(stream.release(),p); Cancel(options);
     return result;
 }
-std::optional<std::string> FileSystem::Read(std::string_view path) const {
+std::optional<std::string> FileSystem::Read(std::string_view path,bool codeSource) const {
     ReadOptions options; options.maxBytes=std::string{}.max_size();
-    return ReadSnapshot(path,options).bytes;
+    return ReadSnapshot(path,options,codeSource).bytes;
 }
 }

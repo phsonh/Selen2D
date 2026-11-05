@@ -51,7 +51,9 @@ public:
     // Existing file code in an encrypted configuration must be authenticated
     // package content. An authorized missing candidate remains missing.
     void CheckCodeSource(std::string_view path) const;
-    NodeInfo Stat(std::string_view path) const;
+    // Internal code-loading callers authenticate the same view used for the
+    // lookup/read. This flag is not exposed by the Lua File module.
+    NodeInfo Stat(std::string_view path, bool codeSource = false) const;
     std::optional<std::vector<std::string>> ListDirectory(std::string_view path) const;
     // Caller owns the SDL stream. Ordinary failures throw IoError; parameter,
     // authorization and structural errors use distinct exception classes.
@@ -67,9 +69,10 @@ public:
     bool Move(std::string_view source, std::string_view destination) const;
     bool Replace(std::string_view source, std::string_view destination) const;
     // Resource workers retain the existing admission / cancellation contract.
-    Snapshot ReadSnapshot(std::string_view path, const ReadOptions& options) const;
-    std::optional<std::string> Read(std::string_view path) const;
+    Snapshot ReadSnapshot(std::string_view path, const ReadOptions& options, bool codeSource = false) const;
+    std::optional<std::string> Read(std::string_view path, bool codeSource = false) const;
 private:
+    SDL_IOStream* OpenValidated(std::string_view path, const OpenMode& mode, bool codeSource) const;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
