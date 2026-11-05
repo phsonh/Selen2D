@@ -22,6 +22,7 @@ struct Sample {
     double hostFrameIntervalMs{-1};
     std::uint64_t drawCalls{}, sprites{}, textureBindings{}, vertexBytes{}, parameterBytes{}, bufferAllocations{};
     std::size_t commandSize{}, vertexSize{}, spriteVertexSize{}, parameterSize{}, commandCount{};
+    std::size_t orderElementSize{}, currentOrderBytes{}, currentOrderCapacityBytes{}, retainedOrderCapacityBytes{};
     std::size_t currentCommandBytes{}, currentGeometryBytes{};
     std::size_t currentCommandCapacityBytes{}, currentGeometryCapacityBytes{};
     std::size_t currentTransferCapacityBytes{}, currentGpuCapacityBytes{};
@@ -113,14 +114,16 @@ inline void Flush() {
     // File creation and all output happen once, outside the measured frame loop.
     std::ofstream output;
     output.exceptions(std::ios::badbit | std::ios::failbit);
-    output.open(std::filesystem::u8path(state.path), std::ios::binary | std::ios::trunc);
+    output.open(std::filesystem::path(std::u8string(state.path.begin(),state.path.end())), std::ios::binary | std::ios::trunc);
     output.imbue(std::locale::classic());
     output << "frame,record_ms,prepare_ms,upload_ms,encode_ms,acquire_ms,submit_ms,hostframeinterval_ms,gpu_ms,"
         "draw_calls,sprites,texture_bindings,vertex_bytes,parameter_bytes,total_upload_bytes,buffer_allocations,command_size,vertex_size,sprite_vertex_size,parameter_size,command_count,"
         "current_command_bytes,current_geometry_bytes,current_command_capacity_bytes,current_geometry_capacity_bytes,"
         "current_transfer_capacity_bytes,current_gpu_capacity_bytes,retained_command_capacity_bytes,"
         "retained_geometry_capacity_bytes,retained_transfer_capacity_bytes,retained_gpu_capacity_bytes,"
-        "ribbon_scratch_capacity_bytes,in_flight,backpressure\n";
+        "ribbon_scratch_capacity_bytes,in_flight,backpressure,order_element_size,current_order_bytes,"
+        "current_order_capacity_bytes,retained_order_capacity_bytes,current_frame_cpu_bytes,"
+        "current_frame_cpu_capacity_bytes,retained_frame_cpu_capacity_bytes\n";
     output << std::fixed << std::setprecision(6);
     for (const auto& s : state.samples) {
         output << s.frame << ',' << s.recordMs << ',' << s.prepareMs << ',' << s.uploadMs << ','
@@ -131,7 +134,11 @@ inline void Flush() {
             << s.currentGeometryCapacityBytes << ',' << s.currentTransferCapacityBytes << ',' << s.currentGpuCapacityBytes << ','
             << s.retainedCommandCapacityBytes << ',' << s.retainedGeometryCapacityBytes << ','
             << s.retainedTransferCapacityBytes << ',' << s.retainedGpuCapacityBytes << ',' << s.ribbonScratchCapacityBytes << ','
-            << s.inFlight << ',' << s.backpressure << '\n';
+            << s.inFlight << ',' << s.backpressure << ',' << s.orderElementSize << ',' << s.currentOrderBytes << ','
+            << s.currentOrderCapacityBytes << ',' << s.retainedOrderCapacityBytes << ','
+            << s.currentCommandBytes+s.currentGeometryBytes+s.currentOrderBytes << ','
+            << s.currentCommandCapacityBytes+s.currentGeometryCapacityBytes+s.currentOrderCapacityBytes << ','
+            << s.retainedCommandCapacityBytes+s.retainedGeometryCapacityBytes+s.retainedOrderCapacityBytes << '\n';
     }
     output.close();
     state.path.clear();

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -110,6 +111,7 @@ struct Renderer::Impl {
     };
     struct Frame {
         std::vector<Command> commands;
+        std::vector<std::size_t> order;
         std::vector<detail::Vertex> recordedVertices;
         std::vector<detail::Vertex> vertices;
         std::vector<detail::SpriteVertex> recordedSprites;
@@ -412,7 +414,8 @@ struct Renderer::Impl {
             if(a && !a->info.window) result.versions.try_emplace(a,Version{a->colorSerial,a->distanceSerial});
         };
         add(extra);
-        for(const auto& item:frame.commands) {
+        for(const auto index:frame.order) {
+            const auto& item=frame.commands[index];
             add(item.target.get()); add(item.sourceCanvas.get());
             if(item.shader) for(const auto& source:item.shader->canvases) add(source.get());
         }
@@ -427,7 +430,7 @@ struct Renderer::Impl {
         auto& initialized=state.initialized; auto& versions=state.versions;
         auto& windowInitialized=state.windowInitialized;
         if(glyphTextures) {
-            for(const auto& item:frame.commands) for(const auto& part:item.textParts) {
+            for(const auto index:frame.order) for(const auto& part:frame.commands[index].textParts) {
                 const std::array leases{part.glyph};
                 glyphTextures->EncodePending(command,leases);
             }
@@ -471,12 +474,13 @@ struct Renderer::Impl {
             ++stats.renderPasses; ++stats.clearPasses;
         };
         if(readSource && !readSource->info.window) initializeSource(readSource);
-        for(const auto& item:frame.commands) {
+        for(const auto index:frame.order) {
+            const auto& item=frame.commands[index];
             initializeSource(item.sourceCanvas.get());
             if(item.shader) for(const auto& source:item.shader->canvases) initializeSource(source.get());
         }
-        for(std::size_t i=0;i<frame.commands.size();) {
-            const auto& item=frame.commands[i];
+        for(std::size_t i=0;i<frame.order.size();) {
+            const auto& item=frame.commands[frame.order[i]];
             auto& attachment = *item.target;
             auto* texture = attachment.info.window ? windowTexture : attachment.texture;
             if (!texture) {
@@ -526,11 +530,11 @@ struct Renderer::Impl {
                 drew=!item.textParts.empty();++i;
             } else if(item.kind==Kind::Image) {
                 bool vertexBound{},lastSprite2D{},parametersBound{};
-                while(i<frame.commands.size() && frame.commands[i].kind==Kind::Image && frame.commands[i].target.get()==&attachment) {
-                    const auto& first=frame.commands[i];
+                while(i<frame.order.size() && frame.commands[frame.order[i]].kind==Kind::Image && frame.commands[frame.order[i]].target.get()==&attachment) {
+                    const auto& first=frame.commands[frame.order[i]];
                     std::size_t last=i+1;
-                    while(last<frame.commands.size()) {
-                        const auto& next=frame.commands[last];
+                    while(last<frame.order.size()) {
+                        const auto& next=frame.commands[frame.order[last]];
                         if(next.kind!=Kind::Image || next.target!=first.target || next.sprite2D!=first.sprite2D || next.pipeline!=first.pipeline || next.sampler!=first.sampler ||
                             next.image.texture!=first.image.texture || next.spatial.fog!=first.spatial.fog) break;
                         ++last;
@@ -552,8 +556,9 @@ struct Renderer::Impl {
                     SDL_PushGPUFragmentUniformData(command,0,&fog,sizeof(fog));
                     Uint32 vertexCount{};
                     for(auto n=i;n<last;++n) {
-                        vertexCount+=frame.commands[n].vertexCount;
-                        if(frame.commands[n].ribbon) ++stats.ribbons; else ++stats.sprites;
+                        const auto& batch=frame.commands[frame.order[n]];
+                        vertexCount+=batch.vertexCount;
+                        if(batch.ribbon) ++stats.ribbons; else ++stats.sprites;
                     }
                     SDL_DrawGPUPrimitives(pass,vertexCount,1,first.firstVertex,0);
                     ++stats.drawCalls; ++stats.textureBindings;
@@ -582,6 +587,7 @@ struct Renderer::Impl {
     void RetirePresentation(Frame& frame);
     void ClearCommands(Frame& frame) {
         frame.commands.clear();frame.recordedVertices.clear();frame.vertices.clear();frame.shaderBytes=0;frame.glyphUploads.clear();
+        frame.order.clear();
         frame.recordedSprites.clear();frame.sprites.clear();frame.spriteParameters.clear();
     }
 #ifdef ENGINE_SPRITE_PROFILE
@@ -590,19 +596,24 @@ struct Renderer::Impl {
         auto& sample=profile::state.current;
         sample.commandSize=sizeof(Command);sample.vertexSize=sizeof(detail::Vertex);
         sample.spriteVertexSize=sizeof(detail::SpriteVertex);sample.parameterSize=sizeof(detail::SpriteParameters);
+        sample.orderElementSize=sizeof(std::size_t);
         sample.commandCount=frame.commands.size();
         sample.currentCommandBytes=frame.commands.size()*sizeof(Command);
         sample.currentGeometryBytes=(frame.recordedVertices.size()+frame.vertices.size())*sizeof(detail::Vertex)+
             (frame.recordedSprites.size()+frame.sprites.size())*sizeof(detail::SpriteVertex)+frame.spriteParameters.size()*sizeof(detail::SpriteParameters);
         sample.currentCommandCapacityBytes=frame.commands.capacity()*sizeof(Command);
+        sample.currentOrderBytes=frame.order.size()*sizeof(std::size_t);
+        sample.currentOrderCapacityBytes=frame.order.capacity()*sizeof(std::size_t);
         sample.currentGeometryCapacityBytes=(frame.recordedVertices.capacity()+frame.vertices.capacity())*sizeof(detail::Vertex)+
             (frame.recordedSprites.capacity()+frame.sprites.capacity())*sizeof(detail::SpriteVertex)+frame.spriteParameters.capacity()*sizeof(detail::SpriteParameters);
         sample.currentTransferCapacityBytes=frame.transfer ? frame.transferBytes : 0;
         sample.currentGpuCapacityBytes=(frame.vertexBuffer ? frame.bufferBytes : 0)+(frame.parameterBuffer ? frame.parameterBufferBytes:0);
         sample.retainedCommandCapacityBytes=sample.retainedGeometryCapacityBytes=0;
+        sample.retainedOrderCapacityBytes=0;
         sample.retainedTransferCapacityBytes=sample.retainedGpuCapacityBytes=0;
         for(const auto& slot:frames) {
             sample.retainedCommandCapacityBytes+=slot.commands.capacity()*sizeof(Command);
+            sample.retainedOrderCapacityBytes+=slot.order.capacity()*sizeof(std::size_t);
             sample.retainedGeometryCapacityBytes+=(slot.recordedVertices.capacity()+slot.vertices.capacity())*sizeof(detail::Vertex)+
                 (slot.recordedSprites.capacity()+slot.sprites.capacity())*sizeof(detail::SpriteVertex)+slot.spriteParameters.capacity()*sizeof(detail::SpriteParameters);
             if(slot.transfer) sample.retainedTransferCapacityBytes+=slot.transferBytes;
@@ -618,12 +629,19 @@ struct Renderer::Impl {
 #endif
         // All CPU sorting/allocation and lazy pipeline creation happens before CB
         // acquisition. Order is (Layer,original sequence), never texture order.
-        for(auto first=frame.commands.begin();first!=frame.commands.end();) {
-            if(first->kind!=Kind::Image && first->kind!=Kind::Shader && first->kind!=Kind::Text) { ++first; continue; }
+        frame.order.resize(frame.commands.size());
+        std::iota(frame.order.begin(),frame.order.end(),std::size_t{});
+        for(std::size_t first=0;first<frame.order.size();) {
+            const auto& head=frame.commands[frame.order[first]];
+            if(head.kind!=Kind::Image && head.kind!=Kind::Shader && head.kind!=Kind::Text) { ++first; continue; }
             auto last=first;
-            while(last!=frame.commands.end() && last->target==first->target &&
-                (last->kind==Kind::Image || last->kind==Kind::Shader || last->kind==Kind::Text)) ++last;
-            if(!first->target->info.threeD) std::sort(first,last,[](const Command& a,const Command& b) {
+            while(last<frame.order.size()) {
+                const auto& next=frame.commands[frame.order[last]];
+                if(next.target!=head.target || (next.kind!=Kind::Image && next.kind!=Kind::Shader && next.kind!=Kind::Text)) break;
+                ++last;
+            }
+            if(!head.target->info.threeD) std::sort(frame.order.begin()+first,frame.order.begin()+last,[&](std::size_t left,std::size_t right) {
+                const auto& a=frame.commands[left];const auto& b=frame.commands[right];
                 return a.paint.layer==b.paint.layer ? a.sequence<b.sequence : a.paint.layer<b.paint.layer;
             });
             first=last;
@@ -632,7 +650,8 @@ struct Renderer::Impl {
         frame.vertices.reserve(frame.recordedVertices.size());
         frame.sprites.clear();
         frame.sprites.reserve(frame.recordedSprites.size());
-        for(auto& command:frame.commands) {
+        for(const auto index:frame.order) {
+            auto& command=frame.commands[index];
             const auto format=command.target->info.window ? SDL_GetGPUSwapchainTextureFormat(device,window) : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
             if(command.kind==Kind::Shader) {
                 // Validate native host shutdown misuse before acquiring a CB.
@@ -833,6 +852,7 @@ bool Renderer::TryBeginFrame() {
         auto window = impl->canvases.GetWindowCanvas();
         Impl::Command command{}; command.kind=Impl::Kind::Target; command.target=impl->canvases.Acquire(window);
         frame.commands.push_back(std::move(command)); frame.recordedVertices.clear();
+        frame.order.clear();
         frame.recordedSprites.clear();frame.spriteParameters.clear();
         frame.acquired=frame.mirrored=frame.windowInitialized=false;
         frame.swapchain=nullptr;frame.windowWidth=frame.windowHeight=0;
