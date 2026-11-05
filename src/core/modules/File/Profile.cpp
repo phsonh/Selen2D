@@ -1,9 +1,9 @@
 #include "Profile.h"
 #ifdef ENGINE_VFS_PROFILE
+#include "core/runtime/Log/Log.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 
@@ -58,7 +58,7 @@ void Flush() noexcept {
             output<<Name(i)<<','<<snapshot[i].count<<','<<snapshot[i].nanoseconds<<'\n';
         output.flush();
         if(!output) throw 0;
-    } catch(...) { std::fputs("VFS profile output failed\n",stderr); }
+    } catch(...) { core::runtime::Log::Error("VFS profile output failed"); }
 }
 }
 #endif

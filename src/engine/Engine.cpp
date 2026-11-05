@@ -4,7 +4,6 @@
 #include "BuildInfo.h"
 #include <algorithm>
 #include <exception>
-#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <SDL3/SDL.h>
@@ -92,7 +91,7 @@ bool Exit() {
 }
 bool Pump() {
     Event::Pump();
-    quitRequested=quitRequested || Event::Events.QuitRequested;
+    quitRequested=quitRequested || Event::Events.QuitRequested || Log::TerminationRequested();
     return !quitRequested;
 }
 }
@@ -129,6 +128,10 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
                 ReportLua("Failed to execute entry script",error); return false;
             }
         }
+        // Finish the current initialization/entry call before processing an
+        // asynchronous console request. It must never run cleanup on a worker
+        // thread or interrupt Lua/native code halfway through an operation.
+        quitRequested=quitRequested || Log::TerminationRequested();
         if(!quitRequested) {
             core::modules::Window::ShowReady();
             VFS_PROFILE_MARK(WindowShownElapsed);
@@ -240,11 +243,7 @@ bool Shutdown() {
     // the last frame CheckErrors. Preserve them as additional diagnostics while
     // logging is still live; never rethrow or replace the original Lua error.
     if(audio.DrainErrors([](std::string_view message,void*) noexcept {
-        try { Log::Error(message); }
-        catch(...) {
-            std::fwrite(message.data(),1,message.size(),stderr);
-            std::fputc('\n',stderr);
-        }
+        Log::Error(message);
     })) exitSucceeded=false;
     Graphic::Shutdown();
     files.reset();

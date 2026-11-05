@@ -28,6 +28,7 @@ add_library(engine_file STATIC core/modules/File/File.cpp core/modules/File/Vfs.
 target_include_directories(engine_file PUBLIC .)
 if(ENGINE_VFS_PROFILE)
     target_compile_definitions(engine_file PUBLIC ENGINE_VFS_PROFILE=1)
+    target_link_libraries(engine_file PRIVATE engine_log)
 endif()
 target_link_libraries(engine_file PUBLIC SDL3::SDL3-static DependencyZstd DependencyUtf8proc DependencySodium)
 if(WIN32)

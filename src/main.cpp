@@ -57,7 +57,8 @@ int RunApplication(int argc, char* argv[]) {
             core::runtime::Log::Shutdown();
         }
     } diagnostics;
-    core::runtime::Log::Init();
+    if (!core::runtime::Log::Init()) return 2;
+    if (core::runtime::Log::TerminationRequested()) return 0;
     engine::Startup::Config config;
     std::uint64_t frame_limit{};
     std::vector<std::string> arguments;
@@ -83,6 +84,9 @@ int RunApplication(int argc, char* argv[]) {
         core::runtime::Log::Error(std::string("Startup error: ") + error.what());
         return 2;
     }
+    // Startup validation is synchronous. A console signal cannot interrupt it
+    // or unwind native code on the handler thread; honor it at this boundary.
+    if (core::runtime::Log::TerminationRequested()) return 0;
     const bool initialized = engine::Init(config.entry,config.files,arguments);
     const bool ran = initialized && engine::Run(frame_limit);
     const bool closed = engine::Shutdown();

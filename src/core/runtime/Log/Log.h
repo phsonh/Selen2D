@@ -9,6 +9,11 @@ namespace core::runtime::Log
     bool Init() noexcept;
     void Shutdown() noexcept;
 
+    // Internal host signal, latched for the process lifetime. Only a successful
+    // parent-console attachment enables it. Consume at main-thread boundaries;
+    // the Windows control handler never calls Lua, SDL, logging or cleanup.
+    bool TerminationRequested() noexcept;
+
     void Debug(std::string_view message) noexcept;
     void Info(std::string_view message) noexcept;
     void Warn(std::string_view message) noexcept;

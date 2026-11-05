@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -45,6 +46,19 @@ namespace core::runtime::Log
         std::mutex WriteMutex;
 #ifdef _WIN32
         bool StandardStreamsChecked = false;
+        bool StandardStreamsReady = true;
+        bool StandardStreamsReported = false;
+        DWORD StandardStreamErrors[5]{}; // stdin, stdout, stderr, handler, Ctrl+C
+        HANDLE OutputFallback[2]{}; // Borrowed original routes after a failed restore.
+        std::atomic<bool> TerminationPending{false};
+        static_assert(std::atomic<bool>::is_always_lock_free);
+
+        BOOL WINAPI ConsoleControl(DWORD event) noexcept
+        {
+            if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) return FALSE;
+            TerminationPending.store(true, std::memory_order_relaxed);
+            return TRUE;
+        }
 
         bool ValidHandle(HANDLE handle) noexcept
         {
@@ -76,12 +90,39 @@ namespace core::runtime::Log
             // Explorer/services without one simply fail; startup continues.
             if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
 
+            // Attach resets the handler table. Keep our handler installed until
+            // process exit, including native shutdown; removing it earlier
+            // would expose cleanup to the default ExitProcess handler again.
+            // CTRL_CLOSE is intentionally not handled: Windows can forcibly
+            // terminate console clients even if their handler returns TRUE.
+            if (!SetConsoleCtrlHandler(ConsoleControl, TRUE))
+            {
+                StandardStreamsReady = false;
+                const DWORD error = GetLastError();
+                StandardStreamErrors[3] = error ? error : ERROR_GEN_FAILURE;
+            }
+            else if (!SetConsoleCtrlHandler(nullptr, FALSE))
+            {
+                // Unlike the handler table, the inherited ignore-C attribute
+                // survives AttachConsole. Enable C for this client only; both
+                // C and BREAK must reach the registered request-only handler.
+                StandardStreamsReady = false;
+                const DWORD error = GetLastError();
+                StandardStreamErrors[4] = error ? error : ERROR_GEN_FAILURE;
+            }
+
             // AttachConsole may replace even valid redirected handles. Restore
             // each inherited output independently and preserve stdin exactly.
             // These are borrowed handles: never close them or rebind the CRT.
             for (std::size_t i = 0; i < 3; ++i)
-                if ((i == 0 || valid[i]) && GetStdHandle(ids[i]) != original[i])
-                    SetStdHandle(ids[i], original[i]);
+                if ((i == 0 || valid[i]) && GetStdHandle(ids[i]) != original[i] &&
+                    !SetStdHandle(ids[i], original[i]))
+                {
+                    StandardStreamsReady = false;
+                    const DWORD error = GetLastError();
+                    StandardStreamErrors[i] = error ? error : ERROR_GEN_FAILURE;
+                    if (i && valid[i]) OutputFallback[i - 1] = original[i];
+                }
             // Writes below use the resulting Win32 standard handles directly:
             // Unicode console output, or unchanged UTF-8 file/pipe bytes.
             // No console mode/code page/window or caller process is changed.
@@ -240,7 +281,8 @@ namespace core::runtime::Log
 #ifdef _WIN32
             // Query inherited handles at each write, including GUI builds
             // whose CRT streams are not connected to the parent handles.
-            const HANDLE handle = GetStdHandle(error ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
+            const HANDLE fallback = OutputFallback[error ? 1 : 0];
+            const HANDLE handle = fallback ? fallback : GetStdHandle(error ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
             DWORD mode = 0;
             const bool console = handle && handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode);
             WriteHandle(handle, console, prefix);
@@ -281,6 +323,29 @@ namespace core::runtime::Log
             {
 #ifdef _WIN32
                 PrepareStandardStreams();
+                if (!StandardStreamsReady)
+                {
+                    // Do not run a game with a changed stdin/redirection or an
+                    // unprotected console attachment. Logging retains any
+                    // original valid output whose OS restoration failed.
+                    if (!StandardStreamsReported)
+                    {
+                        StandardStreamsReported = true;
+                        constexpr const char* operations[] = {
+                            "restore stdin", "restore stdout", "restore stderr", "install console control handler",
+                            "enable Ctrl+C delivery"};
+                        for (std::size_t i = 0; i < 5; ++i)
+                            if (StandardStreamErrors[i])
+                            {
+                                char message[160];
+                                std::snprintf(message, sizeof(message),
+                                    "Cannot %s (Windows error %lu); startup aborted", operations[i],
+                                    static_cast<unsigned long>(StandardStreamErrors[i]));
+                                WriteLocked("ERROR", message, true, false);
+                            }
+                    }
+                    return false;
+                }
 #endif
                 Initialized = true;
                 WriteLocked("INFO ", "Log runtime initialized", false, false);
@@ -305,6 +370,15 @@ namespace core::runtime::Log
 #endif
         }
         catch (...) {}
+    }
+
+    bool TerminationRequested() noexcept
+    {
+#ifdef _WIN32
+        return TerminationPending.load(std::memory_order_relaxed);
+#else
+        return false;
+#endif
     }
 
     void Debug(std::string_view message) noexcept { Write("DEBUG", message, false, false); }
