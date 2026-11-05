@@ -252,6 +252,9 @@ fs::path ProjectPath(const fs::path& base,std::string_view relative,std::string_
     }
     return result;
 }
+using FileIdentity=std::array<std::uint64_t,3>;
+struct DiskEntry { NodeInfo info; std::optional<FileIdentity> identity; };
+#if !defined(_WIN32) || !defined(_MSC_VER)
 NodeInfo DiskInfo(const fs::path& disk,const fs::file_status& status,std::string_view path) {
     if(fs::is_directory(status)) return {NodeType::Directory};
     if(!fs::exists(status)) return {};
@@ -262,7 +265,6 @@ NodeInfo DiskInfo(const fs::path& disk,const fs::file_status& status,std::string
     const auto modified=fs::last_write_time(disk,ec); Check(ec,"timestamp",path);
     return {NodeType::File,size,static_cast<std::uint64_t>(modified.time_since_epoch().count())};
 }
-using FileIdentity=std::array<std::uint64_t,3>;
 FileIdentity Identity(const fs::path& disk,std::string_view path) {
 #ifdef _WIN32
     const auto handle=CreateFileW(disk.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
@@ -280,6 +282,46 @@ FileIdentity Identity(const fs::path& disk,std::string_view path) {
     VFS_PROFILE_ADD(IdentityQueries,1);
     struct stat info{}; if(lstat(disk.c_str(),&info)) Fail(IoErrorCode(LastError()),"inspect file identity",path);
     return {static_cast<std::uint64_t>(info.st_dev),static_cast<std::uint64_t>(info.st_ino),0};
+#endif
+}
+#endif
+DiskEntry InspectDisk(const fs::path& disk,std::string_view path) {
+#if defined(_WIN32) && defined(_MSC_VER)
+    // Query live metadata and identity through one handle. Directory enumeration
+    // metadata is allowed to be stale and is never an authorization substitute.
+    const auto handle=CreateFileW(disk.c_str(),FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    if(handle==INVALID_HANDLE_VALUE) {
+        const auto error=GetLastError();
+        if(error==ERROR_FILE_NOT_FOUND||error==ERROR_PATH_NOT_FOUND||error==ERROR_DIRECTORY) return {};
+        Fail(IoErrorCode({static_cast<int>(error),std::system_category()}),"inspect",path);
+    }
+    struct Close { HANDLE value; ~Close() { CloseHandle(value); } } close{handle};
+    BY_HANDLE_FILE_INFORMATION info{};
+    VFS_PROFILE_ADD(AttributeQueries,1);
+    if(!GetFileInformationByHandle(handle,&info)) Fail(IoErrorCode(LastError()),"inspect",path);
+    if(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)
+        throw AccessError("redirected filesystem path refused at '"+std::string(path)+"'");
+    if(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) return {{NodeType::Directory},{}};
+    if(GetFileType(handle)!=FILE_TYPE_DISK)
+        throw ConflictError("non-regular filesystem entry at '"+std::string(path)+"'");
+    FILE_ID_INFO id{};
+    VFS_PROFILE_ADD(IdentityQueries,1);
+    if(!GetFileInformationByHandleEx(handle,FileIdInfo,&id,sizeof(id)))
+        Fail(IoErrorCode(LastError()),"inspect file identity",path);
+    FileIdentity identity{id.VolumeSerialNumber,0,0};
+    std::memcpy(&identity[1],id.FileId.Identifier,16);
+    // MSVC filesystem::file_time_type uses Windows FILETIME's epoch and ticks.
+    // Keep the existing Stat.modified value rather than converting to Unix time.
+    static_assert(std::ratio_equal_v<fs::file_time_type::period,std::ratio<1,10000000>>);
+    const auto modified=(std::uint64_t(info.ftLastWriteTime.dwHighDateTime)<<32)|info.ftLastWriteTime.dwLowDateTime;
+    const auto size=(std::uint64_t(info.nFileSizeHigh)<<32)|info.nFileSizeLow;
+    return {{NodeType::File,size,modified},identity};
+#else
+    const auto status=Status(disk,path);
+    const auto info=DiskInfo(disk,status,path);
+    return {info,info.type==NodeType::File?std::optional<FileIdentity>(Identity(disk,path)):std::nullopt};
 #endif
 }
 struct StreamCloser { void operator()(SDL_IOStream* value) const { if(value) SDL_CloseIO(value); } };
@@ -421,13 +463,13 @@ struct FileSystem::Impl {
         std::vector<std::pair<fs::path,std::string>> pending{{disk,path}};
         while(!pending.empty()) {
             auto [current,name]=std::move(pending.back()); pending.pop_back();
-            const auto status=Status(current,name);
-            if(!fs::exists(status)) continue;
-            const auto info=DiskInfo(current,status,name);
+            const auto entry=InspectDisk(current,name);
+            const auto info=entry.info;
+            if(info.type==NodeType::Missing) continue;
             Node node{info,nullptr,&d,current,{}};
             if(info.type==NodeType::File) {
                 VFS_PROFILE_ADD(FilesVisited,1);
-                node.identity=Identity(current,name);
+                node.identity=entry.identity;
             }
             view.Insert(name,std::move(node));
             if(info.type!=NodeType::Directory) continue;
