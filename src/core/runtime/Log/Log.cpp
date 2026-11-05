@@ -48,8 +48,13 @@ namespace core::runtime::Log
         bool StandardStreamsChecked = false;
         bool StandardStreamsReady = true;
         bool StandardStreamsReported = false;
-        DWORD StandardStreamErrors[5]{}; // stdin, stdout, stderr, handler, Ctrl+C
-        HANDLE OutputFallback[2]{}; // Borrowed original routes after a failed restore.
+        DWORD StandardStreamErrors[10]{}; // Restore, control setup, open, repair, verify.
+        HANDLE OutputFallback[2]{}; // Original routes or repaired console after a failed SetStdHandle.
+        // At most one handle opened by us, shared by missing output streams.
+        // Its lifetime is the process, not Init/Shutdown: late native diagnostics
+        // and reInit still use it. The OS reclaims it at process exit. Do not
+        // close it per stream or close any borrowed standard handle.
+        HANDLE OwnedConsoleOutput = nullptr;
         std::atomic<bool> TerminationPending{false};
         static_assert(std::atomic<bool>::is_always_lock_free);
 
@@ -123,6 +128,53 @@ namespace core::runtime::Log
                     StandardStreamErrors[i] = error ? error : ERROR_GEN_FAILURE;
                     if (i && valid[i]) OutputFallback[i - 1] = original[i];
                 }
+
+            // STARTF_USESTDHANDLES can leave a non-NULL invalid handle intact
+            // even after a successful Attach. Only repair originally invalid
+            // outputs; a valid inherited file/pipe/NUL must never be replaced.
+            bool repair[2]{};
+            for (std::size_t i = 0; i < 2; ++i)
+                repair[i] = !valid[i + 1] && !ValidHandle(GetStdHandle(ids[i + 1]));
+            if (repair[0] || repair[1])
+            {
+                OwnedConsoleOutput = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+                if (!OwnedConsoleOutput || OwnedConsoleOutput == INVALID_HANDLE_VALUE)
+                {
+                    StandardStreamsReady = false;
+                    const DWORD error = GetLastError();
+                    StandardStreamErrors[5] = error ? error : ERROR_GEN_FAILURE;
+                    OwnedConsoleOutput = nullptr;
+                }
+                else
+                {
+                    for (std::size_t i = 0; i < 2; ++i)
+                        if (repair[i] && !SetStdHandle(ids[i + 1], OwnedConsoleOutput))
+                        {
+                            StandardStreamsReady = false;
+                            const DWORD error = GetLastError();
+                            StandardStreamErrors[6 + i] = error ? error : ERROR_GEN_FAILURE;
+                            OutputFallback[i] = OwnedConsoleOutput;
+                        }
+                }
+            }
+            for (std::size_t i = 0; i < 2; ++i)
+            {
+                SetLastError(ERROR_INVALID_HANDLE);
+                if (ValidHandle(GetStdHandle(ids[i + 1]))) continue;
+                const DWORD error = GetLastError();
+                StandardStreamsReady = false;
+                // Keep the causal open/restore/repair error rather than also
+                // reporting its expected invalid final slot a second time.
+                if (!StandardStreamErrors[i + 1] && !StandardStreamErrors[6 + i] &&
+                    !(repair[i] && StandardStreamErrors[5]))
+                    StandardStreamErrors[8 + i] = error ? error : ERROR_INVALID_HANDLE;
+                if (!OutputFallback[i])
+                {
+                    const HANDLE fallback = valid[i + 1] ? original[i + 1] : OwnedConsoleOutput;
+                    if (ValidHandle(fallback)) OutputFallback[i] = fallback;
+                }
+            }
             // Writes below use the resulting Win32 standard handles directly:
             // Unicode console output, or unchanged UTF-8 file/pipe bytes.
             // No console mode/code page/window or caller process is changed.
@@ -333,8 +385,9 @@ namespace core::runtime::Log
                         StandardStreamsReported = true;
                         constexpr const char* operations[] = {
                             "restore stdin", "restore stdout", "restore stderr", "install console control handler",
-                            "enable Ctrl+C delivery"};
-                        for (std::size_t i = 0; i < 5; ++i)
+                            "enable Ctrl+C delivery", "open parent console output",
+                            "repair stdout", "repair stderr", "validate stdout", "validate stderr"};
+                        for (std::size_t i = 0; i < std::size(StandardStreamErrors); ++i)
                             if (StandardStreamErrors[i])
                             {
                                 char message[160];
@@ -356,8 +409,9 @@ namespace core::runtime::Log
     }
     void Shutdown() noexcept
     {
-        // Windows writes above are synchronous and own no handles. In
-        // particular, FlushFileBuffers could block on an inherited pipe.
+        // Windows writes above are synchronous. The optional owned CONOUT$
+        // handle remains live for reInit/late logs until process exit; all other
+        // handles are borrowed. FlushFileBuffers could block on a parent pipe.
         try
         {
             std::lock_guard lock(WriteMutex);
