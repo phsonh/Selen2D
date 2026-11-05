@@ -56,6 +56,10 @@ std::unique_ptr<lua_bind::modules::Graphic::Context> graphicBindings;
 std::shared_ptr<const core::modules::File::FileSystem> files;
 
 void Report(const char* context,const std::string& error) { Log::Error(std::string(context)+": "+error); }
+void ReportLua(const char* context,const std::string& error) noexcept {
+    try { Log::LuaError(std::string(context)+": "+error); }
+    catch(...) { Log::LuaError(error); } // Preserve the original diagnostic if context allocation fails.
+}
 void RegisterBindings() {
     auto* L=Lua::GetState();
     lua_bind::runtime::Register(L,clock,quitRequested,startupArguments);
@@ -83,7 +87,7 @@ bool Exit() {
     if(objects) objects->BeginShutdown();
     std::string error;
     exitSucceeded=Lua::CallExitFunction(error);
-    if(!exitSucceeded) Report("Lua exit callback failed",error);
+    if(!exitSucceeded) ReportLua("Lua exit callback failed",error);
     return exitSucceeded;
 }
 bool Pump() {
@@ -122,7 +126,7 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         {
             VFS_PROFILE_SCOPE(Entry);
             if(!entry.empty() && !Lua::DoFile(entry,*files,error)) {
-                Report("Failed to execute entry script",error); return false;
+                ReportLua("Failed to execute entry script",error); return false;
             }
         }
         if(!quitRequested) {
@@ -177,7 +181,7 @@ bool Run(std::uint64_t frameLimit) {
             Graphic::Render::profile::Timer recordTimer(Graphic::Render::profile::Phase::Record);
 #endif
             if(!Lua::CallFrameFunction(error)) {
-                Report("Lua frame callback failed",error); succeeded=false;
+                ReportLua("Lua frame callback failed",error); succeeded=false;
                 renderer.AbortFrame(); recording=false;
                 Graphic::ApplyPendingPresentation(); break;
             }
@@ -220,7 +224,7 @@ bool Shutdown() {
         objects->BeginShutdown();
         std::string error;
         if(!objects->FinalizeShutdown(error)) {
-            Report("Object shutdown callbacks failed",error);
+            ReportLua("Object shutdown callbacks failed",error);
             exitSucceeded=false;
         }
     }

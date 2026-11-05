@@ -34,27 +34,20 @@ Native::DialogType Type(lua_State* L, int index) {
 
 int Log(lua_State* L) {
     Count(L, 1, 1);
-    core::runtime::Log::Info(CheckString(L, 1));
+    core::runtime::Log::LuaInfo(CheckString(L, 1));
     return 0;
 }
 
 int Warn(lua_State* L) {
     Count(L, 1, 1);
-    core::runtime::Log::Warn(CheckString(L, 1));
+    core::runtime::Log::LuaWarn(CheckString(L, 1));
     return 0;
 }
 
-int SetConsoleVisible(lua_State* L) {
-    Count(L, 1, 1);
-    if (lua_type(L, 1) != LUA_TBOOLEAN)
-        throw std::invalid_argument("Debug.SetConsoleVisible requires a boolean");
-    Native::SetConsoleVisible(lua_toboolean(L, 1) != 0);
-    return 0;
-}
-
-int IsConsoleVisible(lua_State* L) {
+int GetLog(lua_State* L) {
     Count(L, 0, 0);
-    lua_pushboolean(L, Native::IsConsoleVisible());
+    const auto text = core::runtime::Log::GetLuaText();
+    lua_pushlstring(L, text.data(), text.size());
     return 1;
 }
 
@@ -62,7 +55,7 @@ int RecordError(lua_State* L) {
     Count(L, 1, 1);
     const auto message = CheckString(L, 1);
     // A logging failure cannot replace or suppress the requested Lua error.
-    try { core::runtime::Log::Error(message); } catch (...) {}
+    core::runtime::Log::LuaError(message);
     return 0;
 }
 
@@ -144,7 +137,7 @@ void Register(lua_State* L) {
     const luaL_Reg functions[] = {
         {"Log", Guard<Log>}, {"Warn", Guard<Warn>}, {"Error", Error},
         {"MessageBox", Guard<MessageBox>}, {"ButtonBox", Guard<ButtonBox>},
-        {"SetConsoleVisible", Guard<SetConsoleVisible>}, {"IsConsoleVisible", Guard<IsConsoleVisible>},
+        {"GetLog", Guard<GetLog>},
         {nullptr, nullptr}
     };
     luaL_openlib(L, "Debug", functions, 0);

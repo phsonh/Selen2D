@@ -173,7 +173,7 @@ Windows source builds require **MSVC (Visual Studio C++ tools)**, the **Windows 
 .\tools\build.ps1 -Configuration Release
 ```
 
-For debugging, `Debug.SetConsoleVisible(true)` opens the engine's diagnostic console; `Debug.SetConsoleVisible(false)` hides it. The console starts hidden, and `engine.log` is written next to the executable.
+Diagnostics use stdout (Info/Debug) and stderr (Warn/Error/Fatal). No console window or log file is created automatically. `Debug.GetLog()` returns a bounded snapshot of Lua logs and reported Lua errors; use the authorized File API to save it if desired.
 
 Documentation: [Getting started](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shaders](doc/guide/shader.md) · [Resources and startup configuration](doc/guide/file-launch.md) · [Lua API](doc/api/).
 
@@ -334,7 +334,7 @@ Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows
 .\tools\build.ps1 -Configuration Release
 ```
 
-Windows 调试控制台默认隐藏。需要时可在 Lua 中调用 `Debug.SetConsoleVisible(true)` 显示，用 `Debug.SetConsoleVisible(false)` 隐藏；日志仍写入 EXE 同目录的 `engine.log`。
+诊断日志输出到 stdout（Info/Debug）及 stderr（Warn/Error/Fatal），不自动创建控制台或日志文件。`Debug.GetLog()` 返回有界的 Lua 日志及 Lua 错误快照，需要保存时通过已授权的 File API 写入。
 
 详细资料：[入门指南](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [文件与启动配置](doc/guide/file-launch.md) · [Lua API](doc/api/)。
 
@@ -495,7 +495,7 @@ Windows でソースをビルドするには、**Visual Studio C++ ツール（M
 .\tools\build.ps1 -Configuration Release
 ```
 
-Windows のデバッグコンソールは起動時に非表示です。Lua から `Debug.SetConsoleVisible(true)` で表示し、`Debug.SetConsoleVisible(false)` で隠せます。`engine.log` は EXE と同じディレクトリに保存されます。
+診断ログは stdout（Info/Debug）と stderr（Warn/Error/Fatal）へ出力します。コンソールやログファイルを自動作成しません。`Debug.GetLog()` は容量制限付きの Lua ログと Lua エラーのスナップショットを返します。必要に応じて、許可された File API で保存してください。
 
 資料：[入門ガイド](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [ファイルと起動設定](doc/guide/file-launch.md) · [Lua API](doc/api/)。
 

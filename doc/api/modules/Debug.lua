@@ -7,11 +7,11 @@
 ---@class DebugModule
 Debug = {}
 
----同步记录 Info 日志，无返回值。EXE 同目录 engine.log 在启动时覆盖；不请求退出。
+---同步记录 Info 日志到 stdout 和本次运行的 Lua 日志缓存；不自动写文件、不请求退出。
 ---@param message string 允许包含 NUL 的 Lua 字符串。
 function Debug.Log(message) end
 
----同步记录 Warn 日志，无返回值；不请求退出或自动弹窗。
+---同步记录 Warn 日志到 stderr 和 Lua 日志缓存，无返回值；不请求退出或自动弹窗。
 ---@param message string
 function Debug.Warn(message) end
 
@@ -21,18 +21,15 @@ function Debug.Warn(message) end
 ---@param message string
 function Debug.Error(message) end
 
----Windows 显示或隐藏引擎独立调试控制台；正常 GUI 子系统启动时默认不存在控制台，不闪黑框。
----true 在必要时创建，false 不创建；重复调用安全，无返回值。只操作引擎创建的窗口。
----不附着调用者终端，不重绑定 stdin/stdout/stderr；重定向与 engine.log 继续有效。
----必须在 SDL 主线程。非布尔参数、创建失败或已附着外部控制台时抛错，不操作外部窗口。
----非 Windows：false 安全空操作，true 抛“不支持”错误；日志 API 仍正常工作。
----@param visible boolean
-function Debug.SetConsoleVisible(visible) end
-
----查询引擎自己创建的控制台窗口当前是否可见，不表示调用者的终端是否存在。
----不接受参数；必须在 SDL 主线程。尚未创建、已隐藏及非 Windows 均为 false。
----@return boolean visible
-function Debug.IsConsoleVisible() end
+---获取本次进程运行的 Lua 日志快照，不接受参数；多次获取不清空、不写文件。
+---包含 Debug.Log/Warn/Error 及宿主报告的 Lua 入口、帧、退出回调错误；不包含普通原生初始化和关闭日志。
+---保留时间戳、级别和原始正文（包括 NUL）；有效 UTF-8 输入保持 UTF-8，不隐式 tostring。
+---最多保留 1 MiB 格式化正文和 8192 条记录，超限淘汰最旧记录并在快照开头标明截断。
+---单条超大日志保留头部和可容纳的正文尾部，标明截断；标准输出仍输出原消息。
+---返回调用时已产生的记录。崩溃、强制终止、退出回调注册前失败不保证有机会由 Lua 保存。
+---返回的字符串另占内存。可通过现有 File API 保存到已授权目录；不会扩大 VFS 权限。
+---@return string text
+function Debug.GetLog() end
 
 ---显示独立系统消息框，唯一按钮为“确定”；阻塞到用户选择/关闭，不在 Canvas 内绘制。
 ---正文/标题为 UTF-8 字符串，不得含 NUL。类型只影响图标，不请求退出。

@@ -1,26 +1,52 @@
-# 调试控制台与 Windows 启动
+# 日志与 Windows 启动诊断
 
-Windows 引擎使用 GUI 子系统及 Unicode 入口。正常从资源管理器或终端启动时，不由系统先创建黑色控制台再隐藏；游戏窗口和正常启动流程不依赖控制台。
+引擎使用 Windows GUI 子系统，不自动创建或附着控制台。Info/Debug 实时输出到 stdout，Warn/Error/Fatal 实时输出到 stderr，包含启动验证、Lua 运行及 Lua VM 卸载后的原生清理日志。Windows 调试器仍可接收诊断镜像。引擎不创建、覆盖或写入 engine.log，已有同名文件保持原样。
 
-```lua
-assert(not Debug.IsConsoleVisible())
-Debug.Log("正常启动，控制台默认隐藏")
-Debug.SetConsoleVisible(true)
-Debug.Warn("现在显示引擎自己的控制台")
-Debug.SetConsoleVisible(false)
-Debug.Log("隐藏后仍然写日志")
+引擎使用宿主传入的有效标准句柄，不改变调用者的窗口、句柄或编码设置。文件和管道接收 UTF-8 字节；可用的 Windows 控制台句柄接收 Unicode。没有接收方时不会创建窗口或弹出阻塞错误框。直接双击启动若失败，请用能够捕获标准流的宿主重新运行，或连接调试器。
+
+GUI 程序在某些 shell 中不会自动等待退出。自动化应等待进程并检查退出码，例如 CMD 的 `start /wait`，PowerShell 的 `Start-Process -Wait -PassThru` 配合 `-RedirectStandardOutput` / `-RedirectStandardError`，或 Python `subprocess.run(..., capture_output=True)`。仅有终端窗口不等于宿主一定向 GUI 子进程提供了可用输出句柄；可显式使用管道或文件重定向。
+
+本机 VS Code / ConPTY 直接以 GUI EXE 为任务进程时未提供可用的终端输出；通过 PowerShell 管道可以可靠接收完整生命周期日志。可使用以下任务配置（只在任务宿主合并显示两路输出，引擎内部仍分别写 stdout/stderr）：
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [{
+    "label": "Run Selen2D",
+    "type": "process",
+    "command": "powershell.exe",
+    "args": ["-NoProfile", "-Command",
+      "& $env:SELEN2D_RUN_EXE 2>&1 | Out-Host; exit $LASTEXITCODE"],
+    "options": {"env": {"SELEN2D_RUN_EXE": "${workspaceFolder}/Selen2D.exe"}},
+    "problemMatcher": []
+  }]
+}
 ```
 
-这两个函数只管理引擎自己的诊断窗口。第一次 `true` 使用 Windows `AllocConsole` 创建它；`false` 隐藏并保留窗口及缓冲区，重复调用安全。`IsConsoleVisible()` 查询实际窗口可见状态，而不是上次设置的布尔值。诊断控制台的关闭按钮不可用，避免 Windows 直接终止进程、绕过 `Runtime` 退出清理；游戏可以用上述 API 隐藏窗口。
+CMD 可使用 `start /wait "" Selen2D.exe 1>stdout.txt 2>stderr.txt` 捕获分流；PowerShell 直接查看时可使用 `& .\Selen2D.exe 2>&1 | Out-Host`。这些显式重定向文件由宿主创建，不是引擎自动保存。
 
-引擎不会 `AttachConsole` 到 PowerShell、CMD 或 Windows Terminal，也不会隐藏、关闭用户终端。创建控制台时保留原有 Win32 标准句柄，不对 CRT 文件描述符执行 `freopen` 或重绑定。日志通过独立的控制台输出句柄镜像，因此标准输出/错误的文件或管道重定向继续有效。若特殊原生宿主已经主动把进程附着到外部控制台，显示请求明确报错，而不擅自分离或改变外部终端。
+`Debug.Log(message)` 不请求退出；`Debug.Warn(message)` 不自动弹窗；`Debug.Error(message)` 记录后抛出原消息的 Lua 错误，仍可用 `pcall` 捕获。未捕获错误在宿主边界报告并正常清理，原有非零退出码不变。
 
-GUI 程序从某些命令行直接运行时，终端可能不等待它结束。自动化应使用可等待并取得退出码的进程 API，例如 PowerShell `Start-Process -Wait -PassThru`，或直接通过 `System.Diagnostics.Process` / Python `subprocess` 启动并捕获输出。构建脚本仍是独立的命令行程序，不改变 PowerShell 本身的窗口。
+`Debug.GetLog()` 无参数，返回当前进程中由 Lua 日志 API 以及宿主报告的 Lua 错误产生的快照。它不包括 SDL、D3D12、Audio 等普通初始化日志，也不包括 Lua VM 卸载后的原生日志。获取不清空记录、不访问磁盘、不改变日志级别。保留时间戳、级别及消息字节，包括 Lua 字符串中的 NUL。
 
-`Debug.Log`、`Debug.Warn`、`Debug.Error` 的既有行为不变；`Debug.Error` 仍先记日志再抛 Lua 错误。`engine.log` 统一写在 EXE 同目录，每次启动覆盖，不随进程工作目录变化；隐藏控制台不会关闭日志。日志初始化已提前到启动配置验证之前，入口或挂载错误也写入日志及重定向的 stderr。Windows 调试器还可接收 `OutputDebugString` 输出。普通启动、Lua 回调失败和退出清理失败的非零退出码继续有效。
+缓存最多保存 1 MiB 格式化日志正文及 8192 条记录；超限淘汰最旧记录，结果开头带截断提示。单条超大消息只保留头部及能容纳的正文尾部并标明截断。有效 UTF-8 不在截断点拆分字符。容量限制只影响内存快照，标准输出仍接收完整消息。获取结果和 Lua 返回字符串占用额外的调用者内存。
 
-日志文件不可写时会记录警告；若此时没有重定向标准错误或原生调试器，不能保证磁盘上保留诊断。部署与自动化环境应允许写入 EXE 所在目录，或显式捕获标准错误。引擎内部日志路径不授予 Lua 对任意原生目录的访问权限。
+游戏可以主动保存快照。以下目录必须已经处于项目的 VFS 可写授权内；引擎不会为日志增加授权：
 
-参数要求：`SetConsoleVisible` 恰好一个布尔值，`IsConsoleVisible` 没有参数，两者均在 SDL 主线程调用。其他平台暂不创建原生诊断窗口：查询返回 `false`，隐藏安全空操作，显示请求抛不支持错误；标准流和文件日志照常工作。本轮实际验收平台为 Windows x64。
+```lua
+Runtime.SetExitFunction(function()
+    local ok, err = File.CreateDirectory("playerdata/logs")
+    if not ok then Debug.Warn(err.message); return end
+    local file, openErr = File.Open("playerdata/logs/engine.log", "wb")
+    if not file then Debug.Warn(openErr.message); return end
+    local written, writeErr = file:Write(Debug.GetLog())
+    local closed, closeErr = file:Close()
+    if not written or not closed then Debug.Warn((writeErr or closeErr).message) end
+end)
+```
 
-实现依据：[Windows console creation](https://learn.microsoft.com/en-us/windows/console/creation-of-a-console)、[AllocConsole](https://learn.microsoft.com/en-us/windows/console/allocconsole)。GUI 子系统避免默认控制台，而独立输出句柄避免破坏重定向，两者职责不同。
+授权/参数错误仍按 File 契约抛错，正常 I/O 失败仍返回错误表。需要自行处理授权错误的游戏可使用 `pcall`。保存失败不会触发引擎自动保存或递归重试。
+
+快照只能包含获取时已经产生的消息。ExitFunction 自己随后抛出的错误、之后的清理日志不可能出现在先前的快照里。入口尚未注册退出函数就失败、崩溃、强制终止均不保证执行保存回调；不为此改变退出顺序。这些诊断仍写往可用的标准流及调试器。
+
+非 Windows 平台使用标准输出/错误流，Lua 缓存语义相同；平台运行验证范围以开发记录为准。

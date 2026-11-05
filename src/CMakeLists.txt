@@ -19,7 +19,7 @@ target_link_libraries(engine_text PUBLIC DependencyJsonHeaders)
 
 # Logging has no Engine Host dependency; standalone GPU services can report
 # failures without pulling engine_core (and creating a Renderer/Core cycle).
-add_library(engine_log STATIC core/runtime/Log/Log.cpp core/runtime/Log/Console.cpp)
+add_library(engine_log STATIC core/runtime/Log/Log.cpp)
 target_include_directories(engine_log PUBLIC .)
 
 add_library(engine_file STATIC core/modules/File/File.cpp core/modules/File/Vfs.cpp

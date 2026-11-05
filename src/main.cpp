@@ -1,12 +1,9 @@
 #include "engine/Engine.h"
 #include "engine/Startup.h"
 #include "core/modules/File/Profile.h"
-#include "BuildInfo.h"
-#include "core/runtime/Log/Console.h"
 #include "core/runtime/Log/Log.h"
 #include <SDL3/SDL.h>
 #include <charconv>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,21 +50,14 @@ int RunApplication(int argc, char* argv[]) {
     core::modules::File::profile::Initialize();
     struct ProfileLifetime { ~ProfileLifetime() { core::modules::File::profile::Flush(); } } profile;
     // engine_app is a GUI-subsystem executable on Windows: the OS never opens
-    // an initial console to hide later. This guard releases only our optional
-    // console, after Engine and the persistent logger finish their cleanup.
+    // an initial console to hide later. Diagnostics stay available until all
+    // engine cleanup has finished; they never open a persistent log file.
     struct DiagnosticsLifetime {
         ~DiagnosticsLifetime() {
             core::runtime::Log::Shutdown();
-            core::runtime::Console::Shutdown();
         }
     } diagnostics;
-    core::runtime::Console::SetTitle(engine::build::Title);
-    // Internal diagnostics are always adjacent to the EXE, independently of
-    // launch mappings and the process working directory. File's Lua VFS is not
-    // given access to this native path.
-    const auto* directory = SDL_GetBasePath();
-    const auto deployment = directory ? std::filesystem::u8path(directory) : std::filesystem::path{};
-    core::runtime::Log::Init(deployment.empty() ? std::filesystem::path("engine.log") : deployment / "engine.log");
+    core::runtime::Log::Init();
     engine::Startup::Config config;
     std::uint64_t frame_limit{};
     std::vector<std::string> arguments;
@@ -84,7 +74,10 @@ int RunApplication(int argc, char* argv[]) {
                 throw std::invalid_argument("--frames requires a positive integer");
             }
         }
+        // The deployment root is used only by startup/VFS, not by diagnostics.
+        const auto* directory = SDL_GetBasePath();
         if(!directory) throw std::runtime_error(std::string("Cannot locate executable directory: ")+SDL_GetError());
+        const auto deployment = std::filesystem::u8path(directory);
         config=engine::Startup::Load(deployment);
     } catch(const std::exception& error) {
         core::runtime::Log::Error(std::string("Startup error: ") + error.what());

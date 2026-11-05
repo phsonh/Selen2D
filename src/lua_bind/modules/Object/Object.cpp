@@ -124,7 +124,7 @@ struct Context::Impl final:Native::ObjectCallbacks {
         cleanupFailed=true;
         // Diagnostics must never prevent another queued object's reclamation.
         try { if(cleanupError.empty()) cleanupError=message; } catch(...) {}
-        try { core::runtime::Log::Error(std::string("Object shutdown deletion failed: ")+message); } catch(...) {}
+        try { core::runtime::Log::LuaError(std::string("Object shutdown deletion failed: ")+message); } catch(...) {}
     }
     void Finalize(lua_State* state) noexcept {
         if(finalized) return;
