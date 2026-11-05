@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <exception>
 #include <cstring>
 #include <map>
@@ -289,11 +290,26 @@ DiskEntry InspectDisk(const fs::path& disk,std::string_view path) {
 #if defined(_WIN32) && defined(_MSC_VER)
     // Query live metadata and identity through one handle. Directory enumeration
     // metadata is allowed to be stale and is never an authorization substitute.
-    const auto handle=CreateFileW(disk.c_str(),FILE_READ_ATTRIBUTES,
+    auto handle=CreateFileW(disk.c_str(),FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+        FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    auto error=handle==INVALID_HANDLE_VALUE?GetLastError():ERROR_SUCCESS;
+    bool directoryOnly=false;
+    if(handle==INVALID_HANDLE_VALUE&&error==ERROR_ACCESS_DENIED) {
+        // Win32 requires BACKUP_SEMANTICS to open directories. Do not apply it
+        // to regular files: an enabled SeBackupPrivilege could bypass the ACL
+        // that the original ordinary file identity open was required to obey.
+        VFS_PROFILE_ADD(AttributeQueries,1);
+        const auto attributes=GetFileAttributesW(disk.c_str());
+        if(attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&FILE_ATTRIBUTE_DIRECTORY)) {
+            directoryOnly=true;
+            handle=CreateFileW(disk.c_str(),FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+            if(handle==INVALID_HANDLE_VALUE) error=GetLastError();
+        }
+    }
     if(handle==INVALID_HANDLE_VALUE) {
-        const auto error=GetLastError();
         if(error==ERROR_FILE_NOT_FOUND||error==ERROR_PATH_NOT_FOUND||error==ERROR_DIRECTORY) return {};
         Fail(IoErrorCode({static_cast<int>(error),std::system_category()}),"inspect",path);
     }
@@ -304,6 +320,7 @@ DiskEntry InspectDisk(const fs::path& disk,std::string_view path) {
     if(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)
         throw AccessError("redirected filesystem path refused at '"+std::string(path)+"'");
     if(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) return {{NodeType::Directory},{}};
+    if(directoryOnly) throw ConflictError("directory type changed at '"+std::string(path)+"'");
     if(GetFileType(handle)!=FILE_TYPE_DISK)
         throw ConflictError("non-regular filesystem entry at '"+std::string(path)+"'");
     FILE_ID_INFO id{};
@@ -687,13 +704,19 @@ SDL_IOStream* FileSystem::Open(std::string_view path,const OpenMode& mode) const
 SDL_IOStream* FileSystem::OpenValidated(std::string_view path,const OpenMode& mode,bool codeSource) const {
     VFS_PROFILE_SCOPE(Open);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex);
-    for(unsigned attempt=0;attempt!=2;++attempt) {
+    std::optional<std::chrono::steady_clock::time_point> retryDeadline;
+    for(unsigned attempt=0;attempt!=8;++attempt) {
         const auto view=impl_->Scan();
         if(codeSource) impl_->CheckCode(view,p);
         try { return impl_->OpenInView(view,p,mode); }
         catch(const detail::NativeViewChanged&) {
             // A replaced leaf must be re-authorized, never truncated via the
-            // previous identity. Bound retries under a continuously mutating tree.
+            // previous identity. Allow a short burst of atomic replacements to
+            // settle. Always permit one revalidation, but do not perform eight
+            // expensive full scans of a large, continuously changing tree.
+            const auto now=std::chrono::steady_clock::now();
+            if(!retryDeadline) retryDeadline=now+std::chrono::milliseconds(25);
+            else if(now>=*retryDeadline) break;
         }
     }
     Fail("resource_busy","filesystem changed while opening",p);
