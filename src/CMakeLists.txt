@@ -153,6 +153,12 @@ add_library(engine_core STATIC
 target_include_directories(engine_core PUBLIC . PRIVATE "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(engine_core PUBLIC SDL3::SDL3-static LuaJIT::LuaJIT engine_object engine_input_state engine_file engine_lua_scripts engine_text engine_audio engine_image_provider engine_cpu_provider engine_shader_provider engine_renderer engine_graphic_values engine_clock engine_time engine_log)
 
+option(ENGINE_SPRITE_PROFILE "Enable internal sprite benchmark CSV instrumentation" OFF)
+if(ENGINE_SPRITE_PROFILE)
+    target_compile_definitions(engine_renderer PRIVATE ENGINE_SPRITE_PROFILE=1)
+    target_compile_definitions(engine_core PRIVATE ENGINE_SPRITE_PROFILE=1)
+endif()
+
 set(ENGINE_EXECUTABLE "${ENGINE_RUNTIME_NAME}${CMAKE_EXECUTABLE_SUFFIX}")
 configure_file(res/windows/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/engine-version.rc" @ONLY)
 set(ENGINE_ICON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/res/windows/selen2d-logo.ico")

@@ -19,6 +19,7 @@
 #include "core/modules/Math/Math.h"
 #include "core/modules/Graphic/Graphic.h"
 #include "core/modules/Graphic/render/Renderer.h"
+#include "core/modules/Graphic/render/Profile.h"
 #include "core/modules/Graphic/upload/Upload.h"
 #include "core/modules/Input/Input.h"
 #include "core/modules/Audio/Audio.h"
@@ -99,6 +100,9 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
     Log::Info(std::string(build::Title) + " | " + build::Developer + " | MIT License (third-party notices retained)");
     Log::Info("Engine initializing");
     try {
+#ifdef ENGINE_SPRITE_PROFILE
+        Graphic::Render::profile::Initialize();
+#endif
         if(!fileSystem) throw std::invalid_argument("Engine requires a mounted FileSystem");
         files=std::move(fileSystem);
         startupArguments=arguments;
@@ -155,18 +159,30 @@ bool Run(std::uint64_t frameLimit) {
             renderer.Canvases().PublishWindowMetrics(windowMetrics.logicalSize.width,windowMetrics.logicalSize.height);
             if(quitRequested) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             clock.BeginFrame(SDL_GetTicksNS(),Lua::HasFrameFunction());
+#ifdef ENGINE_SPRITE_PROFILE
+            Graphic::Render::profile::Begin(clock.FrameCount(),renderer.GetStats());
+#endif
             audio.SetRuntimeFrame(clock.FrameCount());
             std::string error;
+#ifdef ENGINE_SPRITE_PROFILE
+            Graphic::Render::profile::Timer recordTimer(Graphic::Render::profile::Phase::Record);
+#endif
             if(!Lua::CallFrameFunction(error)) {
                 Report("Lua frame callback failed",error); succeeded=false;
                 renderer.AbortFrame(); recording=false;
                 Graphic::ApplyPendingPresentation(); break;
             }
+#ifdef ENGINE_SPRITE_PROFILE
+            recordTimer.Stop();
+#endif
             renderer.EndFrame(); recording=false;
             Graphic::ApplyPendingPresentation();
             // Device startup, refill and reclamation run independently on the
             // audio service thread. Only report queued failures on this thread.
             audio.CheckErrors();
+#ifdef ENGINE_SPRITE_PROFILE
+            Graphic::Render::profile::Finish(renderer.GetStats());
+#endif
             ++hostFrames;
             if(frameLimit && hostFrames>=frameLimit) quitRequested=true;
         }
@@ -220,6 +236,10 @@ bool Shutdown() {
     core::modules::Input::Shutdown(); core::modules::Window::Shutdown();
     core::modules::Debug::Shutdown(); Event::Shutdown(); core::runtime::SDL::Shutdown();
     initialized=bindingsReady=false; started=false;
+#ifdef ENGINE_SPRITE_PROFILE
+    try { Graphic::Render::profile::Flush(); }
+    catch(const std::exception& error) { Report("Sprite profile output failed",error.what()); exitSucceeded=false; }
+#endif
     Log::Info("Engine shutdown complete"); Log::Shutdown();
     return exitSucceeded;
 }

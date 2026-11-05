@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "Profile.h"
 #include "ShaderCommands.h"
 #include "GlyphTextures.h"
 #include "core/modules/Graphic/readback/Readback.h"
@@ -152,6 +153,13 @@ struct Renderer::Impl {
             throw std::invalid_argument("Invalid Renderer frame limits");
         frames.resize(c.framesInFlight);
         for (auto& frame : frames) frame.commands.reserve(std::min<std::size_t>(c.maxCommands,256));
+#ifdef ENGINE_SPRITE_PROFILE
+        if(!profile::state.path.empty()) {
+            const char* adapter=SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device),SDL_PROP_GPU_DEVICE_NAME_STRING,"unknown");
+            const char* driver=SDL_GetGPUDeviceDriver(device);
+            core::runtime::Log::Info(std::string("Sprite profile GPU: adapter='")+adapter+"', driver='"+(driver?driver:"unknown")+"'");
+        }
+#endif
     }
     void CheckThread() const {
         if (thread != std::this_thread::get_id()) throw std::logic_error("Renderer access requires the render owner thread");
@@ -339,6 +347,9 @@ struct Renderer::Impl {
     }
     void Encode(Frame& frame,SDL_GPUCommandBuffer* command,SDL_GPUTexture* windowTexture,
         Encoding& state,Attachment* readSource=nullptr) {
+#ifdef ENGINE_SPRITE_PROFILE
+        profile::Timer encodeTimer(profile::Phase::Encode,true);
+#endif
         auto& initialized=state.initialized; auto& versions=state.versions;
         auto& windowInitialized=state.windowInitialized;
         if(glyphTextures) {
@@ -354,6 +365,9 @@ struct Renderer::Impl {
             if(distance) v.distance=v.color;
         };
         if(!frame.vertices.empty()) {
+#ifdef ENGINE_SPRITE_PROFILE
+            profile::Timer uploadTimer(profile::Phase::Upload);
+#endif
             auto* copy=SDL_BeginGPUCopyPass(command);
             if(!copy) throw std::runtime_error(std::string("Image vertex copy pass failed: ")+SDL_GetError());
             SDL_GPUTransferBufferLocation source{frame.transfer,0};
@@ -479,7 +493,33 @@ struct Renderer::Impl {
     void ClearCommands(Frame& frame) {
         frame.commands.clear();frame.recordedVertices.clear();frame.vertices.clear();frame.shaderBytes=0;frame.glyphUploads.clear();
     }
+#ifdef ENGINE_SPRITE_PROFILE
+    void ProfileMemory(const Frame& frame) const {
+        if(!profile::state.active) return;
+        auto& sample=profile::state.current;
+        sample.commandSize=sizeof(Command);sample.vertexSize=sizeof(detail::Vertex);
+        sample.commandCount=frame.commands.size();
+        sample.currentCommandBytes=frame.commands.size()*sizeof(Command);
+        sample.currentGeometryBytes=(frame.recordedVertices.size()+frame.vertices.size())*sizeof(detail::Vertex);
+        sample.currentCommandCapacityBytes=frame.commands.capacity()*sizeof(Command);
+        sample.currentGeometryCapacityBytes=(frame.recordedVertices.capacity()+frame.vertices.capacity())*sizeof(detail::Vertex);
+        sample.currentTransferCapacityBytes=frame.transfer ? frame.bufferBytes : 0;
+        sample.currentGpuCapacityBytes=frame.vertexBuffer ? frame.bufferBytes : 0;
+        sample.retainedCommandCapacityBytes=sample.retainedGeometryCapacityBytes=0;
+        sample.retainedTransferCapacityBytes=sample.retainedGpuCapacityBytes=0;
+        for(const auto& slot:frames) {
+            sample.retainedCommandCapacityBytes+=slot.commands.capacity()*sizeof(Command);
+            sample.retainedGeometryCapacityBytes+=(slot.recordedVertices.capacity()+slot.vertices.capacity())*sizeof(detail::Vertex);
+            if(slot.transfer) sample.retainedTransferCapacityBytes+=slot.bufferBytes;
+            if(slot.vertexBuffer) sample.retainedGpuCapacityBytes+=slot.bufferBytes;
+        }
+        sample.ribbonScratchCapacityBytes=ribbonVertices.capacity()*sizeof(detail::Vertex);
+    }
+#endif
     void Prepare(Frame& frame) {
+#ifdef ENGINE_SPRITE_PROFILE
+        profile::Timer prepareTimer(profile::Phase::Prepare,true);
+#endif
         // All CPU sorting/allocation and lazy pipeline creation happens before CB
         // acquisition. Order is (Layer,original sequence), never texture order.
         for(auto first=frame.commands.begin();first!=frame.commands.end();) {
@@ -536,6 +576,9 @@ struct Renderer::Impl {
             if(frame.transfer) SDL_ReleaseGPUTransferBuffer(device,frame.transfer);
             frame.vertexBuffer=buffer; frame.transfer=transfer; frame.bufferBytes=capacity; ++stats.bufferAllocations;
         }
+#ifdef ENGINE_SPRITE_PROFILE
+        profile::Timer uploadTimer(profile::Phase::Upload);
+#endif
         auto* destination=SDL_MapGPUTransferBuffer(device,frame.transfer,false);
         if(!destination) throw std::runtime_error(std::string("Image vertex transfer map failed: ")+SDL_GetError());
         std::memcpy(destination,frame.vertices.data(),bytes);
@@ -545,6 +588,9 @@ struct Renderer::Impl {
 Renderer::Renderer(SDL_GPUDevice* d, SDL_Window* w, Config c) : impl(std::make_unique<Impl>(d,w,c)) {}
 Renderer::~Renderer() { Shutdown(); }
 void Renderer::Impl::AcquirePresentation(Frame& frame) {
+#ifdef ENGINE_SPRITE_PROFILE
+    profile::Timer acquireTimer(profile::Phase::Acquire);
+#endif
     if(frame.acquired || !window) return;
     // Some SDL GPU drivers return the retained backbuffer even when minimized.
     // Freeze this frame as offscreen-only instead of treating it as presentable.
@@ -863,10 +909,19 @@ void Renderer::AbortFrame() {
 void Renderer::EndFrame() {
     auto& frame=impl->Recording();
     impl->Prepare(frame);
+#ifdef ENGINE_SPRITE_PROFILE
+    impl->ProfileMemory(frame);
+#endif
     auto state=impl->EncodingState(frame);
     impl->AcquirePresentation(frame);
+#ifdef ENGINE_SPRITE_PROFILE
+    profile::Timer acquireTimer(profile::Phase::Acquire);
+#endif
     auto* command=std::exchange(frame.presentCommand,nullptr);
     if(!command) command=SDL_AcquireGPUCommandBuffer(impl->device);
+#ifdef ENGINE_SPRITE_PROFILE
+    acquireTimer.Stop();
+#endif
     if(!command) throw std::runtime_error(std::string("Renderer command buffer failed: ")+SDL_GetError());
     try {
         impl->Encode(frame,command,frame.mirrored ? frame.mirror:frame.swapchain,state);
@@ -874,7 +929,13 @@ void Renderer::EndFrame() {
         frame.windowInitialized=state.windowInitialized;
         if(frame.mirrored) impl->BlitPresentation(frame,command);
         auto* submitted=std::exchange(command,nullptr);
+#ifdef ENGINE_SPRITE_PROFILE
+        profile::Timer submitTimer(profile::Phase::Submit);
+#endif
         frame.fence=SDL_SubmitGPUCommandBufferAndAcquireFence(submitted);
+#ifdef ENGINE_SPRITE_PROFILE
+        submitTimer.Stop();
+#endif
         if(!frame.fence) throw std::runtime_error(std::string("Renderer submission failed: ")+SDL_GetError());
         impl->CommitEncoding(frame,submitted,state);
         frame.submitted=Clock::now();++impl->stats.submittedFrames;++impl->stats.inFlight;
@@ -914,12 +975,24 @@ std::optional<std::string> Renderer::GetCanvasPNG(Canvas::Handle handle) {
         impl->captureSource=source;
         impl->Prepare(frame);
         auto state=impl->EncodingState(frame,source.get());
+#ifdef ENGINE_SPRITE_PROFILE
+        profile::Timer acquireTimer(profile::Phase::Acquire);
+#endif
         command=SDL_AcquireGPUCommandBuffer(impl->device);
+#ifdef ENGINE_SPRITE_PROFILE
+        acquireTimer.Stop();
+#endif
         if(!command) throw std::runtime_error(std::string("Readback command buffer failed: ")+SDL_GetError());
         impl->Encode(frame,command,frame.mirrored ? frame.mirror:nullptr,state,source.get());
         impl->capture->Encode(command,source->info.window ? frame.mirror:source->texture);
         auto* encoded=std::exchange(command,nullptr);submitted=true;
+#ifdef ENGINE_SPRITE_PROFILE
+        profile::Timer submitTimer(profile::Phase::Submit);
+#endif
         impl->captureFence=SDL_SubmitGPUCommandBufferAndAcquireFence(encoded);
+#ifdef ENGINE_SPRITE_PROFILE
+        submitTimer.Stop();
+#endif
         if(!impl->captureFence) throw std::runtime_error(std::string("Readback submission failed: ")+SDL_GetError());
         impl->CommitEncoding(frame,encoded,state);++impl->stats.readbackSubmissions;
         const auto deadline=Clock::now()+std::chrono::milliseconds(impl->config.fenceTimeoutMs);
