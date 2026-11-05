@@ -1,5 +1,6 @@
 #include "engine/Engine.h"
 #include "engine/Startup.h"
+#include "core/modules/File/Profile.h"
 #include "BuildInfo.h"
 #include "core/runtime/Log/Console.h"
 #include "core/runtime/Log/Log.h"
@@ -49,6 +50,8 @@ std::vector<std::string> Arguments(int argc,char* argv[]) {
 }
 
 int RunApplication(int argc, char* argv[]) {
+    core::modules::File::profile::Initialize();
+    struct ProfileLifetime { ~ProfileLifetime() { core::modules::File::profile::Flush(); } } profile;
     // engine_app is a GUI-subsystem executable on Windows: the OS never opens
     // an initial console to hide later. This guard releases only our optional
     // console, after Engine and the persistent logger finish their cleanup.

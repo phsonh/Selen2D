@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "core/modules/File/Profile.h"
 #include "ResourceHost.h"
 #include "BuildInfo.h"
 #include <algorithm>
@@ -93,6 +94,7 @@ bool Pump() {
 }
 bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::FileSystem> fileSystem,
     const std::vector<std::string>& arguments) {
+    VFS_PROFILE_SCOPE(EngineInit);
     if(started) { Log::Error("Engine must be shut down before reinitialization"); return false; }
     started=true; initialized=bindingsReady=ran=quitRequested=exitCalled=false; exitSucceeded=true;
     clock.Reset(SDL_GetTicksNS());
@@ -108,18 +110,25 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         startupArguments=arguments;
         if(!core::runtime::SDL::Init() || !Event::Init() || !Lua::Init() ||
            !core::modules::Debug::Init() || !core::modules::Window::Init(1280,960) ||
-           !core::modules::Input::Init() || !Graphic::Init() || !core::modules::Math::Init())
+           !core::modules::Input::Init() || !([] { VFS_PROFILE_SCOPE(GpuInit); return Graphic::Init(); })() || !core::modules::Math::Init())
             throw std::runtime_error("native service initialization failed");
         audio.SetFileSystem(files);
-        audio.Initialize();
+        { VFS_PROFILE_SCOPE(AudioInit); audio.Initialize(); }
         resources=std::make_unique<ResourceHost>(Graphic::Uploads(),files,&audio,&Graphic::Shaders());
         RegisterBindings();
         bindingsReady=true; // Entry errors must still run an already registered ExitFunction.
         std::string error;
-        if(!entry.empty() && !Lua::DoFile(entry,*files,error)) {
-            Report("Failed to execute entry script",error); return false;
+        VFS_PROFILE_MARK(BeforeEntryElapsed);
+        {
+            VFS_PROFILE_SCOPE(Entry);
+            if(!entry.empty() && !Lua::DoFile(entry,*files,error)) {
+                Report("Failed to execute entry script",error); return false;
+            }
         }
-        if(!quitRequested) core::modules::Window::ShowReady();
+        if(!quitRequested) {
+            core::modules::Window::ShowReady();
+            VFS_PROFILE_MARK(WindowShownElapsed);
+        }
         initialized=true; // Do not overwrite Quit requested by entry Lua.
         Log::Info("Engine initialized"); return true;
     } catch(const std::exception& error) { Report("Engine initialization failed",error.what()); return false; }
@@ -176,6 +185,8 @@ bool Run(std::uint64_t frameLimit) {
             recordTimer.Stop();
 #endif
             renderer.EndFrame(); recording=false;
+            // Submission boundary, not a GPU timestamp or physical display time.
+            if(hostFrames==0) { VFS_PROFILE_MARK(FirstFrameSubmitElapsed); }
             Graphic::ApplyPendingPresentation();
             // Device startup, refill and reclamation run independently on the
             // audio service thread. Only report queued failures on this thread.

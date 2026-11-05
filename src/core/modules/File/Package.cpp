@@ -1,4 +1,5 @@
 #include "Package.h"
+#include "Profile.h"
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_properties.h>
 #include <sodium.h>
@@ -155,6 +156,7 @@ class Source {
 #endif
     }
     void Read(uint64_t offset, void *output, size_t count) const {
+        VFS_PROFILE_SCOPE(PackageRead);
         if (offset > size || count > size - offset)
             Corrupt("truncated record");
         std::lock_guard lock(mutex_);
@@ -168,6 +170,7 @@ class Source {
             DWORD chunk = static_cast<DWORD>(std::min<size_t>(count, 1U << 30)), got = 0;
             if (!ReadFile(handle_, dst, chunk, &got, nullptr))
                 throw IoError("io_error", "Resource package: source read failed");
+            VFS_PROFILE_ADD(PackageReadBytes,got);
             if (got != chunk)
                 Corrupt("source truncated after mounting");
             dst += got;
@@ -179,6 +182,7 @@ class Source {
             auto n = pread(handle_, dst, count, static_cast<off_t>(offset));
             if (n < 0)
                 throw IoError("io_error", "Resource package: source read failed");
+            VFS_PROFILE_ADD(PackageReadBytes,n);
             if (!n)
                 Corrupt("source truncated after mounting");
             dst += n;
@@ -439,6 +443,7 @@ Package::Package(std::unique_ptr<Impl> p) : impl_(std::move(p)) {}
 Package::~Package() = default;
 std::shared_ptr<Package> Package::Load(const std::filesystem::path &path, bool encrypted,
                                        std::optional<PackageKey> key) {
+    VFS_PROFILE_SCOPE(PackageLoad);
     auto p = std::make_unique<Impl>();
     p->source = std::make_shared<Source>(path);
     p->encrypted = encrypted;

@@ -1,5 +1,6 @@
 #include "NativeIo.h"
 #include "Vfs.h"
+#include "Profile.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -49,12 +50,15 @@ struct NativeStream {
         catch(...) { Fail("io_error"); }
     }
     Sint64 Size() noexcept {
+        VFS_PROFILE_SCOPE(NativeSize);
 #ifdef _WIN32
         LARGE_INTEGER length{};
+        VFS_PROFILE_ADD(AttributeQueries,1);
         if(!GetFileSizeEx(file,&length)) { SystemFailure(); return -1; }
         const auto size=static_cast<std::uint64_t>(length.QuadPart);
 #else
         struct stat info{};
+        VFS_PROFILE_ADD(AttributeQueries,1);
         if(fstat(file,&info)) { SystemFailure(); return -1; }
         const auto size=static_cast<std::uint64_t>(info.st_size);
 #endif
@@ -95,6 +99,7 @@ struct NativeStream {
         return static_cast<Sint64>(s.position);
     }
     static std::size_t SDLCALL Read(void* value,void* data,std::size_t wanted,SDL_IOStatus* status) {
+        VFS_PROFILE_SCOPE(NativeRead);
         auto& s=*static_cast<NativeStream*>(value);
         if(!s.mode.readable) { s.Fail("permission_denied"); *status=SDL_IO_STATUS_ERROR; return 0; }
         const auto length=s.Size();
@@ -114,6 +119,7 @@ struct NativeStream {
             if(result<0) { s.SystemFailure(); *status=SDL_IO_STATUS_ERROR; return done; }
             const auto count=static_cast<std::size_t>(result);
 #endif
+            VFS_PROFILE_ADD(NativeReadBytes,count);
             if(!count) break;
             done+=count; s.position+=count;
         }
@@ -169,6 +175,7 @@ struct NativeStream {
 };
 }
 SDL_IOStream* OpenNative(const std::filesystem::path& path,const OpenMode& mode,std::string_view virtualPath) {
+    VFS_PROFILE_SCOPE(NativeOpen);
     auto source=std::make_unique<NativeStream>(); source->mode=mode;
 #ifdef _WIN32
     DWORD access=FILE_READ_ATTRIBUTES|(mode.readable?GENERIC_READ:0);
@@ -178,6 +185,7 @@ SDL_IOStream* OpenNative(const std::filesystem::path& path,const OpenMode& mode,
     if(source->file==INVALID_HANDLE_VALUE) source->SystemFailure();
     else {
         BY_HANDLE_FILE_INFORMATION info{};
+        VFS_PROFILE_ADD(AttributeQueries,1);
         if(!GetFileInformationByHandle(source->file,&info)) source->SystemFailure();
         else if((info.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))||GetFileType(source->file)!=FILE_TYPE_DISK)
             throw AccessError("open '"+std::string(virtualPath)+"': redirected/non-file backend refused");
@@ -211,14 +219,17 @@ opened:
     return stream;
 }
 std::optional<std::uint64_t> NativeModified(SDL_IOStream* stream,std::string_view path) {
+    VFS_PROFILE_SCOPE(NativeModified);
     auto* native=static_cast<NativeStream*>(SDL_GetPointerProperty(SDL_GetIOProperties(stream),NativeStateProperty,nullptr));
     if(!native) return {};
 #ifdef _WIN32
     FILETIME modified{};
+    VFS_PROFILE_ADD(AttributeQueries,1);
     if(!GetFileTime(native->file,nullptr,nullptr,&modified)) { native->SystemFailure(); throw GetStreamError(stream,"snapshot timestamp",path); }
     return (std::uint64_t(modified.dwHighDateTime)<<32)|modified.dwLowDateTime;
 #else
     struct stat info{};
+    VFS_PROFILE_ADD(AttributeQueries,1);
     if(fstat(native->file,&info)) { native->SystemFailure(); throw GetStreamError(stream,"snapshot timestamp",path); }
 #ifdef __APPLE__
     return std::uint64_t(info.st_mtimespec.tv_sec)*1000000000ULL+static_cast<std::uint64_t>(info.st_mtimespec.tv_nsec);

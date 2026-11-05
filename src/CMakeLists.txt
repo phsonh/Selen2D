@@ -24,8 +24,11 @@ target_include_directories(engine_log PUBLIC .)
 
 add_library(engine_file STATIC core/modules/File/File.cpp core/modules/File/Vfs.cpp
     core/modules/File/Path.cpp core/modules/File/NativeIo.cpp core/modules/File/ReadSource.cpp
-    core/modules/File/Package.cpp core/modules/File/PackageCrypto.cpp)
+    core/modules/File/Package.cpp core/modules/File/PackageCrypto.cpp core/modules/File/Profile.cpp)
 target_include_directories(engine_file PUBLIC .)
+if(ENGINE_VFS_PROFILE)
+    target_compile_definitions(engine_file PUBLIC ENGINE_VFS_PROFILE=1)
+endif()
 target_link_libraries(engine_file PUBLIC SDL3::SDL3-static DependencyZstd DependencyUtf8proc DependencySodium)
 
 add_library(engine_lua_scripts STATIC core/runtime/Lua/VfsScripts.cpp

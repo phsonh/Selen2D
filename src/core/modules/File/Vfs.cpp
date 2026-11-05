@@ -2,6 +2,7 @@
 #include "Package.h"
 #include "NativeIo.h"
 #include "ReadSource.h"
+#include "Profile.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -109,6 +110,7 @@ bool PhysicalContains(const fs::path& parent,const fs::path& child) {
 bool Redirected(const fs::path& path,const fs::file_status& status) {
     if(fs::is_symlink(status)) return true;
 #ifdef _WIN32
+    VFS_PROFILE_ADD(AttributeQueries,1);
     const auto attrs=GetFileAttributesW(path.c_str());
     return attrs!=INVALID_FILE_ATTRIBUTES && (attrs&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
 #else
@@ -117,6 +119,7 @@ bool Redirected(const fs::path& path,const fs::file_status& status) {
 }
 fs::file_status Status(const fs::path& path,std::string_view virtualPath) {
     std::error_code ec;
+    VFS_PROFILE_ADD(AttributeQueries,1);
     const auto status=fs::symlink_status(path,ec);
     if(ec==std::errc::no_such_file_or_directory || ec==std::errc::not_a_directory) return fs::file_status(fs::file_type::not_found);
     Check(ec,"inspect",virtualPath);
@@ -130,10 +133,12 @@ struct DirectoryAnchor {
 #ifdef _WIN32
     HANDLE handle{INVALID_HANDLE_VALUE};
     explicit DirectoryAnchor(const fs::path& path,std::string_view virtualPath) {
+        VFS_PROFILE_ADD(AnchorCreations,1);
         handle=CreateFileW(path.c_str(),FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,
             OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
         if(handle==INVALID_HANDLE_VALUE) Fail(IoErrorCode(LastError()),"anchor directory",virtualPath);
         BY_HANDLE_FILE_INFORMATION info{};
+        VFS_PROFILE_ADD(AttributeQueries,1);
         if(!GetFileInformationByHandle(handle,&info)) {
             const auto ec=LastError(); CloseHandle(handle); handle=INVALID_HANDLE_VALUE;
             Fail(IoErrorCode(ec),"anchor directory",virtualPath);
@@ -147,6 +152,7 @@ struct DirectoryAnchor {
 #else
     int handle{-1};
     explicit DirectoryAnchor(const fs::path& path,std::string_view virtualPath) {
+        VFS_PROFILE_ADD(AnchorCreations,1);
         handle=::open(path.c_str(),O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         if(handle<0) Fail(IoErrorCode(LastError()),"anchor directory",virtualPath);
     }
@@ -157,12 +163,19 @@ struct DirectoryAnchor {
     bool Same(const DirectoryAnchor& other) const {
 #ifdef _WIN32
         BY_HANDLE_FILE_INFORMATION a{},b{};
-        if(!GetFileInformationByHandle(handle,&a)||!GetFileInformationByHandle(other.handle,&b))
+        VFS_PROFILE_ADD(IdentityQueries,1);
+        if(!GetFileInformationByHandle(handle,&a))
+            throw ConflictError("cannot verify configured directory identity");
+        VFS_PROFILE_ADD(IdentityQueries,1);
+        if(!GetFileInformationByHandle(other.handle,&b))
             throw ConflictError("cannot verify configured directory identity");
         return a.dwVolumeSerialNumber==b.dwVolumeSerialNumber&&a.nFileIndexHigh==b.nFileIndexHigh&&a.nFileIndexLow==b.nFileIndexLow;
 #else
         struct stat a{},b{};
-        if(fstat(handle,&a)||fstat(other.handle,&b)) throw ConflictError("cannot verify configured directory identity");
+        VFS_PROFILE_ADD(IdentityQueries,1);
+        if(fstat(handle,&a)) throw ConflictError("cannot verify configured directory identity");
+        VFS_PROFILE_ADD(IdentityQueries,1);
+        if(fstat(other.handle,&b)) throw ConflictError("cannot verify configured directory identity");
         return a.st_dev==b.st_dev&&a.st_ino==b.st_ino;
 #endif
     }
@@ -179,6 +192,7 @@ fs::path BaseRoot(const fs::path& path) {
     std::error_code ec;
     const auto root=fs::canonical(path,ec);
     Check(ec,"resolve configured base","<configured root>");
+    VFS_PROFILE_ADD(AttributeQueries,1);
     if(!fs::is_directory(root,ec)) { Check(ec,"resolve configured base","<configured root>"); throw InvalidPath("configured base is not a directory"); }
 #ifdef _WIN32
     DirectoryAnchor anchor(root,"<configured root>");
@@ -195,12 +209,15 @@ fs::path BaseRoot(const fs::path& path) {
 // Match a normalized component against actual spelling, without Windows' case
 // insensitive lookup or 8.3 aliases. Detect normalization/casefold collisions.
 std::optional<fs::path> Child(const fs::path& directory,std::string_view component,std::string_view virtualPath) {
+    VFS_PROFILE_SCOPE(Child);
+    VFS_PROFILE_ADD(DirectoryEnumerations,1);
     std::error_code ec; fs::directory_iterator it(directory,ec),end;
     Check(ec,"enumerate",virtualPath);
     const auto wantedFold=FoldPath(component);
     std::optional<std::string> spelling;
     std::optional<fs::path> result;
     while(it!=end) {
+        VFS_PROFILE_ADD(EntriesEnumerated,1);
         const auto actual=Utf8(it->path().filename()); const auto name=Normalize(actual);
         // Ancestors outside the project are not part of the virtual tree.
         // Ignore unrelated project names and inspect only this component.
@@ -239,7 +256,9 @@ NodeInfo DiskInfo(const fs::path& disk,const fs::file_status& status,std::string
     if(fs::is_directory(status)) return {NodeType::Directory};
     if(!fs::exists(status)) return {};
     if(!fs::is_regular_file(status)) throw ConflictError("non-regular filesystem entry at '"+std::string(path)+"'");
+    VFS_PROFILE_ADD(AttributeQueries,1);
     std::error_code ec; const auto size=fs::file_size(disk,ec); Check(ec,"size",path);
+    VFS_PROFILE_ADD(AttributeQueries,1);
     const auto modified=fs::last_write_time(disk,ec); Check(ec,"timestamp",path);
     return {NodeType::File,size,static_cast<std::uint64_t>(modified.time_since_epoch().count())};
 }
@@ -250,6 +269,7 @@ FileIdentity Identity(const fs::path& disk,std::string_view path) {
         nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     if(handle==INVALID_HANDLE_VALUE) Fail(IoErrorCode(LastError()),"inspect file identity",path);
     FILE_ID_INFO info{};
+    VFS_PROFILE_ADD(IdentityQueries,1);
     if(!GetFileInformationByHandleEx(handle,FileIdInfo,&info,sizeof(info))) {
         const auto ec=LastError(); CloseHandle(handle); Fail(IoErrorCode(ec),"inspect file identity",path);
     }
@@ -257,6 +277,7 @@ FileIdentity Identity(const fs::path& disk,std::string_view path) {
     FileIdentity result{info.VolumeSerialNumber,0,0};
     std::memcpy(&result[1],info.FileId.Identifier,16); return result;
 #else
+    VFS_PROFILE_ADD(IdentityQueries,1);
     struct stat info{}; if(lstat(disk.c_str(),&info)) Fail(IoErrorCode(LastError()),"inspect file identity",path);
     return {static_cast<std::uint64_t>(info.st_dev),static_cast<std::uint64_t>(info.st_ino),0};
 #endif
@@ -391,6 +412,7 @@ struct FileSystem::Impl {
         }
     }
     void AddDisk(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
+        VFS_PROFILE_SCOPE(AddDisk);
         std::vector<std::pair<fs::path,std::string>> pending{{disk,path}};
         while(!pending.empty()) {
             auto [current,name]=std::move(pending.back()); pending.pop_back();
@@ -398,18 +420,24 @@ struct FileSystem::Impl {
             if(!fs::exists(status)) continue;
             const auto info=DiskInfo(current,status,name);
             Node node{info,nullptr,&d,current,{}};
-            if(info.type==NodeType::File) node.identity=Identity(current,name);
+            if(info.type==NodeType::File) {
+                VFS_PROFILE_ADD(FilesVisited,1);
+                node.identity=Identity(current,name);
+            }
             view.Insert(name,std::move(node));
             if(info.type!=NodeType::Directory) continue;
+            VFS_PROFILE_ADD(DirectoriesVisited,1);
             auto anchor=Guard(current,name,view.guards);
             if(name==d.target) {
                 if(d.rootAnchor&&!d.rootAnchor->Same(*anchor)) throw ConflictError("configured root identity changed at '"+name+"'");
                 if(!d.rootAnchor) d.rootAnchor=anchor;
             }
+            VFS_PROFILE_ADD(DirectoryEnumerations,1);
             std::error_code ec; fs::directory_iterator it(current,ec),end;
             Check(ec,"enumerate",name);
             std::set<std::string,std::less<>> originals;
             while(it!=end) {
+                VFS_PROFILE_ADD(EntriesEnumerated,1);
                 const auto child=Normalize(Utf8(it->path().filename()));
                 if(!child||child->find('/')!=std::string::npos) throw ConflictError("unaddressable directory entry at '"+name+"'");
                 if(!originals.insert(FoldPath(*child)).second) throw ConflictError("Unicode collision at '"+name+"'");
@@ -419,13 +447,16 @@ struct FileSystem::Impl {
         }
     }
     View Scan() const {
+        VFS_PROFILE_SCOPE(Scan);
         View view;
         // All package records are checked before resolving overlays. A real
         // file collision cannot be hidden by a higher-parts package record.
         for(const auto& m:mounts) {
+            VFS_PROFILE_ADD(PackageViewPasses,1);
             view.Insert(m.target,Node{NodeInfo{NodeType::Directory},&m});
             for(const auto& [relative,info]:m.package->Entries()) {
                 if(relative.empty()) continue;
+                VFS_PROFILE_ADD(PackageViewEntries,1);
                 view.Insert(m.target+"/"+relative,Node{info,&m,nullptr,{},relative},true);
             }
         }
@@ -493,6 +524,7 @@ struct FileSystem::Impl {
 
 FileSystem::FileSystem(fs::path installRoot,std::vector<MountSpec> specs,std::vector<DirectorySpec> rules,
     std::optional<std::array<std::uint8_t,32>> key):impl_(std::make_unique<Impl>()) {
+    VFS_PROFILE_SCOPE(Construct);
     impl_->install=BaseRoot(installRoot);
     if(specs.size()>4096) throw InvalidPath("too many compiled package mounts");
     Guards guards;
@@ -535,16 +567,19 @@ FileSystem::FileSystem(fs::path installRoot,std::vector<MountSpec> specs,std::ve
 FileSystem::~FileSystem()=default;
 std::optional<std::string> FileSystem::NormalizePath(std::string_view path) const { return impl_->Authorize(path); }
 void FileSystem::CheckCodeSource(std::string_view path) const {
+    VFS_PROFILE_SCOPE(CheckCodeSource);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
     const auto* node=view.Resolve(p);
     if(impl_->protectedCode&&node&&node->info.type==NodeType::File&&(!node->mount||!node->mount->encrypted))
         throw AccessError("file code is not authenticated package content at '"+p+"'");
 }
 NodeInfo FileSystem::Stat(std::string_view path) const {
+    VFS_PROFILE_SCOPE(Stat);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
     const auto* node=view.Resolve(p); return node?node->info:NodeInfo{};
 }
 std::optional<std::vector<std::string>> FileSystem::ListDirectory(std::string_view path) const {
+    VFS_PROFILE_SCOPE(ListDirectory);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
     const auto* node=view.Resolve(p);
     if(!node) Fail("not_found","list",p);
@@ -558,11 +593,13 @@ std::optional<std::vector<std::string>> FileSystem::ListDirectory(std::string_vi
 }
 SDL_IOStream* FileSystem::Open(std::string_view path,std::string_view mode) const { return Open(path,ParseMode(mode)); }
 std::shared_ptr<const ReadSource> FileSystem::OpenReadSource(std::string_view path) const {
+    VFS_PROFILE_SCOPE(OpenReadSource);
     const auto name=impl_->Authorize(path);
     std::shared_ptr<SDL_IOStream> stream(Open(name,"rb"),[](SDL_IOStream* value){ SDL_CloseIO(value); });
     return std::shared_ptr<const ReadSource>(new ReadSource(std::move(stream),name));
 }
 SDL_IOStream* FileSystem::Open(std::string_view path,const OpenMode& mode) const {
+    VFS_PROFILE_SCOPE(Open);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
     const auto* node=view.Resolve(p);
     if(mode.exclusive&&node) Fail("already_exists","open exclusive",p);
@@ -582,6 +619,7 @@ SDL_IOStream* FileSystem::Open(std::string_view path,const OpenMode& mode) const
     return detail::OpenNative(node->disk,mode,p);
 }
 bool FileSystem::CreateDirectory(std::string_view path) const {
+    VFS_PROFILE_SCOPE(CreateDirectory);
     const auto p=impl_->Authorize(path); const auto& d=impl_->Route(p);
     std::lock_guard lock(impl_->mutex); auto view=impl_->Scan();
     if(const auto* node=view.Find(p);node&&node->info.type==NodeType::File) Fail("already_exists","create directory",p);
@@ -597,8 +635,10 @@ bool FileSystem::CreateDirectory(std::string_view path) const {
         if(const auto existing=Child(current,part,p)) current=*existing;
         else {
             // A differently cased name must never become an OS-dependent alias.
+            VFS_PROFILE_ADD(DirectoryEnumerations,1);
             std::error_code ec; fs::directory_iterator it(current,ec),last; Check(ec,"create directory",p);
             while(it!=last) {
+                VFS_PROFILE_ADD(EntriesEnumerated,1);
                 const auto name=Normalize(Utf8(it->path().filename()));
                 if(name&&FoldPath(*name)==FoldPath(part)) Fail("name_conflict","create directory",p);
                 it.increment(ec); Check(ec,"create directory",p);
@@ -612,6 +652,7 @@ bool FileSystem::CreateDirectory(std::string_view path) const {
     (void)impl_->Scan(); return true;
 }
 bool FileSystem::Remove(std::string_view path) const {
+    VFS_PROFILE_SCOPE(Remove);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); auto view=impl_->Scan();
     const auto* node=view.Find(p); impl_->MutationSource(view,node,p,true);
     if(node->info.type==NodeType::Directory) {
@@ -624,6 +665,7 @@ bool FileSystem::Remove(std::string_view path) const {
     (void)impl_->Scan(); return true;
 }
 bool FileSystem::Rename(std::string_view directory,std::string_view oldName,std::string_view newName) const {
+    VFS_PROFILE_SCOPE(Rename);
     const auto dir=impl_->Authorize(directory),a=Strict(oldName),b=Strict(newName);
     if(a.find('/')!=std::string::npos||b.find('/')!=std::string::npos) throw InvalidPath("Rename requires two single filenames");
     const auto source=dir+'/'+a,destination=dir+'/'+b;
@@ -632,6 +674,7 @@ bool FileSystem::Rename(std::string_view directory,std::string_view oldName,std:
     return Move(source,destination);
 }
 bool FileSystem::Copy(std::string_view source,std::string_view destination) const {
+    VFS_PROFILE_SCOPE(Copy);
     const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
     std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
     const auto* from=view.Resolve(a); const auto* to=view.Resolve(b);
@@ -658,6 +701,7 @@ bool FileSystem::Copy(std::string_view source,std::string_view destination) cons
     (void)impl_->Scan(); return true;
 }
 bool FileSystem::Move(std::string_view source,std::string_view destination) const {
+    VFS_PROFILE_SCOPE(Move);
     const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
     std::lock_guard lock(impl_->mutex); auto view=impl_->Scan(); const auto* from=view.Resolve(a);
     impl_->MutationSource(view,from,a,true);
@@ -671,6 +715,7 @@ bool FileSystem::Move(std::string_view source,std::string_view destination) cons
     (void)impl_->Scan(); return true;
 }
 bool FileSystem::Replace(std::string_view source,std::string_view destination) const {
+    VFS_PROFILE_SCOPE(Replace);
     const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
     std::lock_guard lock(impl_->mutex); auto view=impl_->Scan(); const auto* from=view.Resolve(a); const auto* to=view.Resolve(b);
     impl_->MutationSource(view,from,a,false);
@@ -685,6 +730,7 @@ bool FileSystem::Replace(std::string_view source,std::string_view destination) c
     (void)impl_->Scan(); return true;
 }
 Snapshot FileSystem::ReadSnapshot(std::string_view path,const ReadOptions& options) const {
+    VFS_PROFILE_SCOPE(ReadSnapshot);
     if(!options.maxBytes||!options.chunkBytes||options.chunkBytes>16*1024*1024||options.prefixBytes>4096)
         throw std::invalid_argument("invalid VFS snapshot read limits");
     const auto p=impl_->Authorize(path); Cancel(options);

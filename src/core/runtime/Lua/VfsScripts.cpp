@@ -2,6 +2,7 @@
 #include "VfsIo.h"
 #include "Error.h"
 #include "core/modules/File/Vfs.h"
+#include "core/modules/File/Profile.h"
 #include "lua_bind/Guard.h"
 #include <algorithm>
 #include <cstdint>
@@ -139,17 +140,22 @@ int CSearcher(lua_State* L) {
 }
 }
 ScriptStatus LoadScript(lua_State* L,const modules::File::FileSystem& filesystem,std::string_view path,const char* mode) {
+    VFS_PROFILE_SCOPE(ScriptLoad);
     const auto normalized=filesystem.NormalizePath(path);
     filesystem.CheckCodeSource(*normalized);
     const auto bytes=filesystem.Read(*normalized);
     if(!bytes)return ScriptStatus::Unreadable;
     const auto name="@"+*normalized;
-    if(luaL_loadbufferx(L,bytes->data(),bytes->size(),name.c_str(),mode))return ScriptStatus::Error;
+    {
+        VFS_PROFILE_SCOPE(LuaCompile);
+        if(luaL_loadbufferx(L,bytes->data(),bytes->size(),name.c_str(),mode))return ScriptStatus::Error;
+    }
     RecordScriptSource(L,-1,*normalized); return ScriptStatus::Success;
 }
 ScriptStatus RunScript(lua_State* L,const modules::File::FileSystem& filesystem,std::string_view path) {
     const auto status=LoadScript(L,filesystem,path);
     if(status!=ScriptStatus::Success)return status;
+    VFS_PROFILE_SCOPE(ScriptExecute);
     return ExecuteLoaded(L,0)==0?ScriptStatus::Success:ScriptStatus::Error;
 }
 void InstallSearchers(lua_State* L,std::shared_ptr<const modules::File::FileSystem> filesystem) {

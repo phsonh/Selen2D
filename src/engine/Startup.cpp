@@ -1,5 +1,6 @@
 #include "Startup.h"
 #include "UserDataRoot.h"
+#include "core/modules/File/Profile.h"
 #include "launch.h"
 #include "core/modules/File/Vfs.h"
 #include "core/modules/File/PackageCrypto.h"
@@ -45,6 +46,7 @@ void RecordNames(Names& names, std::string_view path) {
 Config Load(const std::filesystem::path& directory) { return Load(directory, launch_config::value); }
 
 Config Load(const std::filesystem::path& directory, const launch::Config& declaration) {
+    VFS_PROFILE_SCOPE(StartupLoad);
     if(!directory.is_absolute()) throw std::invalid_argument("Deployment root must be an absolute executable directory");
     if(declaration.mounts.size() > 4096 || declaration.directories.size() > 4096)
         throw std::invalid_argument("Compiled launch configuration has too many records");
