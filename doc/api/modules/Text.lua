@@ -1,10 +1,9 @@
 ---@meta
 
--- Selen2D 二号机 Text 声明；仅供编辑器，不应执行。
+-- Selen2D Text 声明；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Text/Text.cpp、core/modules/Text/Text.cpp。
--- 设计依据：二号机 Text；以下 D03 限制为本次实现选择，并非先前冻结值。
 -- 三个函数同步执行纯内存转换，不进行文件 I/O，不负责字体绘制；参数数量/类型错误抛 Lua 错误。
--- D03：输入开头允许单个 UTF-8 BOM；输出零统一为 0；非零 token 下溢到零报错，允许可表示的 subnormal。
+-- 输入开头允许单个 UTF-8 BOM；输出零统一为 0；非零 token 下溢到零报错，允许可表示的 subnormal。
 -- 输入/输出各最多 8 MiB，最多 262144 个值节点（含容器），数字 token 最多 1024 字节。
 -- 根深度为 0，允许到深度 128；深度/容量失败抛错，不返回部分结果。
 ---@alias TextTimeFormat 'mm:ss'|'hh:mm:ss'|'dd:hh:mm:ss'|'mm:ss.ms'

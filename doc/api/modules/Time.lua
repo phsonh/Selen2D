@@ -1,8 +1,7 @@
 ---@meta
 
--- Selen2D 二号机已实现声明；仅供编辑器，不应执行。
+-- Selen2D Time 声明；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Time/Time.cpp、core/modules/Time、core/runtime/Clock。
--- 设计依据：二号机 modules/Time.md。
 -- 查询立即返回，不改变时钟。参数数量/类型不符、非法数值或转换溢出均抛 Lua 错误。
 ---@class TimeDate
 ---@field year integer 公历年。

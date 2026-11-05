@@ -1,7 +1,7 @@
 ---@meta
 
--- Selen2D 二号机已实现声明；仅供编辑器，不应执行。
--- 来源：lua_bind/modules/Debug、core/modules/Debug、core/runtime/Log；设计依据：二号机/modules/Debug.md。
+-- Selen2D Debug 声明；仅供编辑器，不应执行。
+-- 来源：lua_bind/modules/Debug、core/modules/Debug、core/runtime/Log。
 -- 参数数量和类型错误抛 Lua 错误；日志不隐式 tostring。弹窗是 SDL 主线程同步阻塞操作。
 ---@alias DebugDialogType 'info'|'warning'|'error'
 ---@class DebugModule

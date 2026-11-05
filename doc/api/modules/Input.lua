@@ -2,7 +2,7 @@
 
 -- Selen2D Input 声明（19 个公开函数）；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Input、core/modules/Input/{Input,InputNames,InputState,Gamepad}.cpp。
--- 设计依据：二号机 Input 契约；配置 Getter 立即更新，采样处理从下一帧生效。
+-- 配置 Getter 立即更新，采样处理从下一帧生效。
 -- 宿主在每次帧回调前采集一个快照；同帧重复读取不消耗状态。无刚按下/刚松开事件或文本/IME 输入。
 -- 所有接口要求已初始化 SDL 主线程服务；参数数量、类型、大小写或未知名称错误抛 Lua 错误。
 -- 窗口失焦、隐藏或最小化时键/按钮为 false、轴与滚轮为 0、鼠标位置 nil；不会自动暂停游戏。

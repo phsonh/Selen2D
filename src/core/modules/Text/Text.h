@@ -6,7 +6,7 @@
 namespace core::modules::Text {
 using JsonValue = nlohmann::json;
 inline constexpr int maximum_json_depth = 128;
-// Implementation choices for Text D03; they are limits, not extra Lua APIs.
+// JSON conversion resource limits; these do not add Lua APIs.
 inline constexpr std::size_t maximum_json_bytes = 8 * 1024 * 1024;
 inline constexpr std::size_t maximum_json_nodes = 262144;
 inline constexpr std::size_t maximum_json_number_bytes = 1024;

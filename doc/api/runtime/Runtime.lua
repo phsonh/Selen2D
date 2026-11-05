@@ -1,8 +1,7 @@
 ---@meta
 
--- Selen2D 二号机已实现声明；仅供编辑器，不应由游戏执行。
+-- Selen2D Runtime 声明；仅供编辑器，不应由游戏执行。
 -- 核对来源：lua_bind/runtime/Runtime.cpp、core/runtime/Clock、core/runtime/Lua、engine/Engine.cpp。
--- 设计依据：二号机 runtime/Runtime.md。
 -- 所有函数严格检查实参数量和类型；不将字符串转换为数字。调用错误抛 Lua 错误。
 -- Runtime 只调度整帧回调；不会自动 Commit、更新、碰撞或绘制 Object，也不管理游戏暂停/Replay。
 ---@class RuntimeModule

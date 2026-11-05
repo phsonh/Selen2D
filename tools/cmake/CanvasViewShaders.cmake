@@ -9,7 +9,7 @@ foreach(stage IN ITEMS vert frag)
         set(profile ps_6_0)
     endif()
     add_custom_command(OUTPUT "${canvas_view_shader_dir}/${stage}.bin"
-        COMMAND "${SOLONGO_DXC}" -T ${profile} -E main -O3 -WX ${image_shader_options}
+        COMMAND "${ENGINE_DXC_EXECUTABLE}" -T ${profile} -E main -O3 -WX ${image_shader_options}
             -Fo "${canvas_view_shader_dir}/${stage}.bin" "${image_shader_source}/canvas_view.${stage}.hlsl"
         DEPENDS "${image_shader_source}/canvas_view.${stage}.hlsl" VERBATIM)
 endforeach()

@@ -17,8 +17,8 @@
 namespace lua_bind::modules::Resource {
 namespace {
 namespace N=core::modules::Resource;
-constexpr const char* ServiceType="Solongo.Resource.Service";
-constexpr const char* LoaderType="Solongo.Resource.Loader";
+constexpr const char* ServiceType="engine.Resource.Service";
+constexpr const char* LoaderType="engine.Resource.Loader";
 char ContextKey;
 struct Token {
     N::Service* service{};

@@ -14,7 +14,7 @@ namespace core::runtime::Lua {
 namespace {
 using FileSystem = modules::File::FileSystem;
 using modules::File::IoError;
-constexpr const char* contextType = "solongo.vfs.scripts";
+constexpr const char* contextType = "engine.vfs.scripts";
 struct Context {
     std::shared_ptr<const FileSystem> filesystem;
 };

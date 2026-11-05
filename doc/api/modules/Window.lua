@@ -2,7 +2,7 @@
 
 -- Selen2D Window 声明（14 个公开函数）；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Window、core/modules/Window、core/modules/Graphic/Graphic.cpp、engine/Engine.cpp。
--- 设计依据：二号机 Window 契约；操作系统状态与绘制目标可用性分别处理。
+-- 操作系统状态与绘制目标可用性分别处理。
 -- 单一宿主窗口；所有接口须在已初始化 SDL/图形主线程调用。参数数量/类型或平台操作失败抛错。
 -- Setter 无返回值；Getter 读取当前已应用状态，不推动状态变更。系统可能异步应用窗口请求。
 -- 启动客户区基线为 1280x960，窗口先隐藏创建，在入口配置完成后由宿主显示；不等待游戏资源加载。

@@ -6,8 +6,8 @@
 - [完整 Lua 示例](example.md)：资源加载、显式 Object 提交、独立 RNG、播放器、Canvas、释放与两轮自动流程。
 - [编写 Shader](shader.md)：运行时编译、相对 include、Lua 参数与 Engine.hlsl ABI。
 - [API 声明](../api/)：`modules/*.lua` 与 `runtime/Runtime.lua` 是编辑器定义，不能 `require`、`dofile` 或作为入口执行。
-- [帧调度、时间与错误](runtime.md)：二号机已实现的显式对象提交、时间换算和安全关闭。
-- [输入快照与窗口坐标](input-window.md)：二号机输入配置、逻辑坐标和状态查询。
+- [帧调度、时间与错误](runtime.md)：显式对象提交、时间换算和安全关闭。
+- [输入快照与窗口坐标](input-window.md)：输入配置、逻辑坐标和状态查询。
 - [File、资源包与编译期启动配置](file-launch.md)：虚拟路径、JSON 自动编译和标准发行隔离。
 - [PyQt6 源码开发工具](tools-gui.md)：项目 JSON、资源包、构建与安全取消；只在开发机安装。
 - [日志与启动诊断](debug-console.md)：标准流输出、Lua 日志快照与主动保存。
@@ -20,4 +20,4 @@
 
 发行包的项目许可证、第三方说明和依赖许可证分别放在本目录的 `LICENSE`、`THIRD_PARTY_NOTICES.txt` 和 `licenses/` 中。请保留这些文件。
 
-启动和 File 已迁入编译期配置与显式 VFS 授权，Resource 和 Audio 采用二号机选项表、Loader 与显式播放器。Shader 示例使用 `Engine.hlsl`；Graphic 已提供 Canvas 双入口、Mesh 更新与普通文字；整机组合验收及非 Windows 平台验证另行记录。
+启动和 File 使用编译期配置与显式 VFS 授权，Resource 和 Audio 使用选项表、Loader 与显式播放器。Shader 示例使用 `Engine.hlsl`；Graphic 提供 Canvas 双入口、Mesh 更新与普通文字；整机组合验收及非 Windows 平台验证另行记录。

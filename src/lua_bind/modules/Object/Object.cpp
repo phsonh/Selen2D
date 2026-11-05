@@ -14,9 +14,9 @@
 namespace lua_bind::modules::Object {
 namespace {
 namespace Native=core::modules::Object;
-constexpr const char* InstanceType="Solongo.Object.Instance";
-constexpr const char* ServiceType="Solongo.Object.Service";
-constexpr const char* ClassType="Solongo.Object.Class";
+constexpr const char* InstanceType="engine.Object.Instance";
+constexpr const char* ServiceType="engine.Object.Service";
+constexpr const char* ClassType="engine.Object.Class";
 constexpr const char* IteratorType="Object.Iterator";
 char ClassKey,ContextKey;
 struct StackRestore {

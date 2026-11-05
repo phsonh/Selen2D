@@ -1,6 +1,6 @@
 ---@meta
 
----Selen2D 2.0.1 图形接口；本文件只供编辑器，不应作为脚本运行。
+---Selen2D 图形接口；本文件只供编辑器，不应作为脚本运行。
 ---模块为顶层 Graphic，独立于 Object；创建资源不自动显示，绘制不修改 Object 或共享 Image 的元数据。
 ---SetTargetCanvas/GetTargetCanvas/Clear/Render* 仅能在 Runtime 的实际 FrameFunction 绘制阶段调用，初始化和退出回调不能绘制。
 ---2D 在有序屏障之间按有限 layer 稳定排序，同层保留提交顺序；3D 完全按提交顺序。透明命令不按纹理重排。

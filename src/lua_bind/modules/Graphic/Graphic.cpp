@@ -25,10 +25,10 @@ namespace R=core::modules::Graphic::Render;
 namespace C=core::modules::Graphic::Canvas;
 namespace A=core::modules::Resource;
 namespace S=core::modules::Graphic::Geometry;
-constexpr const char* ServiceType="Solongo.Graphic.Service";
-constexpr const char* CanvasType="Solongo.Graphic.Canvas";
-constexpr const char* CameraType="Solongo.Graphic.Camera";
-constexpr const char* PngType="Solongo.Graphic.PngBuffer";
+constexpr const char* ServiceType="engine.Graphic.Service";
+constexpr const char* CanvasType="engine.Graphic.Canvas";
+constexpr const char* CameraType="engine.Graphic.Camera";
+constexpr const char* PngType="engine.Graphic.PngBuffer";
 char ContextKey;
 struct Token { R::Renderer* renderer{}; A::Service* resources{}; core::modules::Graphic::Text::State text; };
 struct ServiceBox {

@@ -10,7 +10,7 @@
 namespace lua_bind::modules::Graphic::MeshBinding {
 namespace {
 namespace G = core::modules::Graphic::Geometry;
-constexpr const char* Type = "Solongo.Graphic.Mesh";
+constexpr const char* Type = "engine.Graphic.Mesh";
 constexpr std::uint64_t Tag = 0x53474D4553483031ULL;
 struct Box { std::shared_ptr<const Mesh> data; Owner owner; };
 struct Slot { std::uint64_t tag{Tag}; Box* value{}; };

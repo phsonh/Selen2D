@@ -13,8 +13,8 @@
 namespace lua_bind::modules::File {
 namespace {
 namespace Native = core::modules::File;
-constexpr const char* contextType = "solongo.file.context";
-constexpr const char* handleType = "solongo.file.handle";
+constexpr const char* contextType = "engine.file.context";
+constexpr const char* handleType = "engine.file.handle";
 char contextKey;
 struct Context {
     static constexpr std::uint64_t Tag = 0x5346494c45435458ULL;

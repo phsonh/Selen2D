@@ -1,7 +1,7 @@
 ---@meta
 
--- Selen2D 二号机 Math 声明；仅供编辑器，不应执行。
--- 来源：lua_bind/modules/Math、core/modules/Math；设计依据：二号机/modules/Math.md。
+-- Selen2D Math 声明；仅供编辑器，不应执行。
+-- 来源：lua_bind/modules/Math、core/modules/Math。
 -- 运算同步完成；参数数量、类型、范围不正确均抛 Lua 错误，不接受数字字符串。
 -- 三角函数为角度制，不改变 Lua 标准 math 的弧度制；不保证跨平台三角函数逐位一致。
 ---@class MathModule

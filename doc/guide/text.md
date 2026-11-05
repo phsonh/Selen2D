@@ -38,4 +38,4 @@ Anchor 是 `top_left/top/top_right/left/center/right/bottom_left/bottom/bottom_r
 
 默认实现上限：输入 UTF-8 1 MiB，262,144 个 glyph，16,384 行/列；Wrap 最多 65,536 个候选及累计 64 MiB 候选塑形输入。单次 HarfBuzz 塑形缓冲上限 262,144 个点位/glyph，内部操作预算 8,388,608；超限明确报错。每个 FreeType 操作的内部申请上限 32 MiB；单 glyph 最大边 8,192 像素、覆盖数据 16 MiB，覆盖缓存 64 MiB/8,192 项。仍被 Draw 引用的覆盖数据计入缓存预算；不足时明确报错。临时新栅格最多额外占用一个 glyph 的准备额度，不等待正在引用缓存的调用自己释放。
 
-`tests/v2-text` 使用固定哈希及 OFL 许可证的 Noto Latin、Arabic、CJK 与 Mongolian 字体进行 CPU/覆盖图验证。完整 GPU 混合、绘制顺序、DPI 和实际平台验收以阶段 E 的整机测试记录为准，不能从 CPU 测试通过推断。
+CPU 度量与覆盖图验证不能替代实际平台上的 GPU 混合、绘制顺序和 DPI 验证。
