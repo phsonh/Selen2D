@@ -30,6 +30,11 @@ if(ENGINE_VFS_PROFILE)
     target_compile_definitions(engine_file PUBLIC ENGINE_VFS_PROFILE=1)
 endif()
 target_link_libraries(engine_file PUBLIC SDL3::SDL3-static DependencyZstd DependencyUtf8proc DependencySodium)
+if(WIN32)
+    # Relative native file opens are rooted in an already verified directory
+    # handle; ntdll is a Windows system library, not a deployed dependency.
+    target_link_libraries(engine_file PRIVATE ntdll)
+endif()
 
 add_library(engine_lua_scripts STATIC core/runtime/Lua/VfsScripts.cpp
     core/runtime/Lua/TrustedScripts.cpp core/runtime/Lua/VfsIo.cpp)

@@ -497,6 +497,43 @@ struct FileSystem::Impl {
         if(node->info.type!=NodeType::Directory) Fail("not_directory","parent directory",path);
         if(node->directory!=&d||node->disk.empty()) Fail("not_found","real parent directory",path);
     }
+    SDL_IOStream* OpenDisk(const View& view,const fs::path& disk,const OpenMode& mode,
+        std::string_view path,const Node* node) const {
+#ifdef _WIN32
+        // Never resolve the verified parent path a second time in CreateFile.
+        // An in-place reparse change can redirect an absolute open even while
+        // its original directory handle remains alive with DELETE unshared.
+        const auto parent=disk.parent_path();
+        for(const auto& guard:view.guards) {
+            if(guard.path!=parent) continue;
+            const detail::NativeOpenTarget target{guard.anchor->handle,disk.filename(),
+                node?node->identity:std::optional<FileIdentity>{}};
+            return detail::OpenNative(disk,mode,path,&target);
+        }
+        throw ConflictError("missing verified parent directory at '"+std::string(path)+"'");
+#else
+        (void)view; (void)node;
+        return detail::OpenNative(disk,mode,path);
+#endif
+    }
+    SDL_IOStream* OpenInView(const View& view,std::string_view p,const OpenMode& mode) const {
+        const auto* node=view.Resolve(p);
+        if(mode.exclusive&&node) Fail("already_exists","open exclusive",p);
+        if(node&&node->info.type==NodeType::Directory) Fail("is_directory","open",p);
+        if(node&&node->info.size>MaxFilePosition) Fail("out_of_range","open",p);
+        if(mode.writable) {
+            if(node&&node->mount) Fail("read_only","open",p);
+            const auto& d=Route(p);
+            if(mode.base=='r'&&!node) Fail("not_found","open",p);
+            CheckNewName(view,p); RequireParent(view,d,p);
+            const auto disk=Destination(view,d,p); CheckBacking(disk,p,false);
+            return OpenDisk(view,disk,mode,p,node);
+        }
+        if(!node) Fail("not_found","open",p);
+        if(node->mount) return node->mount->package->Open(node->relative);
+        if(!node->directory) Fail("not_found","open",p);
+        return OpenDisk(view,node->disk,mode,p,node);
+    }
     void MutationSource(const View& view,const Node* node,std::string_view path,bool allowDirectory) const {
         if(Protected(path)) Fail("unsupported","modify mapping root",path);
         if(!node) Fail("not_found","modify",path);
@@ -600,23 +637,16 @@ std::shared_ptr<const ReadSource> FileSystem::OpenReadSource(std::string_view pa
 }
 SDL_IOStream* FileSystem::Open(std::string_view path,const OpenMode& mode) const {
     VFS_PROFILE_SCOPE(Open);
-    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
-    const auto* node=view.Resolve(p);
-    if(mode.exclusive&&node) Fail("already_exists","open exclusive",p);
-    if(node&&node->info.type==NodeType::Directory) Fail("is_directory","open",p);
-    if(node&&node->info.size>MaxFilePosition) Fail("out_of_range","open",p);
-    if(mode.writable) {
-        if(node&&node->mount) Fail("read_only","open",p);
-        const auto& d=impl_->Route(p);
-        if(mode.base=='r'&&!node) Fail("not_found","open",p);
-        impl_->CheckNewName(view,p); impl_->RequireParent(view,d,p);
-        const auto disk=impl_->Destination(view,d,p); impl_->CheckBacking(disk,p,false);
-        return detail::OpenNative(disk,mode,p);
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex);
+    for(unsigned attempt=0;attempt!=2;++attempt) {
+        const auto view=impl_->Scan();
+        try { return impl_->OpenInView(view,p,mode); }
+        catch(const detail::NativeViewChanged&) {
+            // A replaced leaf must be re-authorized, never truncated via the
+            // previous identity. Bound retries under a continuously mutating tree.
+        }
     }
-    if(!node) Fail("not_found","open",p);
-    if(node->mount) return node->mount->package->Open(node->relative);
-    if(!node->directory) Fail("not_found","open",p);
-    return detail::OpenNative(node->disk,mode,p);
+    Fail("resource_busy","filesystem changed while opening",p);
 }
 bool FileSystem::CreateDirectory(std::string_view path) const {
     VFS_PROFILE_SCOPE(CreateDirectory);

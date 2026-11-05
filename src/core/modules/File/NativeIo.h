@@ -4,10 +4,29 @@
 #include <string_view>
 #include <optional>
 #include <cstdint>
+#include <array>
+#include <exception>
 namespace core::modules::File {
 struct OpenMode;
 namespace detail {
-SDL_IOStream* OpenNative(const std::filesystem::path&,const OpenMode&,std::string_view virtualPath);
+using NativeFileIdentity=std::array<std::uint64_t,3>; // Volume serial followed by the 128-bit file ID.
+// Windows only: the caller retains a verified parent directory anchor until
+// OpenNative returns. leaf is its actual single-component filesystem spelling.
+// No identity means the caller verified that the target was missing.
+// Windows requires a non-null target; other platforms retain the path backend.
+struct NativeOpenTarget {
+    void* parentDirectory{};
+    std::filesystem::path leaf;
+    std::optional<NativeFileIdentity> expectedIdentity;
+};
+// Internal retry signal; never translate this directly into a public API error.
+// The VFS must discard its view and revalidate before trying again.
+class NativeViewChanged final : public std::exception {
+public:
+    const char* what() const noexcept override { return "native file identity changed"; }
+};
+SDL_IOStream* OpenNative(const std::filesystem::path&,const OpenMode&,std::string_view virtualPath,
+    const NativeOpenTarget* target=nullptr);
 std::optional<std::uint64_t> NativeModified(SDL_IOStream*,std::string_view virtualPath = {});
 }
 }

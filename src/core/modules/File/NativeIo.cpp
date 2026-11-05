@@ -5,11 +5,14 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstring>
+#include <limits>
 #include <memory>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#include <winternl.h>
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -173,25 +176,69 @@ struct NativeStream {
         return true;
     }
 };
+#ifdef _WIN32
+bool OpenRelative(NativeStream& source,const NativeOpenTarget& target,std::string_view virtualPath) {
+    const auto& leaf=target.leaf.native();
+    if(!target.parentDirectory||target.parentDirectory==INVALID_HANDLE_VALUE||leaf.empty()||
+        leaf==L"."||leaf==L".."||leaf.find_first_of(L"\\/:")!=leaf.npos||leaf.find(L'\0')!=leaf.npos||
+        leaf.size()>std::numeric_limits<USHORT>::max()/sizeof(wchar_t))
+        throw std::invalid_argument("native relative open requires a verified parent and single filename");
+    const auto& mode=source.mode;
+    if(mode.exclusive&&target.expectedIdentity) { source.Fail("already_exists"); return false; }
+    if(mode.base=='r'&&!target.expectedIdentity) { source.Fail("not_found"); return false; }
+    DWORD access=FILE_READ_ATTRIBUTES|SYNCHRONIZE|(mode.readable?GENERIC_READ:0);
+    if(mode.writable) access|=mode.append?FILE_APPEND_DATA:GENERIC_WRITE;
+    UNICODE_STRING name{};
+    name.Buffer=const_cast<PWSTR>(leaf.data());
+    name.Length=static_cast<USHORT>(leaf.size()*sizeof(wchar_t)); name.MaximumLength=name.Length;
+    OBJECT_ATTRIBUTES object{};
+    InitializeObjectAttributes(&object,&name,0,target.parentDirectory,nullptr);
+    IO_STATUS_BLOCK io{};
+    const auto status=NtCreateFile(&source.file,access,&object,&io,nullptr,FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,target.expectedIdentity?FILE_OPEN:FILE_CREATE,
+        FILE_SYNCHRONOUS_IO_NONALERT|FILE_OPEN_REPARSE_POINT|FILE_NON_DIRECTORY_FILE,nullptr,0);
+    if(status<0) {
+        const auto error=RtlNtStatusToDosError(status);
+        source.file=INVALID_HANDLE_VALUE;
+        if((target.expectedIdentity&&(error==ERROR_FILE_NOT_FOUND||error==ERROR_PATH_NOT_FOUND))||
+            (!target.expectedIdentity&&!mode.exclusive&&(error==ERROR_FILE_EXISTS||error==ERROR_ALREADY_EXISTS)))
+            throw NativeViewChanged();
+        source.Fail(IoErrorCode({static_cast<int>(error),std::system_category()})); return false;
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    VFS_PROFILE_ADD(AttributeQueries,1);
+    if(!GetFileInformationByHandle(source.file,&info)) { source.SystemFailure(); return false; }
+    if((info.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))||GetFileType(source.file)!=FILE_TYPE_DISK)
+        throw AccessError("open '"+std::string(virtualPath)+"': redirected/non-file backend refused");
+    FILE_ID_INFO identity{};
+    VFS_PROFILE_ADD(IdentityQueries,1);
+    if(!GetFileInformationByHandleEx(source.file,FileIdInfo,&identity,sizeof(identity))) { source.SystemFailure(); return false; }
+    NativeFileIdentity actual{identity.VolumeSerialNumber,0,0};
+    std::memcpy(&actual[1],identity.FileId.Identifier,sizeof(identity.FileId.Identifier));
+    if(target.expectedIdentity&&actual!=*target.expectedIdentity) throw NativeViewChanged();
+    if(mode.base=='w'&&target.expectedIdentity) {
+        // CREATE_ALWAYS refuses existing hidden/system files with our flags.
+        // Preserve that result before touching an already verified generation.
+        if(info.dwFileAttributes&(FILE_ATTRIBUTE_HIDDEN|FILE_ATTRIBUTE_SYSTEM)) { source.Fail("permission_denied"); return false; }
+        LARGE_INTEGER zero{};
+        if(!SetFilePointerEx(source.file,zero,nullptr,FILE_BEGIN)||!SetEndOfFile(source.file)) {
+            source.SystemFailure(); return false;
+        }
+    }
+    return true;
 }
-SDL_IOStream* OpenNative(const std::filesystem::path& path,const OpenMode& mode,std::string_view virtualPath) {
+#endif
+}
+SDL_IOStream* OpenNative(const std::filesystem::path& path,const OpenMode& mode,std::string_view virtualPath,
+    const NativeOpenTarget* target) {
     VFS_PROFILE_SCOPE(NativeOpen);
     auto source=std::make_unique<NativeStream>(); source->mode=mode;
 #ifdef _WIN32
-    DWORD access=FILE_READ_ATTRIBUTES|(mode.readable?GENERIC_READ:0);
-    if(mode.writable) access|=mode.append?FILE_APPEND_DATA:GENERIC_WRITE;
-    const DWORD creation=mode.exclusive?CREATE_NEW:mode.base=='w'?CREATE_ALWAYS:mode.base=='a'?OPEN_ALWAYS:OPEN_EXISTING;
-    source->file=CreateFileW(path.c_str(),access,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,creation,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
-    if(source->file==INVALID_HANDLE_VALUE) source->SystemFailure();
-    else {
-        BY_HANDLE_FILE_INFORMATION info{};
-        VFS_PROFILE_ADD(AttributeQueries,1);
-        if(!GetFileInformationByHandle(source->file,&info)) source->SystemFailure();
-        else if((info.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))||GetFileType(source->file)!=FILE_TYPE_DISK)
-            throw AccessError("open '"+std::string(virtualPath)+"': redirected/non-file backend refused");
-        else goto opened;
-    }
+    (void)path;
+    if(!target) throw std::invalid_argument("native Windows open requires a verified parent directory");
+    if(OpenRelative(*source,*target,virtualPath)) goto opened;
 #else
+    (void)target;
     int flags=mode.readable?(mode.writable?O_RDWR:O_RDONLY):O_WRONLY;
     if(mode.base=='w') flags|=O_CREAT|O_TRUNC;
     if(mode.append) flags|=O_CREAT|O_APPEND;
