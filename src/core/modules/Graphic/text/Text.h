@@ -64,16 +64,24 @@ struct Limits {
     std::size_t maxGlyphCacheBytes{64*1024*1024}, maxGlyphBitmapBytes{16*1024*1024};
     std::uint32_t maxGlyphDimension{8192};
     std::size_t maxGlyphCacheEntries{8192};
+    // Optional content LRU: accounted retained data, font bytes and node storage.
+    // Either zero disables caching; valid layouts larger than the cap bypass it.
+    std::size_t maxLayoutCacheBytes{32*1024*1024}, maxLayoutCacheEntries{512};
 };
-// Each call owns its mutable FreeType/HarfBuzz/Unicode objects. Engine is safe
+// Cache misses own their mutable FreeType/HarfBuzz/Unicode objects. Engine is safe
 // for independent concurrent CPU calls; returned objects only contain owned data.
 class Engine final {
 public:
     explicit Engine(Limits = {});
+    ~Engine();
+    Engine(const Engine&)=delete;
+    Engine& operator=(const Engine&)=delete;
     std::shared_ptr<const LayoutResult> Layout(FontRef, std::string_view, double size, const Style&) const;
     std::optional<std::string> Wrap(FontRef, std::string_view, double size, const Style&, double width, double height) const;
 private:
+    struct LayoutCache;
     Limits limits;
+    std::unique_ptr<LayoutCache> cache;
 };
 // Owned by the Graphic Lua context, shared by module/object entry points and
 // coroutines. It is never a process-global or a Canvas-private style.

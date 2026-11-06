@@ -8,6 +8,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <list>
 #include <map>
 #include <mutex>
 #include <set>
@@ -174,12 +175,145 @@ Point LayoutResult::AnchorPoint() const noexcept {
     const auto index=static_cast<unsigned>(style.anchor);
     return {bounds.left+static_cast<double>(index%3)*bounds.Width()/2,bounds.top+static_cast<double>(index/3)*bounds.Height()/2};
 }
+struct Engine::LayoutCache {
+    template<class T> struct OwnerLess {
+        bool operator()(const std::shared_ptr<const T>& a,const std::shared_ptr<const T>& b) const noexcept {
+            if(a.owner_before(b))return true;if(b.owner_before(a))return false;
+            return std::less<const T*>{}(a.get(),b.get());
+        }
+    };
+    struct Entry {
+        std::size_t hash{},bytes{};
+        std::string source;
+        std::shared_ptr<const LayoutResult> layout;
+    };
+    struct Usage { std::size_t references{},bytes{}; };
+    using Entries=std::list<Entry>;
+    using Index=std::multimap<std::size_t,Entries::iterator>;
+    using Fonts=std::map<std::shared_ptr<const Resource::Fonts::FontAsset>,Usage,OwnerLess<Resource::Fonts::FontAsset>>;
+    using Buffers=std::map<std::shared_ptr<const std::string>,Usage,OwnerLess<std::string>>;
+    // Account payload capacities, shared-object headers and conservative node
+    // overhead. This bounds retained data, not the process allocator's exact RSS.
+    static constexpr std::size_t sharedHeader=64,treeLinks=4*sizeof(void*),listLinks=2*sizeof(void*);
+    const std::size_t maxBytes,maxEntries;
+    std::size_t bytes{sizeof(LayoutCache)};
+    Entries entries;
+    Index index;
+    Fonts fonts;
+    Buffers buffers;
+    std::mutex mutex;
+    explicit LayoutCache(const Limits& limits):maxBytes(limits.maxLayoutCacheBytes),maxEntries(limits.maxLayoutCacheEntries){}
+    static std::size_t Add(std::size_t a,std::size_t b) noexcept {
+        return a>std::numeric_limits<std::size_t>::max()-b ? std::numeric_limits<std::size_t>::max():a+b;
+    }
+    static std::size_t FontBytes() noexcept {
+        return sizeof(Resource::Fonts::FontAsset)+sharedHeader+sizeof(Fonts::value_type)+treeLinks;
+    }
+    static std::size_t BufferBytes(const std::string& value) noexcept {
+        return Add(value.capacity(),sizeof(std::string)+1+sharedHeader+sizeof(Buffers::value_type)+treeLinks);
+    }
+    static std::size_t EntryBytes(const Entry& entry) noexcept {
+        const auto& layout=*entry.layout;
+        auto value=sizeof(Entry)+listLinks+sizeof(Index::value_type)+treeLinks+sizeof(LayoutResult)+sharedHeader;
+        value=Add(value,Add(entry.source.capacity(),1));
+        value=Add(value,Add(layout.text.capacity(),1));
+        value=Add(value,layout.glyphs.capacity()*sizeof(Glyph));
+        return Add(value,layout.lines.capacity()*sizeof(Line));
+    }
+    static bool SameOwner(const auto& a,const auto& b) noexcept {
+        return a.get()==b.get() && !a.owner_before(b) && !b.owner_before(a);
+    }
+    static auto Bits(double value) noexcept { return std::bit_cast<std::uint64_t>(value); }
+    static std::size_t Hash(const FontRef& font,std::string_view source,double size,const Style& s) noexcept {
+        auto hash=std::hash<std::string_view>{}(source);
+        const auto mix=[&](std::uint64_t value){hash^=std::hash<std::uint64_t>{}(value)+0x9e3779b97f4a7c15ull+(hash<<6)+(hash>>2);};
+        mix(reinterpret_cast<std::uintptr_t>(font.asset.get()));mix(font.generation.owner);mix(font.generation.slot);mix(font.generation.generation);
+        mix(Bits(size));mix(static_cast<unsigned>(s.anchor));mix(static_cast<unsigned>(s.align));mix(static_cast<unsigned>(s.writingMode));
+        mix(Bits(s.letterSpacing));mix(Bits(s.lineSpacing));mix(Bits(s.outlineWidth));mix(s.outlineColor);return hash;
+    }
+    static bool Matches(const Entry& entry,const FontRef& font,std::string_view source,double size,const Style& s) noexcept {
+        const auto& value=*entry.layout;const auto& prior=value.style;
+        return value.font.generation==font.generation && SameOwner(value.font.asset,font.asset) && entry.source==source && Bits(value.size)==Bits(size) &&
+            prior.anchor==s.anchor && prior.align==s.align && prior.writingMode==s.writingMode && Bits(prior.letterSpacing)==Bits(s.letterSpacing) &&
+            Bits(prior.lineSpacing)==Bits(s.lineSpacing) && Bits(prior.outlineWidth)==Bits(s.outlineWidth) && prior.outlineColor==s.outlineColor;
+    }
+    std::shared_ptr<const LayoutResult> FindLocked(std::size_t hash,const FontRef& font,std::string_view source,double size,const Style& style) {
+        const auto range=index.equal_range(hash);
+        for(auto it=range.first;it!=range.second;++it)if(Matches(*it->second,font,source,size,style)) {
+            entries.splice(entries.begin(),entries,it->second);return it->second->layout;
+        }
+        return {};
+    }
+    std::shared_ptr<const LayoutResult> Find(const FontRef& font,std::string_view source,double size,const Style& style) {
+        std::lock_guard lock(mutex);return FindLocked(Hash(font,source,size,style),font,source,size,style);
+    }
+    void Evict() noexcept {
+        auto entry=std::prev(entries.end());
+        const auto range=index.equal_range(entry->hash);
+        for(auto it=range.first;it!=range.second;++it)if(it->second==entry){index.erase(it);break;}
+        bytes-=entry->bytes;
+        const auto font=fonts.find(entry->layout->font.asset);
+        if(--font->second.references==0) {
+            const auto buffer=buffers.find(font->first->bytes);
+            if(--buffer->second.references==0){bytes-=buffer->second.bytes;buffers.erase(buffer);}
+            bytes-=font->second.bytes;fonts.erase(font);
+        }
+        entries.erase(entry);
+    }
+    std::shared_ptr<const LayoutResult> Remember(std::shared_ptr<const LayoutResult> layout,std::string_view source) {
+        try {
+            Entry entry{Hash(layout->font,source,layout->size,layout->style),0,std::string(source),layout};entry.bytes=EntryBytes(entry);
+            // An oversized result must not evict useful content before bypassing.
+            const auto minimum=Add(sizeof(LayoutCache),Add(entry.bytes,Add(FontBytes(),BufferBytes(*layout->font.asset->bytes))));
+            if(minimum>maxBytes)return layout;
+            std::lock_guard lock(mutex);
+            if(auto found=FindLocked(entry.hash,layout->font,source,layout->size,layout->style))return found;
+            for(;;) {
+                const auto font=fonts.find(layout->font.asset);
+                const auto buffer=buffers.find(layout->font.asset->bytes);
+                auto needed=entry.bytes;
+                if(font==fonts.end())needed=Add(needed,FontBytes());
+                if(buffer==buffers.end())needed=Add(needed,BufferBytes(*layout->font.asset->bytes));
+                if(entries.size()<maxEntries && needed<=maxBytes-bytes)break;
+                if(entries.empty())return layout;Evict();
+            }
+            // Allocate every node before changing counts. Failed admission is
+            // optional: roll back bookkeeping and still return the valid layout.
+            auto buffer=buffers.end();auto font=fonts.end();auto added=entries.end();bool newBuffer{},newFont{};
+            try {
+                auto b=buffers.try_emplace(layout->font.asset->bytes,Usage{0,BufferBytes(*layout->font.asset->bytes)});buffer=b.first;newBuffer=b.second;
+                auto f=fonts.try_emplace(layout->font.asset,Usage{0,FontBytes()});font=f.first;newFont=f.second;
+                entries.push_front(std::move(entry));added=entries.begin();index.emplace(added->hash,added);
+            } catch(...) {
+                if(added!=entries.end())entries.erase(added);if(newFont)fonts.erase(font);if(newBuffer)buffers.erase(buffer);throw;
+            }
+            ++font->second.references;
+            if(newFont){++buffer->second.references;bytes+=font->second.bytes;}
+            if(newBuffer)bytes+=buffer->second.bytes;
+            bytes+=added->bytes;
+        } catch(const std::bad_alloc&) { /* Content caching must not fail a successful layout. */ }
+        return layout;
+    }
+};
+
 Engine::Engine(Limits value):limits(value) {
     if(!limits.maxTextBytes || !limits.maxGlyphs || !limits.maxLines || !limits.maxWrapCandidates || !limits.maxWrapShapeBytes)throw std::invalid_argument("Text CPU limits must be positive");
+    if(limits.maxLayoutCacheBytes>=sizeof(LayoutCache) && limits.maxLayoutCacheEntries) {
+        try {cache=std::make_unique<LayoutCache>(limits);} catch(const std::bad_alloc&) {}
+    }
 }
+Engine::~Engine()=default;
 std::shared_ptr<const LayoutResult> Engine::Layout(FontRef font,std::string_view text,double size,const Style& style) const {
-    Validate(size,style);auto decoded=detail::Decode(text,limits.maxTextBytes);detail::Face face(std::move(font));
-    return MakeLayout(face,std::move(decoded),size,style,limits);
+    Validate(size,style);
+    // A hit only reuses immutable, previously validated content. Invalid inputs
+    // retain the original Decode-before-Face error order on the miss path.
+    if(cache && text.size()<=limits.maxTextBytes && font.asset && font.asset->bytes &&
+        !font.asset->bytes->empty() && font.asset->bytes->size()<=32*1024*1024) {
+        if(auto found=cache->Find(font,text,size,style))return found;
+    }
+    auto decoded=detail::Decode(text,limits.maxTextBytes);detail::Face face(std::move(font));
+    auto result=MakeLayout(face,std::move(decoded),size,style,limits);
+    return cache ? cache->Remember(std::move(result),text):result;
 }
 std::optional<std::string> Engine::Wrap(FontRef font,std::string_view source,double size,const Style& style,double width,double height) const {
     Validate(size,style);Finite(width,"Text wrap width must be finite");Finite(height,"Text wrap height must be finite");

@@ -34,7 +34,13 @@ Anchor 是 `top_left/top/top_right/left/center/right/bottom_left/bottom/bottom_r
 
 实现固定 FreeType 2.14.1、HarfBuzz 12.3.0、SheenBidi 3.0.0、libunibreak 8.0 与 Unicode 17.0.0 数据，语言使用 `und`，不读取 OS locale。横排行框来自字体 ascent/descent，默认推进来自字体 height（无有效 height 时使用行框高度）。有有效 vhea 的竖排使用其 ascent/descent/line-gap；缺少有效垂直行度量时固定使用居中一 em 的列框和推进，字形竖排原点/advance 仍由 HarfBuzz 的 OpenType 度量与固定回退产生。CPU 度量使用未 hint 的设计单位，栅格尺度与逻辑字号分开。
 
-每次 CPU 操作拥有独立的 FreeType face/library 与塑形状态，字体字节保持 Resource 原来的强引用和预算归属。布局和准备结果保留字体代次；同名重载不会替换已接受命令的字体。字形覆盖缓存按字体完整代次、glyph、字号、方向、描边宽度和栅格尺度区分。缓存淘汰不复用仍被命令引用的覆盖数据；GPU 上传与 fence 保活由 Renderer 承担。Width/Height/Wrap 不调用 GPU 或等待 Present。
+布局缓存未命中及需要塑形的操作拥有独立的 FreeType face/library 与塑形状态，字体字节保持 Resource 原来的强引用和预算归属。布局和准备结果保留字体代次；同名重载不会替换已接受命令的字体。字形覆盖缓存按字体完整代次、glyph、字号、方向、描边宽度和栅格尺度区分。缓存淘汰不复用仍被命令引用的覆盖数据；GPU 上传与 fence 保活由 Renderer 承担。Width/Height/Wrap 不调用 GPU 或等待 Present。
+
+`RenderText`、`GetTextWidth` 和 `GetTextHeight` 共用有界的内容布局缓存。键包含字体所有权与完整代次、原始文本、字号和全部文字状态（包括描边颜色）；命中仍检查当前字体及本次参数。相同内容可避免重复解码与塑形，不需要游戏维护额外句柄。缓存最多保留 512 项，按最近使用顺序淘汰；计入文本、布局容量、管理节点及去重后的字体字节，保留数据额度为 32 MiB。这是缓存的核算上限，不是整个进程的内存上限。超出单项额度或缓存分配失败时，正常布局仍可返回而不进入缓存。
+
+字体卸载后，新调用仍须取得有效字体；缓存及已接受的绘制可暂时保留旧代次的不可变数据。布局缓存持有的引用在淘汰或文字上下文销毁时释放，已在使用的布局不失效。Wrap 算法保持原样；没有跨调用的 PreparedText 缓存。栅格尺度、Canvas 范围和绘制坐标仍在本次准备与绘制时处理。
+
+GPU 字形资源命中通过索引定位后核对共享所有权；在途 lease 可复用，同一次文字的描边和填充复用已取得的资源。缓存本身不强行保留 lease 或 CPU 字形覆盖图；回收在帧/fence 边界及预算压力下执行。仍先绘制整段描边，再绘制整段填充，不按缓存位置改变文字顺序。
 
 默认实现上限：输入 UTF-8 1 MiB，262,144 个 glyph，16,384 行/列；Wrap 最多 65,536 个候选及累计 64 MiB 候选塑形输入。单次 HarfBuzz 塑形缓冲上限 262,144 个点位/glyph，内部操作预算 8,388,608；超限明确报错。每个 FreeType 操作的内部申请上限 32 MiB；单 glyph 最大边 8,192 像素、覆盖数据 16 MiB，覆盖缓存 64 MiB/8,192 项。仍被 Draw 引用的覆盖数据计入缓存预算；不足时明确报错。临时新栅格最多额外占用一个 glyph 的准备额度，不等待正在引用缓存的调用自己释放。
 
