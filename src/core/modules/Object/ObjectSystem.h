@@ -1,5 +1,6 @@
 #pragma once
 #include "ObjectPool.h"
+#include <memory>
 #include <vector>
 
 namespace core::modules::Object {
@@ -43,6 +44,9 @@ private:
     std::vector<ObjectHandle> order_,activeOrder_,snapshot_,activate_,deletions_;
     struct CollisionEntry { ObjectHandle handle; Object* object; };
     std::vector<CollisionEntry> sources_,targets_;
+    // Optional, at most 65536 doubles (512 KiB). Contents are rebuilt for each
+    // dispatch and discarded logically at its first callback; no cross-call index.
+    std::unique_ptr<double[]> collisionRadii_;
     // A fixed-capacity FIFO contains each pending deletion exactly once. Pop
     // before invoking Lua so failure cannot retry it; callback additions append.
     std::size_t deleteHead_{},deleteCount_{},validCount_{};
@@ -52,6 +56,7 @@ private:
     bool Candidate(const Object&,std::int32_t) const noexcept;
     bool Intersects(ObjectHandle,ObjectHandle) const;
     bool Intersects(const Object&,const Object&) const;
+    bool PrepareCollisionBounds(bool sameGroup) noexcept;
     void Compact() noexcept;
     void Reclaim(ObjectHandle,ObjectCallbacks&) noexcept;
     ObjectHandle PopDeletion() noexcept;

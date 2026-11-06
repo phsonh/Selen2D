@@ -42,6 +42,34 @@ Shape Make(const Collider& c,double scale) {
     return s;
 }
 }
+double ConservativeRadius(const Collider& c) noexcept {
+    constexpr double maximum=0x1p20,minimum=0x1p-20;
+    const auto extent=[](double v) { return v==0 || (v>=minimum && v<=maximum); };
+    if(!(std::abs(c.x)<=maximum && std::abs(c.y)<=maximum)
+        || !extent(c.a) || !extent(c.b) || !std::isfinite(c.rotationDegrees)) return -1;
+    if(c.rectangle) {
+        // Use the same axes as the narrow phase. Check their actual norm so the
+        // bound does not depend on a platform libm's advertised sin/cos accuracy.
+        const auto axis=Axis(c.rotationDegrees);
+        const double norm=Dot(axis,axis);
+        constexpr double rounding=8*std::numeric_limits<double>::epsilon();
+        if(!(norm>=1-rounding && norm<=1+rounding)) return -1;
+        return c.a+c.b;
+    }
+    return (c.a+c.b)*.5;
+}
+bool Separated(double dx,double dy,double firstRadius,double secondRadius) noexcept {
+    if(firstRadius<0 || secondRadius<0) return false;
+    // In the admitted range scale <= 2^21 and nonzero normalized extents >=
+    // 2^-41: the narrow phase cannot overflow/underflow. Its largest normalized
+    // errorScale is 10 before rounding (OBB SAT). A conservative allowance of
+    // 4096 machine epsilons times scale (<= 2^-19) covers its contact slack, the
+    // checked axis norm and rounding in normalization/projections/subtraction.
+    // The 2^-16 enclosure is larger still; it only admits more narrow tests.
+    // Outside that range ConservativeRadius returns -1, preserving old errors.
+    const double radius=firstRadius+secondRadius+0x1p-16;
+    return std::abs(dx)>radius || std::abs(dy)>radius;
+}
 bool Intersects(const Collider& first,const Collider& second) {
     Validate(first); Validate(second);
     Vec d{second.x-first.x,second.y-first.y};

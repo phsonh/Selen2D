@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <new>
 #include <stdexcept>
 
 namespace core::modules::Object {
@@ -121,6 +122,7 @@ bool ObjectSystem::FinalizeShutdown(ObjectCallbacks& cb) {
     // No synthetic Delete calls for survivors, no pending activation.
     for(auto h:order_) Reclaim(h,cb);
     order_.clear(); activeOrder_.clear(); snapshot_.clear(); activate_.clear(); sources_.clear(); targets_.clear();
+    collisionRadii_.reset();
     deleteHead_=deleteCount_=validCount_=0; orderDirty_=false; finalized_=true;
     return cleanupSucceeded_;
 }
@@ -153,6 +155,24 @@ bool ObjectSystem::Intersects(const Object& first,const Object& second) const {
     };
     return Collision::Intersects(collider(first),collider(second));
 }
+bool ObjectSystem::PrepareCollisionBounds(bool sameGroup) noexcept {
+    constexpr std::size_t maximumEntries=65536,minimumPairs=256;
+    const auto count=sources_.size()+targets_.size();
+    if(count>maximumEntries || sources_.empty()) return false;
+    const auto pairs=sameGroup?sources_.size()*(sources_.size()-1)/2:sources_.size()*targets_.size();
+    if(pairs<minimumPairs) return false;
+    if(!collisionRadii_) {
+        collisionRadii_.reset(new(std::nothrow) double[std::min<std::size_t>(pool_.capacity(),maximumEntries)]);
+        if(!collisionRadii_) return false; // Optional acceleration cannot fail Collide.
+    }
+    std::size_t index=0;
+    for(const auto* list:{&sources_,&targets_}) for(const auto& entry:*list) {
+        const auto& obj=*entry.object;
+        collisionRadii_[index++]=obj.collision.enabled?Collision::ConservativeRadius({obj.transform.x,obj.transform.y,
+            obj.collision.a,obj.collision.b,obj.transform.rot,obj.collision.rectangle}):-1;
+    }
+    return true;
+}
 void ObjectSystem::Collide(std::int32_t groupA,std::int32_t groupB,ObjectCallbacks& cb) {
     if(groupA<0 || groupB<0) throw std::invalid_argument("Object collision groups must be non-negative");
     Dispatch dispatch(dispatching_); Compact(); sources_.clear(); targets_.clear();
@@ -173,20 +193,43 @@ void ObjectSystem::Collide(std::int32_t groupA,std::int32_t groupB,ObjectCallbac
         if(group==groupA) sources_.push_back({h,obj});
         if(groupA!=groupB && group==groupB) targets_.push_back({h,obj});
     }
+    // Probe the first eligible pair before paying for bounds. Dense/early-hit
+    // calls immediately take the original path without preparing unused data.
+    bool filter=false,prepare=true;
     if(groupA==groupB) {
         for(std::size_t i=0;i<sources_.size();++i) for(std::size_t j=i+1;j<sources_.size();++j) {
             const auto a=sources_[i],b=sources_[j];
             if(!Candidate(*a.object,groupA)) break;
-            if(!Candidate(*b.object,groupA) || !Intersects(*a.object,*b.object)) continue;
+            if(!Candidate(*b.object,groupA)) continue;
+            if(filter && collisionRadii_[i]>=0 && collisionRadii_[j]>=0
+                && Collision::Separated(b.object->transform.x-a.object->transform.x,
+                b.object->transform.y-a.object->transform.y,collisionRadii_[i],collisionRadii_[j])) continue;
+            if(!Intersects(*a.object,*b.object)) {
+                if(prepare) { prepare=false; filter=PrepareCollisionBounds(true); }
+                continue;
+            }
+            // A native or Lua callback can change ANY member without a setter.
+            // Finish this pair, then enumerate the untouched suffix normally.
+            prepare=false; filter=false;
             cb.Collision(a.handle,b.handle);
             // This pair's geometry is evaluated once. Live eligibility is checked
             // again; changed positions/sizes affect subsequent pairs.
             if(Candidate(*a.object,groupA) && Candidate(*b.object,groupA)) cb.Collision(b.handle,a.handle);
         }
     } else {
-        for(auto a:sources_) for(auto b:targets_) {
+        for(std::size_t i=0;i<sources_.size();++i) for(std::size_t j=0;j<targets_.size();++j) {
+            const auto a=sources_[i],b=targets_[j];
             if(!Candidate(*a.object,groupA)) break;
-            if(Candidate(*b.object,groupB) && Intersects(*a.object,*b.object)) cb.Collision(a.handle,b.handle);
+            if(!Candidate(*b.object,groupB)) continue;
+            if(filter && collisionRadii_[i]>=0 && collisionRadii_[sources_.size()+j]>=0
+                && Collision::Separated(b.object->transform.x-a.object->transform.x,
+                b.object->transform.y-a.object->transform.y,collisionRadii_[i],collisionRadii_[sources_.size()+j])) continue;
+            if(!Intersects(*a.object,*b.object)) {
+                if(prepare) { prepare=false; filter=PrepareCollisionBounds(false); }
+                continue;
+            }
+            prepare=false; filter=false;
+            cb.Collision(a.handle,b.handle);
         }
     }
 }
