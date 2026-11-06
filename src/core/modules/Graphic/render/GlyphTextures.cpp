@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace core::modules::Graphic::Render::GlyphTextures {
@@ -25,6 +26,7 @@ enum class Phase { Prepared, Encoded, Ready };
 struct State {
     std::shared_ptr<Gate> gate;
     std::weak_ptr<const Text::GlyphBitmap> source;
+    std::weak_ptr<const Entry> lease;
     const Text::GlyphBitmap* identity{};
     SDL_GPUTexture* fill{};
     SDL_GPUTexture* ring{};
@@ -44,6 +46,9 @@ struct Store::Impl {
     std::shared_ptr<detail::Gate> gate;
     Config config;
     std::vector<std::shared_ptr<detail::State>> cache;
+    // The raw address narrows the lookup only. Shared ownership is checked on
+    // every hit, including address reuse and distinct aliasing owners.
+    std::unordered_multimap<const Text::GlyphBitmap*, std::weak_ptr<detail::State>> index;
     std::vector<Lease> encoded;
     SDL_GPUCommandBuffer* command{};
     SDL_GPUSampler* sampler{};
@@ -52,7 +57,7 @@ struct Store::Impl {
     Impl(SDL_GPUDevice* device, Config c) : gate(std::make_shared<detail::Gate>(device)), config(c) {
         if (!device || !c.maxEntries || c.maxEntries > 65536 || !c.maxBytes)
             throw std::invalid_argument("Glyph textures require a device and bounded nonzero limits");
-        cache.reserve(c.maxEntries); encoded.reserve(c.maxEntries);
+        cache.reserve(c.maxEntries); encoded.reserve(c.maxEntries); index.reserve(c.maxEntries);
         SDL_GPUSamplerCreateInfo create{};
         create.min_filter = create.mag_filter = SDL_GPU_FILTER_LINEAR;
         create.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
@@ -71,11 +76,15 @@ struct Store::Impl {
         SDL_ReleaseGPUTransferBuffer(gate->device, state.transfer); state.transfer = nullptr;
         stats.bytes -= state.transferBytes; --stats.transfers;
     }
-    void Erase(std::size_t index) noexcept {
-        auto& state = *cache[index];
+    void Erase(std::size_t position) noexcept {
+        auto& state = *cache[position];
+        const auto range = index.equal_range(state.identity);
+        for (auto it = range.first; it != range.second; ++it) if (it->second.lock().get() == &state) {
+            index.erase(it); break;
+        }
         stats.bytes -= state.textureBytes + (state.transfer ? state.transferBytes : 0);
         if (state.transfer) --stats.transfers;
-        Release(state); cache.erase(cache.begin() + index);
+        Release(state); cache.erase(cache.begin() + position);
     }
     void Space(std::uint64_t bytes) {
         if (bytes > config.maxBytes) throw std::length_error("Glyph textures exceed GPU/transfer byte budget");
@@ -110,18 +119,30 @@ Lease Store::Acquire(std::shared_ptr<const Text::GlyphBitmap> source) {
     const auto pixels = std::uint64_t(source->width) * source->height;
     if (source->fill.size() != pixels || source->ring.size() != pixels)
         throw std::invalid_argument("Glyph masks must match the shared bitmap rectangle");
-    Reclaim();
-    for (const auto& state : impl_->cache)
-        if (state->identity == source.get() && !state->source.owner_before(source) && !source.owner_before(state->source)) {
-            auto lease = Lease(new Entry(state, std::move(source)));
+    const auto range = impl_->index.equal_range(source.get());
+    for (auto it = range.first; it != range.second; ++it) {
+        const auto state = it->second.lock();
+        if (state && !state->source.owner_before(source) && !source.owner_before(state->source)) {
+            // Reuse an existing draw/fence pin without keeping it alive in the
+            // cache. A strong cached Entry would pin CPU masks beyond their budget.
+            auto lease = state->lease.lock();
+            if (!lease) {
+                lease = Lease(new Entry(state, std::move(source)));
+                state->lease = lease;
+            }
             state->lastUse = ++impl_->sequence; ++impl_->stats.hits; return lease;
         }
+    }
     const auto rowPitch = (std::uint64_t(source->width) * 4 + 255) & ~std::uint64_t(255);
     const auto planeBytes = rowPitch * source->height;
     const auto ringOffset = (planeBytes + 511) & ~std::uint64_t(511);
     const auto transferBytes = ringOffset + planeBytes;
     if (transferBytes > std::numeric_limits<std::uint32_t>::max()) throw std::length_error("Glyph upload exceeds SDL transfer size range");
     const auto textureBytes = pixels * 8;
+    // Ordinary hits need no whole-cache walk. The renderer reclaims at frame /
+    // fence boundaries; pressure also retires unused transfers before eviction.
+    if (impl_->cache.size() >= impl_->config.maxEntries ||
+        textureBytes + transferBytes > impl_->config.maxBytes - impl_->stats.bytes) Reclaim();
     impl_->Space(textureBytes + transferBytes);
     if (!SDL_GPUTextureSupportsFormat(impl_->gate->device, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
         SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER))
@@ -134,6 +155,7 @@ Lease Store::Acquire(std::shared_ptr<const Text::GlyphBitmap> source) {
     state->transferBytes = static_cast<std::uint32_t>(transferBytes);
     state->textureBytes = textureBytes; state->lastUse = ++impl_->sequence;
     auto lease = Lease(new Entry(state, std::move(source)));
+    state->lease = lease;
     try {
         SDL_GPUTextureCreateInfo texture{};
         texture.type = SDL_GPU_TEXTURETYPE_2D; texture.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -147,6 +169,7 @@ Lease Store::Acquire(std::shared_ptr<const Text::GlyphBitmap> source) {
         transfer.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD; transfer.size = state->transferBytes;
         state->transfer = SDL_CreateGPUTransferBuffer(impl_->gate->device, &transfer);
         if (!state->transfer) throw std::runtime_error(std::string("Glyph transfer creation failed: ") + SDL_GetError());
+        impl_->index.emplace(state->identity, state);
     } catch (...) { impl_->Release(*state); throw; }
     impl_->cache.push_back(std::move(state)); impl_->stats.bytes += textureBytes + transferBytes; ++impl_->stats.transfers;
     return lease;
@@ -232,6 +255,6 @@ void Store::Shutdown() {
     for (const auto& state : impl_->cache) impl_->Release(*state);
     if (impl_->sampler) SDL_ReleaseGPUSampler(impl_->gate->device, impl_->sampler);
     impl_->sampler = nullptr;
-    impl_->encoded.clear(); impl_->cache.clear(); impl_->command = nullptr; impl_->stats = {}; impl_->gate->device = nullptr;
+    impl_->encoded.clear(); impl_->index.clear(); impl_->cache.clear(); impl_->command = nullptr; impl_->stats = {}; impl_->gate->device = nullptr;
 }
 }

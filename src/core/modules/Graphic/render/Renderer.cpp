@@ -1017,10 +1017,12 @@ void Renderer::RenderText(std::shared_ptr<const Text::LayoutResult> layout,doubl
     // A text command remains one ordering unit. Every ring is emitted before
     // every fill, so later glyph outlines never cover an earlier glyph's ink.
     for(int phase=outline?0:1;phase<2;++phase) {
+        std::size_t part{};
         for(const auto& glyph:prepared->glyphs) {
             const auto& bitmap=*glyph.bitmap;
             if(!bitmap.width || !bitmap.height) continue;
-            const auto lease=impl->glyphTextures->Acquire(glyph.bitmap);
+            const auto lease=outline && phase==1 ? command.textParts[part].glyph : impl->glyphTextures->Acquire(glyph.bitmap);
+            ++part;
             const double left=x+glyph.x-anchor.x+bitmap.left/bitmap.rasterScale;
             const double top=y-(glyph.y-anchor.y+bitmap.top/bitmap.rasterScale);
             const double right=left+bitmap.width/bitmap.rasterScale,bottom=top-bitmap.height/bitmap.rasterScale;

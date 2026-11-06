@@ -56,6 +56,8 @@ public:
     // AFTER cancelling an unsubmitted CB. Unknown submission is terminal:
     // drain the device and Shutdown instead of pretending it was rolled back.
     void RollbackEncoded(SDL_GPUCommandBuffer*);
+    // Poll at frame/fence boundaries. Acquire also reclaims under pressure;
+    // cache hits do not scan unrelated entries or extend CPU bitmap lifetimes.
     void Reclaim();
     Stats GetStats() const;
     // Owner thread; cancel pending CBs and drain GPU work first. Existing
