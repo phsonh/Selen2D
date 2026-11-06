@@ -1,0 +1,125 @@
+name: Windows runtime and package
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python tools/checks/hygiene.py
+      - run: git diff --check
+
+  build-windows:
+    needs: hygiene
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Record actual installed toolchain
+        id: context
+        run: ./tools/checks/ci-context.ps1
+      # Measured locally: ~3.23 GB including objects, individual libraries and
+      # debug symbols. Do not cache the whole repository/build tree or edit mtimes.
+      - uses: actions/cache@v6
+        with:
+          path: build/public-release/dependencies/dxc-runtime
+          key: runtime-dxc-${{ runner.os }}-${{ steps.context.outputs.identity }}-01b62ad47db7dee3dd33f90e7339cf9e860b3f93-${{ hashFiles('3rd_party/dxc/**', '3rd_party/cmake/dxc/**', 'tools/cmake/DxcRuntime*') }}-Release
+      - name: Install launch validation dependency
+        run: python -m pip install -r tools/pack/requirements-launch.txt
+      - name: Build and stage the public Release using the supported entry point
+        run: |
+          Start-Transcript -Path build/ci/build.txt
+          try {
+            ./tools/build.ps1 -Configuration Release -PublicRelease -StageRelease -Checks
+          } finally { Stop-Transcript }
+      - name: Blocking CPU-only compiler, loader and package checks
+        run: |
+          # Enter the same toolchain for the small malformed-DLL test fixtures.
+          $where = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $where -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          Import-Module "$vs/Common7/Tools/Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          python tools/checks/check_dxc.py --bin build/public-release/bin --output build/ci/dxc --dumpbin (Get-Command dumpbin.exe).Source
+          if ($LASTEXITCODE -ne 0) { throw 'CPU DXC checks failed.' }
+          $metadata = @(Get-ChildItem build/release-work -Recurse -Filter release.json | Sort-Object LastWriteTime -Descending)[0]
+          $release = Get-Content -Raw $metadata.FullName | ConvertFrom-Json
+          $zip = "releases/$($release.release).zip"
+          $manifest = Join-Path $metadata.DirectoryName 'package-files.json'
+          python tools/checks/check_package.py --zip $zip --manifest $manifest --output build/ci/package
+          if ($LASTEXITCODE -ne 0) { throw 'Package checks failed.' }
+          New-Item -ItemType Directory -Force build/ci/artifact | Out-Null
+          Copy-Item -LiteralPath $zip -Destination build/ci/artifact
+          Copy-Item -LiteralPath $manifest -Destination build/ci/artifact/package-files.json
+          Copy-Item -LiteralPath $metadata.FullName -Destination build/ci/artifact/release.json
+      - name: Upload validated package
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-runtime-package
+          path: build/ci/artifact/*
+          if-no-files-found: error
+      - name: Preserve build and CPU-check evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-build-evidence
+          path: |
+            build/ci/*.txt
+            build/ci/*.json
+            build/ci/dxc/**/*.json
+            build/ci/dxc/**/*.txt
+            build/ci/dxc/**/*.bin
+            build/ci/package/summary.json
+            build/release-work/**/verification/*
+            build/release-work/runtime-*/*
+          if-no-files-found: warn
+
+  smoke-windows:
+    needs: build-windows
+    runs-on: windows-2022
+    timeout-minutes: 10
+    # Hosted GPU/WARP availability has not been established. Only this job is
+    # non-blocking: compiler/loader/package checks above remain mandatory.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-runtime-package
+          path: build/ci/download
+      - name: Isolated D3D12 example smoke
+        shell: pwsh
+        run: |
+          $zip = @(Get-ChildItem build/ci/download -Filter '*.zip')
+          if ($zip.Count -ne 1) { throw 'Expected exactly one validated package.' }
+          python tools/checks/check_package.py --zip $zip[0].FullName --manifest build/ci/download/package-files.json --output build/ci/gpu --smoke
+          if ($LASTEXITCODE -ne 0) { throw 'D3D12 smoke failed; inspect the retained evidence.' }
+      - name: Preserve GPU smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-gpu-smoke-evidence
+          path: |
+            build/ci/gpu/summary.json
+            build/ci/gpu/*.txt
+            build/ci/gpu/deployment/output/*
+          if-no-files-found: warn
