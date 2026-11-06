@@ -13,8 +13,6 @@ FORBIDDEN_ROOTS = {"build", "tests", "devs", "releases", "launch"}
 FORBIDDEN_EXTENSIONS = {".dll", ".exe", ".pdb", ".lib", ".obj", ".log", ".pyc", ".key", ".pem"}
 TEXT_EXTENSIONS = {".cpp", ".h", ".hpp", ".in", ".cmake", ".ps1", ".py", ".lua", ".md", ".txt", ".yml", ".yaml", ".json", ".hlsl", ".hlsli"}
 STALE = re.compile(r"solongo|二号机|DxcStatic|EngineDxcStatic|ENGINE_DXC_STATIC|dxc-static\.lib|single[- ](?:exe|executable)|no runtime dll|无运行时\s*DLL|单\s*EXE|statically embedded DXC|static DXC|DXC (?:is |uses |remains )?static|静态\s*DXC|DXC\s*静态", re.IGNORECASE)
-# An explicit removal is the only legacy name retained in active build code.
-ALLOWED_LINES = {("tools/cmake/ImageShaders.cmake", "unset(SOLONGO_DXC CACHE)")}
 # Migration history may name retired interfaces/implementations. This exemption
 # applies only to these reviewed, older sections in the central changelog, never
 # to its current development section, secrets, artifacts, or other documents.
@@ -50,7 +48,7 @@ def main() -> int:
             if line.startswith("## "):
                 version = re.match(r"## (\d+\.\d+\.\d+)\s+[—-]\s+", line)
                 history_section = name == "CHANGELOG.md" and bool(version and version[1] in HISTORY_VERSIONS)
-            if STALE.search(line) and not history_section and (name, line.strip()) not in ALLOWED_LINES:
+            if STALE.search(line) and not history_section:
                 failures.append(f"{name}:{number}: retired terminology/integration")
         if path.suffix == ".json":
             try:

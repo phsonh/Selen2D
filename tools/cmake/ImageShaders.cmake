@@ -1,8 +1,7 @@
 # Native build tools only. GPU/backend-specific bytecode is selected at this
 # boundary; Graphics commands and public APIs use SDL_GPU types exclusively.
-# Discard the retired cache key without migrating its value. Runtime DXC
-# has a separate pinned DLL build; this variable names a host executable only.
-unset(SOLONGO_DXC CACHE)
+# Runtime DXC has a separate pinned DLL build; this variable names a host
+# executable used to compile built-in shaders only.
 if(DEFINED ENGINE_DXC_EXECUTABLE)
     if("${ENGINE_DXC_EXECUTABLE}" STREQUAL "" OR "${ENGINE_DXC_EXECUTABLE}" MATCHES "(^|-)NOTFOUND$")
         unset(ENGINE_DXC_EXECUTABLE CACHE)
