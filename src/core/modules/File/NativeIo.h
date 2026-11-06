@@ -18,6 +18,9 @@ struct NativeOpenTarget {
     void* parentDirectory{};
     std::filesystem::path leaf;
     std::optional<NativeFileIdentity> expectedIdentity;
+    // A pending directory in another mapping prevents proving the location of
+    // additional aliases. Recheck the live opened generation before any write.
+    bool requireSingleLink{};
 };
 // Internal retry signal; never translate this directly into a public API error.
 // The VFS must discard its view and revalidate before trying again.

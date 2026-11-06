@@ -43,7 +43,17 @@ fs::path NativePath(std::string_view text) {
 [[noreturn]] void Fail(std::string code,std::string_view operation,std::string_view path) {
     throw IoError(code,std::string(operation)+" '"+std::string(path)+"': "+code);
 }
+// Preserve the precise native reason internally. Only a directory sharing
+// violation can postpone a scan; other resource_busy/permission errors cannot.
+struct SharingConflict final : IoError {
+    SharingConflict(std::string_view operation,std::string_view path)
+        : IoError("resource_busy",std::string(operation)+" '"+std::string(path)+"': resource_busy (Win32 32)") {}
+};
 void Check(const std::error_code& error,std::string_view operation,std::string_view path) {
+#ifdef _WIN32
+    if(error.category()==std::system_category()&&error.value()==ERROR_SHARING_VIOLATION)
+        throw SharingConflict(operation,path);
+#endif
     if(error) Fail(IoErrorCode(error),operation,path);
 }
 std::error_code LastError() {
@@ -137,7 +147,7 @@ struct DirectoryAnchor {
         VFS_PROFILE_ADD(AnchorCreations,1);
         handle=CreateFileW(path.c_str(),FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,
             OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
-        if(handle==INVALID_HANDLE_VALUE) Fail(IoErrorCode(LastError()),"anchor directory",virtualPath);
+        if(handle==INVALID_HANDLE_VALUE) Check(LastError(),"anchor directory",virtualPath);
         BY_HANDLE_FILE_INFORMATION info{};
         VFS_PROFILE_ADD(AttributeQueries,1);
         if(!GetFileInformationByHandle(handle,&info)) {
@@ -254,7 +264,7 @@ fs::path ProjectPath(const fs::path& base,std::string_view relative,std::string_
     return result;
 }
 using FileIdentity=std::array<std::uint64_t,3>;
-struct DiskEntry { NodeInfo info; std::optional<FileIdentity> identity; };
+struct DiskEntry { NodeInfo info; std::optional<FileIdentity> identity; std::uint64_t links{}; };
 #if !defined(_WIN32) || !defined(_MSC_VER)
 NodeInfo DiskInfo(const fs::path& disk,const fs::file_status& status,std::string_view path) {
     if(fs::is_directory(status)) return {NodeType::Directory};
@@ -334,7 +344,7 @@ DiskEntry InspectDisk(const fs::path& disk,std::string_view path) {
     static_assert(std::ratio_equal_v<fs::file_time_type::period,std::ratio<1,10000000>>);
     const auto modified=(std::uint64_t(info.ftLastWriteTime.dwHighDateTime)<<32)|info.ftLastWriteTime.dwLowDateTime;
     const auto size=(std::uint64_t(info.nFileSizeHigh)<<32)|info.nFileSizeLow;
-    return {{NodeType::File,size,modified},identity};
+    return {{NodeType::File,size,modified},identity,info.nNumberOfLinks};
 #else
     const auto status=Status(disk,path);
     const auto info=DiskInfo(disk,status,path);
@@ -386,12 +396,27 @@ struct FileSystem::Impl {
         fs::path disk;
         std::string relative;
         std::optional<FileIdentity> identity;
+        std::uint64_t links{};
     };
     struct View {
         std::map<std::string,Node,std::less<>> nodes;
         std::map<std::string,std::string,std::less<>> folded;
         std::map<FileIdentity,const Directory*> identities;
         Guards guards;
+        struct Pending { std::string path; const Directory* directory; std::string failure; };
+        std::vector<Pending> pending;
+        void RequireComplete(std::string_view path,bool subtree=false) const {
+            for(const auto& entry:pending)
+                if(PathContains(entry.path,path)||(subtree&&PathContains(path,entry.path)))
+                    throw IoError("resource_busy",entry.failure);
+        }
+        bool NeedsSingleLink(const Directory* directory) const {
+            return std::any_of(pending.begin(),pending.end(),[&](const auto& entry){return entry.directory!=directory;});
+        }
+        void RequireAliases(const Node* node,const Directory* destination=nullptr) const {
+            if(node&&node->identity&&node->links!=1&&NeedsSingleLink(destination?destination:node->directory))
+                Fail("resource_busy","cannot verify cross-mapping aliases while a directory is pending",node->disk.empty()?"<file>":Utf8(node->disk.filename()));
+        }
         const Node* Find(std::string_view path) const {
             const auto it=nodes.find(path); return it==nodes.end()?nullptr:&it->second;
         }
@@ -475,7 +500,7 @@ struct FileSystem::Impl {
         if(protectedCode&&node&&node->info.type==NodeType::File&&(!node->mount||!node->mount->encrypted))
             throw AccessError("file code is not authenticated package content at '"+std::string(path)+"'");
     }
-    void AddDisk(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
+    void AddDisk(View& view,const Directory& d,const fs::path& disk,const std::string& path,bool deferSharing) const {
         VFS_PROFILE_SCOPE(AddDisk);
         std::vector<std::pair<fs::path,std::string>> pending{{disk,path}};
         while(!pending.empty()) {
@@ -487,30 +512,40 @@ struct FileSystem::Impl {
             if(info.type==NodeType::File) {
                 VFS_PROFILE_ADD(FilesVisited,1);
                 node.identity=entry.identity;
+                node.links=entry.links;
             }
             view.Insert(name,std::move(node));
             if(info.type!=NodeType::Directory) continue;
             VFS_PROFILE_ADD(DirectoriesVisited,1);
-            auto anchor=Guard(current,name,view.guards);
-            if(name==d.target) {
-                if(d.rootAnchor&&!d.rootAnchor->Same(*anchor)) throw ConflictError("configured root identity changed at '"+name+"'");
-                if(!d.rootAnchor) d.rootAnchor=anchor;
-            }
-            VFS_PROFILE_ADD(DirectoryEnumerations,1);
-            std::error_code ec; fs::directory_iterator it(current,ec),end;
-            Check(ec,"enumerate",name);
-            std::set<std::string,std::less<>> originals;
-            while(it!=end) {
-                VFS_PROFILE_ADD(EntriesEnumerated,1);
-                const auto child=Normalize(Utf8(it->path().filename()));
-                if(!child||child->find('/')!=std::string::npos) throw ConflictError("unaddressable directory entry at '"+name+"'");
-                if(!originals.insert(FoldPath(*child)).second) throw ConflictError("Unicode collision at '"+name+"'");
-                pending.emplace_back(it->path(),Join(name,*child));
-                it.increment(ec); Check(ec,"enumerate",name);
+            try {
+                auto anchor=Guard(current,name,view.guards);
+                if(name==d.target) {
+                    if(d.rootAnchor&&!d.rootAnchor->Same(*anchor)) throw ConflictError("configured root identity changed at '"+name+"'");
+                    if(!d.rootAnchor) d.rootAnchor=anchor;
+                }
+                VFS_PROFILE_ADD(DirectoryEnumerations,1);
+                std::error_code ec; fs::directory_iterator it(current,ec),end;
+                Check(ec,"enumerate",name);
+                std::set<std::string,std::less<>> originals;
+                while(it!=end) {
+                    VFS_PROFILE_ADD(EntriesEnumerated,1);
+                    const auto child=Normalize(Utf8(it->path().filename()));
+                    if(!child||child->find('/')!=std::string::npos) throw ConflictError("unaddressable directory entry at '"+name+"'");
+                    if(!originals.insert(FoldPath(*child)).second) throw ConflictError("Unicode collision at '"+name+"'");
+                    pending.emplace_back(it->path(),Join(name,*child));
+                    it.increment(ec); Check(ec,"enumerate",name);
+                }
+            } catch(const SharingConflict& error) {
+                if(!deferSharing) throw;
+                // Recheck observable type/reparse state before deferring. This
+                // is unknown subtree content, never a cached safe subtree.
+                if(InspectDisk(current,name).info.type!=NodeType::Directory)
+                    throw ConflictError("directory changed during validation at '"+name+"'");
+                view.pending.push_back({name,&d,error.what()});
             }
         }
     }
-    View Scan() const {
+    View Scan(bool deferSharing=true) const {
         VFS_PROFILE_SCOPE(Scan);
         View view;
         // All package records are checked before resolving overlays. A real
@@ -532,7 +567,7 @@ struct FileSystem::Impl {
             if(PhysicalKey(root)!=PhysicalKey(d.root)) throw ConflictError("configured root identity changed at '"+d.target+"'");
             const auto status=Status(root,d.target);
             if(fs::exists(status)&&!fs::is_directory(status)) throw ConflictError("configured directory root is occupied by a file at '"+d.target+"'");
-            if(fs::is_directory(status)) AddDisk(view,d,root,d.target);
+            if(fs::is_directory(status)) AddDisk(view,d,root,d.target,deferSharing);
         }
         return view;
     }
@@ -571,7 +606,7 @@ struct FileSystem::Impl {
         for(const auto& guard:view.guards) {
             if(guard.path!=parent) continue;
             const detail::NativeOpenTarget target{guard.anchor->handle,disk.filename(),
-                node?node->identity:std::optional<FileIdentity>{}};
+                node?node->identity:std::optional<FileIdentity>{},view.NeedsSingleLink(node?node->directory:&Route(path))};
             return detail::OpenNative(disk,mode,path,&target);
         }
         throw ConflictError("missing verified parent directory at '"+std::string(path)+"'");
@@ -581,7 +616,9 @@ struct FileSystem::Impl {
 #endif
     }
     SDL_IOStream* OpenInView(const View& view,std::string_view p,const OpenMode& mode) const {
+        view.RequireComplete(p);
         const auto* node=view.Resolve(p);
+        view.RequireAliases(node);
         if(mode.exclusive&&node) Fail("already_exists","open exclusive",p);
         if(node&&node->info.type==NodeType::Directory) Fail("is_directory","open",p);
         if(node&&node->info.size>MaxFilePosition) Fail("out_of_range","open",p);
@@ -599,6 +636,8 @@ struct FileSystem::Impl {
         return OpenDisk(view,node->disk,mode,p,node);
     }
     void MutationSource(const View& view,const Node* node,std::string_view path,bool allowDirectory) const {
+        view.RequireComplete(path,node&&node->info.type==NodeType::Directory);
+        view.RequireAliases(node);
         if(Protected(path)) Fail("unsupported","modify mapping root",path);
         if(!node) Fail("not_found","modify",path);
         if(node->mount&&node->info.type==NodeType::File) Fail("read_only","modify",path);
@@ -614,9 +653,17 @@ struct FileSystem::Impl {
         CheckBacking(node->disk,path,node->info.type==NodeType::Directory);
     }
     void CheckMovedAliases(const View& view,std::string_view source,std::string_view destination,const Directory& route) const {
+        // Path-based relocation has no opened-file link-count recheck. Unlike
+        // OpenNative, it cannot prove that a new alias was not added in another
+        // pending mapping after the scan. Refuse before changing either object.
+        if(view.NeedsSingleLink(&route))
+            Fail("resource_busy","cannot verify relocation aliases while another mapping is pending",destination);
         std::set<FileIdentity> moved;
         for(const auto& [name,node]:view.nodes)
-            if(PathContains(source,name)&&node.identity) moved.insert(*node.identity);
+            if(PathContains(source,name)&&node.identity) {
+                view.RequireAliases(&node,&route);
+                moved.insert(*node.identity);
+            }
         for(const auto& [name,node]:view.nodes)
             if(!PathContains(source,name)&&name!=destination&&node.identity&&node.directory!=&route&&moved.contains(*node.identity))
                 Fail("name_conflict","move would authorize a physical alias",destination);
@@ -624,7 +671,7 @@ struct FileSystem::Impl {
 };
 
 FileSystem::FileSystem(fs::path installRoot,std::vector<MountSpec> specs,std::vector<DirectorySpec> rules,
-    std::optional<std::array<std::uint8_t,32>> key):impl_(std::make_unique<Impl>()) {
+    std::optional<std::array<std::uint8_t,32>> key,std::string_view initialEntry):impl_(std::make_unique<Impl>()) {
     VFS_PROFILE_SCOPE(Construct);
     impl_->install=BaseRoot(installRoot);
     if(specs.size()>4096) throw InvalidPath("too many compiled package mounts");
@@ -663,31 +710,47 @@ FileSystem::FileSystem(fs::path installRoot,std::vector<MountSpec> specs,std::ve
         }
         if(!redundant) impl_->directories.push_back(std::move(candidate));
     }
-    (void)impl_->Scan();
+    // The initial entry check consumes this exact construction view. Release
+    // its transient anchors here; the later Lua read must scan/open afresh.
+    const auto view=impl_->Scan(false);
+    if(!initialEntry.empty()) {
+        const auto entry=impl_->Authorize(initialEntry);
+        impl_->CheckCode(view,entry);
+        const auto* node=view.Resolve(entry);
+        if(!node||node->info.type!=NodeType::File)
+            throw std::runtime_error("Compiled Lua entry is not an authorized file: "+entry);
+    }
 }
 FileSystem::~FileSystem()=default;
 std::optional<std::string> FileSystem::NormalizePath(std::string_view path) const { return impl_->Authorize(path); }
 void FileSystem::CheckCodeSource(std::string_view path) const {
     VFS_PROFILE_SCOPE(CheckCodeSource);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    view.RequireComplete(p);
+    view.RequireAliases(view.Resolve(p));
     impl_->CheckCode(view,p);
 }
 NodeInfo FileSystem::Stat(std::string_view path,bool codeSource) const {
     VFS_PROFILE_SCOPE(Stat);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    view.RequireComplete(p);
     if(codeSource) impl_->CheckCode(view,p);
-    const auto* node=view.Resolve(p); return node?node->info:NodeInfo{};
+    const auto* node=view.Resolve(p); view.RequireAliases(node); return node?node->info:NodeInfo{};
 }
 std::optional<std::vector<std::string>> FileSystem::ListDirectory(std::string_view path) const {
     VFS_PROFILE_SCOPE(ListDirectory);
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    view.RequireComplete(p);
     const auto* node=view.Resolve(p);
     if(!node) Fail("not_found","list",p);
     if(node->info.type!=NodeType::Directory) Fail("not_directory","list",p);
     std::vector<std::string> result; const auto prefix=p+'/';
     for(auto it=view.nodes.lower_bound(prefix);it!=view.nodes.end()&&it->first.starts_with(prefix);++it) {
         const auto tail=std::string_view(it->first).substr(prefix.size());
-        if(tail.find('/')==std::string_view::npos) result.emplace_back(tail);
+        if(tail.find('/')==std::string_view::npos) {
+            view.RequireAliases(&it->second);
+            result.emplace_back(tail);
+        }
     }
     return result;
 }
@@ -725,6 +788,7 @@ bool FileSystem::CreateDirectory(std::string_view path) const {
     VFS_PROFILE_SCOPE(CreateDirectory);
     const auto p=impl_->Authorize(path); const auto& d=impl_->Route(p);
     std::lock_guard lock(impl_->mutex); auto view=impl_->Scan();
+    view.RequireComplete(p);
     if(const auto* node=view.Find(p);node&&node->info.type==NodeType::File) Fail("already_exists","create directory",p);
     impl_->CheckNewName(view,p);
     const auto disk=impl_->Destination(view,d,p); impl_->CheckBacking(disk,p,true);
@@ -773,14 +837,15 @@ bool FileSystem::Rename(std::string_view directory,std::string_view oldName,std:
     if(a.find('/')!=std::string::npos||b.find('/')!=std::string::npos) throw InvalidPath("Rename requires two single filenames");
     const auto source=dir+'/'+a,destination=dir+'/'+b;
     (void)impl_->Authorize(source); (void)impl_->Authorize(destination);
-    if(Stat(source).type==NodeType::Directory) Fail("is_directory","rename",source);
-    return Move(source,destination);
+    return MoveValidated(source,destination,false);
 }
 bool FileSystem::Copy(std::string_view source,std::string_view destination) const {
     VFS_PROFILE_SCOPE(Copy);
     const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
     std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    view.RequireComplete(a); view.RequireComplete(b);
     const auto* from=view.Resolve(a); const auto* to=view.Resolve(b);
+    view.RequireAliases(from); view.RequireAliases(to);
     if(!from) Fail("not_found","copy",a);
     if(from->info.type!=NodeType::File) Fail("is_directory","copy",a);
     if(to) Fail("already_exists","copy",b);
@@ -813,8 +878,13 @@ bool FileSystem::Copy(std::string_view source,std::string_view destination) cons
 }
 bool FileSystem::Move(std::string_view source,std::string_view destination) const {
     VFS_PROFILE_SCOPE(Move);
+    return MoveValidated(source,destination,true);
+}
+bool FileSystem::MoveValidated(std::string_view source,std::string_view destination,bool allowDirectory) const {
     const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
     std::lock_guard lock(impl_->mutex); auto view=impl_->Scan(); const auto* from=view.Resolve(a);
+    view.RequireComplete(a); view.RequireComplete(b);
+    if(!allowDirectory&&from&&from->info.type==NodeType::Directory) Fail("is_directory","rename",a);
     impl_->MutationSource(view,from,a,true);
     if(view.Resolve(b)) Fail("already_exists","move",b);
     const auto& d=impl_->Route(b); impl_->CheckNewName(view,b); impl_->RequireParent(view,d,b);
@@ -829,6 +899,7 @@ bool FileSystem::Replace(std::string_view source,std::string_view destination) c
     VFS_PROFILE_SCOPE(Replace);
     const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
     std::lock_guard lock(impl_->mutex); auto view=impl_->Scan(); const auto* from=view.Resolve(a); const auto* to=view.Resolve(b);
+    view.RequireComplete(a); view.RequireComplete(b); view.RequireAliases(to);
     impl_->MutationSource(view,from,a,false);
     if(impl_->Protected(b)) Fail("unsupported","replace mapping root",b);
     if(to&&to->info.type==NodeType::Directory) Fail("is_directory","replace",b);

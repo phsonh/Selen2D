@@ -41,7 +41,7 @@ class FileSystem final {
 public:
     FileSystem(std::filesystem::path installRoot, std::vector<MountSpec> mounts,
         std::vector<DirectorySpec> directories,
-        std::optional<std::array<std::uint8_t,32>> key);
+        std::optional<std::array<std::uint8_t,32>> key, std::string_view initialEntry = {});
     ~FileSystem();
     FileSystem(const FileSystem&) = delete;
     FileSystem& operator=(const FileSystem&) = delete;
@@ -72,6 +72,7 @@ public:
     Snapshot ReadSnapshot(std::string_view path, const ReadOptions& options, bool codeSource = false) const;
     std::optional<std::string> Read(std::string_view path, bool codeSource = false) const;
 private:
+    bool MoveValidated(std::string_view source,std::string_view destination,bool allowDirectory) const;
     SDL_IOStream* OpenValidated(std::string_view path, const OpenMode& mode, bool codeSource) const;
     struct Impl;
     std::unique_ptr<Impl> impl_;

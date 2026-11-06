@@ -100,9 +100,7 @@ Config Load(const std::filesystem::path& directory, const launch::Config& declar
         RecordNames(record.base == launch::Base::Root ? deploymentNames : userNames, record.path);
         directories.push_back({std::move(base), Path(record.path), Path(record.target)});
     }
-    config.files = std::make_shared<File::FileSystem>(config.directory, std::move(mounts), std::move(directories), key);
-    if(config.files->Stat(config.entry,true).type != File::NodeType::File)
-        throw std::runtime_error("Compiled Lua entry is not an authorized file: " + config.entry);
+    config.files = std::make_shared<File::FileSystem>(config.directory, std::move(mounts), std::move(directories), key, config.entry);
     return config;
 }
 }

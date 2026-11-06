@@ -24,7 +24,7 @@ inspection under its unique `build/release-work/` directory. Pass the manifest
 from the same staging operation as the ZIP:
 
 ```powershell
-python tools/checks/check_package.py --zip releases/selen2d-v2.2.3-windows-x64.zip --manifest build/release-work/<staging-directory>/package-files.json --output build/checks/package-01
+python tools/checks/check_package.py --zip releases/selen2d-v2.2.4-windows-x64.zip --manifest build/release-work/<staging-directory>/package-files.json --output build/checks/package-01
 ```
 
 Add `--smoke` for the existing finite-frame and Orbit Garden self-test runs.
