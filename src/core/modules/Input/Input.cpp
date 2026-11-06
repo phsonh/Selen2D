@@ -17,10 +17,17 @@ Uint64 wheelNotBefore{};
 bool Focused() { return window && Window::IsFocused() && !Window::IsMinimized() && !(SDL_GetWindowFlags(window)&SDL_WINDOW_HIDDEN); }
 void Check() { if(!window || !SDL_IsMainThread()) throw std::logic_error("Input requires an initialized main-thread service"); }
 }
-bool Init() {
+bool Init(std::string* error) {
+    if(error) error->clear();
     if(window) return true;
     auto* target=Window::GetNativeHandle();
-    if(!target || !gamepad.Init()) return false;
+    if(!target) {
+        constexpr auto message="Input initialization failed: window is unavailable";
+        if(error) *error=message;
+        else core::runtime::Log::Error(message);
+        return false;
+    }
+    if(!gamepad.Init(error)) return false;
     window=target; windowId=SDL_GetWindowID(window);
     snapshot.Reset(); wheel.Begin(false); collecting=false; wheelNotBefore=0;
     core::runtime::Log::Debug("SDL input initialized: physical keyboard, client mouse, one standard gamepad");

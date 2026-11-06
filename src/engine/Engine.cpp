@@ -111,6 +111,7 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
     Log::Info(std::string(build::Title) + " | " + build::Developer + " | MIT License (third-party notices retained)");
     Log::Info("Engine initializing");
     auto phase=StartupFailure::Kind::Dxc;
+    const char* nativeOperation="native services";
     bool entryStarted{};
     try {
         Graphic::Shader::DxcRuntime::Initialize();
@@ -121,13 +122,26 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         if(!fileSystem) throw std::invalid_argument("Engine requires a mounted FileSystem");
         files=std::move(fileSystem);
         startupArguments=arguments;
-        if(!core::runtime::SDL::Init() || !Event::Init() || !Lua::Init() ||
-           !core::modules::Debug::Init() || !core::modules::Window::Init(1280,960) ||
-           !core::modules::Input::Init() || !([] { VFS_PROFILE_SCOPE(GpuInit); return Graphic::Init(); })() || !core::modules::Math::Init())
-            throw std::runtime_error("native service initialization failed");
+        std::string nativeError;
+        const auto initialize=[&](const char* name,auto&& operation) {
+            nativeOperation=name;
+            nativeError.clear();
+            if(!operation()) throw std::runtime_error(nativeError.empty()?"initialization returned false":nativeError);
+        };
+        initialize("SDL",[&] { return core::runtime::SDL::Init(&nativeError); });
+        initialize("Event",[] { return Event::Init(); });
+        initialize("Lua",[&] { return Lua::Init(&nativeError); });
+        initialize("Debug",[] { return core::modules::Debug::Init(); });
+        initialize("Window",[&] { return core::modules::Window::Init(1280,960,&nativeError); });
+        initialize("Input",[&] { return core::modules::Input::Init(&nativeError); });
+        initialize("Graphic",[&] { VFS_PROFILE_SCOPE(GpuInit); return Graphic::Init(&nativeError); });
+        initialize("Math",[] { return core::modules::Math::Init(); });
+        nativeOperation="Audio";
         audio.SetFileSystem(files);
         { VFS_PROFILE_SCOPE(AudioInit); audio.Initialize(); }
+        nativeOperation="ResourceHost";
         resources=std::make_unique<ResourceHost>(Graphic::Uploads(),files,&audio,&Graphic::Shaders());
+        nativeOperation="Lua bindings";
         RegisterBindings();
         bindingsReady=true; // Entry errors must still run an already registered ExitFunction.
         std::string error;
@@ -156,8 +170,12 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         initialized=true; // Do not overwrite Quit requested by entry Lua.
         Log::Info("Engine initialized"); return true;
     } catch(const std::exception& error) {
-        if(failure && !entryStarted) failure->Set(phase,error.what());
-        Report("Engine initialization failed",error.what()); return false;
+        // The service captured its original detail at the failing operation,
+        // before SDL/native cleanup could replace a thread-local last error.
+        const std::string detail=phase==StartupFailure::Kind::NativeServices
+            ? std::string(nativeOperation)+": "+error.what() : error.what();
+        if(failure && !entryStarted) failure->Set(phase,detail);
+        Report("Engine initialization failed",detail); return false;
     }
 }
 bool Run(std::uint64_t frameLimit) {

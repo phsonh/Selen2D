@@ -28,18 +28,25 @@ void ApplyPresentation(SDL_GPUPresentMode mode) {
     presentMode=mode;
 }
 }
-bool Init() {
+bool Init(std::string* error) {
+    if(error) error->clear();
     if (initialized) return true;
+    const auto fail=[error](const std::string& message) {
+        if(error) *error=message;
+        else core::runtime::Log::Error(message);
+    };
     pendingPresentMode.reset();
     window=Window::GetNativeHandle();
-    if (!window) { core::runtime::Log::Error("Graphic initialization failed: window is unavailable"); return false; }
-    device=backend::CreateDevice(backend::DefaultDeviceOptions());
+    if (!window) { fail("Graphic initialization failed: window is unavailable"); return false; }
+    // Own the device error before any cleanup. The backend does not also log it.
+    std::string deviceError;
+    device=backend::CreateDevice(backend::DefaultDeviceOptions(),&deviceError);
     if (!device) {
-        core::runtime::Log::Error(std::string("Graphic device creation failed: ")+SDL_GetError());
+        fail(deviceError);
         window=nullptr; return false;
     }
     if (!SDL_ClaimWindowForGPUDevice(device,window)) {
-        core::runtime::Log::Error(std::string("Graphic window claim failed: ")+SDL_GetError());
+        fail(std::string("SDL_ClaimWindowForGPUDevice failed: ")+SDL_GetError());
         SDL_DestroyGPUDevice(device); device=nullptr; window=nullptr; return false;
     }
     try {
@@ -47,7 +54,7 @@ bool Init() {
         renderer=std::make_unique<Render::Renderer>(device,window);
         programs=std::make_unique<Shader::ProgramStore>(device);
     } catch (const std::exception& error) {
-        core::runtime::Log::Error(std::string("Graphic service initialization failed: ")+error.what());
+        fail(std::string("Graphic service initialization failed: ")+error.what());
         programs.reset(); renderer.reset(); uploads.reset();
         SDL_ReleaseWindowFromGPUDevice(device,window); SDL_DestroyGPUDevice(device);
         device=nullptr; window=nullptr; return false;

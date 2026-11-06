@@ -7,8 +7,9 @@ namespace core::runtime::SDL {
     namespace {
         bool Initialized = false;
     }
-    bool Init()
+    bool Init(std::string* error)
     {
+        if (error) error->clear();
         if (Initialized)
             return true;
 
@@ -18,12 +19,9 @@ namespace core::runtime::SDL {
 
         if (!success)
         {
-            core::runtime::Log::Error(
-                std::string(
-                    "SDL_Init failed: "
-                ) +
-                SDL_GetError()
-            );
+            const std::string message = std::string("SDL_Init failed: ") + SDL_GetError();
+            if (error) *error = message;
+            else core::runtime::Log::Error(message);
 
             return false;
         }

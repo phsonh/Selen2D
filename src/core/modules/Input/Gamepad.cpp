@@ -5,10 +5,14 @@
 #include <string>
 
 namespace core::modules::Input {
-bool Gamepad::Init() {
+bool Gamepad::Init(std::string* error) {
+    if(error) error->clear();
     if(initialized_) return true;
     if(!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
-        core::runtime::Log::Error(std::string("SDL gamepad initialization failed: ")+SDL_GetError()); return false;
+        const std::string message=std::string("SDL_InitSubSystem(SDL_INIT_GAMEPAD) failed: ")+SDL_GetError();
+        if(error) *error=message;
+        else core::runtime::Log::Error(message);
+        return false;
     }
     initialized_=dirty_=true; neutral_=false;
     return true;

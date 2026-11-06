@@ -42,10 +42,16 @@ bool CallCallback(int reference, std::string& error) {
     return true;
 }
 }
-bool Init() {
+bool Init(std::string* error) {
+    if(error) error->clear();
     if(state) return true;
     state=luaL_newstate();
-    if(!state) { Log::Error("Failed to create Lua state"); return false; }
+    if(!state) {
+        constexpr auto message="luaL_newstate failed: cannot allocate Lua state";
+        if(error) *error=message;
+        else Log::Error(message);
+        return false;
+    }
     luaL_openlibs(state);
     Log::Debug("Lua runtime initialized");
     return true;

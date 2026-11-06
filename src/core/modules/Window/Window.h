@@ -1,9 +1,10 @@
 #pragma once
 #include "WindowState.h"
 #include <SDL3/SDL.h>
+#include <string>
 
 namespace core::modules::Window {
-	bool Init(int width, int height);
+	bool Init(int width, int height, std::string* error = nullptr);
 	// Host calls HandleEvent while pumping, then PublishFrameState before Input.
 	void HandleEvent(const SDL_Event& event);
 	void PublishFrameState();

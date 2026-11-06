@@ -22,19 +22,23 @@ namespace core::modules::Graphic::backend {
         #endif
         return options;
     }
-    SDL_GPUDevice* CreateDevice(const DeviceOptions& options) {
+    SDL_GPUDevice* CreateDevice(const DeviceOptions& options, std::string* error) {
+        if(error) error->clear();
         const std::string requested = options.driver ? options.driver : "SDL automatic selection";
         SDL_GPUDevice* device = SDL_CreateGPUDevice(options.shader_formats, options.debug, options.driver);
         if (!device) {
-            const std::string error = SDL_GetError();
-            core::runtime::Log::Error("SDL_GPU initialization failed for requested driver '" + requested +
-                                     "': " + error + "; no fallback attempted");
+            const std::string message = "SDL_CreateGPUDevice failed for requested driver '" + requested +
+                                       "': " + SDL_GetError() + "; no fallback attempted";
+            if(error) *error=message;
+            else core::runtime::Log::Error(message);
             return nullptr;
         }
         const char* actual = SDL_GetGPUDeviceDriver(device);
         if (!actual || (options.driver && std::string_view(actual) != options.driver)) {
-            core::runtime::Log::Error("SDL_GPU driver mismatch: requested '" + requested + "', actual '" +
-                                     (actual ? actual : "unknown") + "'; refusing implicit fallback");
+            const std::string message="SDL_GPU driver mismatch: requested '" + requested + "', actual '" +
+                                      (actual ? actual : "unknown") + "'; refusing implicit fallback";
+            if(error) *error=message;
+            else core::runtime::Log::Error(message);
             SDL_DestroyGPUDevice(device);
             SDL_SetError("SDL_GPU driver does not match the requested backend");
             return nullptr;

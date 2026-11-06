@@ -1,5 +1,6 @@
 #pragma once
 #include <SDL3/SDL_gpu.h>
+#include <string>
 
 namespace core::modules::Graphic::backend {
     struct DeviceOptions {
@@ -10,5 +11,5 @@ namespace core::modules::Graphic::backend {
     // Platform selection stays below the portable Graphic module. An explicitly
     // requested driver is never retried with a different API after failure.
     DeviceOptions DefaultDeviceOptions();
-    SDL_GPUDevice* CreateDevice(const DeviceOptions& options);
+    SDL_GPUDevice* CreateDevice(const DeviceOptions& options, std::string* error = nullptr);
 }

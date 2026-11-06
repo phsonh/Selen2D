@@ -1,9 +1,10 @@
 #pragma once
 #include "InputState.h"
 #include <SDL3/SDL_events.h>
+#include <string>
 
 namespace core::modules::Input {
-    bool Init();
+    bool Init(std::string* error = nullptr);
     void Shutdown();
     // Only the event pump calls these. Published input stays stable except for
     // explicit disabling or notifications that invalidate a device/window.

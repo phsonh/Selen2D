@@ -1,11 +1,12 @@
 #pragma once
+#include <string>
 
 
 namespace core::modules::Graphic {
 	namespace Upload { class Queue; }
 	namespace Render { class Renderer; }
     namespace Shader { class ProgramStore; }
-	bool Init();
+	bool Init(std::string* error = nullptr);
 	// Native resource/render integration, not exposed to Lua as a Texture API.
 	Upload::Queue& Uploads();
 	Render::Renderer& Frames(); // Native frame facility; independent of Object/Lua.

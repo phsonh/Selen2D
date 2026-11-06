@@ -25,13 +25,19 @@ FrameMetrics ReadMetrics() {
     return metrics;
 }
 }
-bool Init(int width,int height) {
+bool Init(int width,int height,std::string* error) {
+    if(error) error->clear();
     if(window) return true;
     initialFullscreen=false;
     state=State{};
     window=SDL_CreateWindow(engine::build::Title,width,height,
         SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if(!window) { core::runtime::Log::Error(std::string("Window initialization failed: ")+SDL_GetError()); return false; }
+    if(!window) {
+        const std::string message=std::string("SDL_CreateWindow failed: ")+SDL_GetError();
+        if(error) *error=message;
+        else core::runtime::Log::Error(message);
+        return false;
+    }
     windowId=SDL_GetWindowID(window);
     core::runtime::Log::Debug("Window initialized hidden");
     return true;

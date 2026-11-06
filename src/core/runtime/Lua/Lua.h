@@ -6,7 +6,7 @@ namespace core::modules::File { class FileSystem; }
 
 namespace core::runtime::Lua
 {
-    bool Init();
+    bool Init(std::string* error = nullptr);
 
     lua_State* GetState();
 
