@@ -40,15 +40,18 @@ public:
     void CheckOutBound();
 private:
     ObjectPool pool_;
-    std::vector<ObjectHandle> order_,activeOrder_,snapshot_,activate_,deletions_,sources_,targets_;
+    std::vector<ObjectHandle> order_,activeOrder_,snapshot_,activate_,deletions_;
+    struct CollisionEntry { ObjectHandle handle; Object* object; };
+    std::vector<CollisionEntry> sources_,targets_;
     // A fixed-capacity FIFO contains each pending deletion exactly once. Pop
     // before invoking Lua so failure cannot retry it; callback additions append.
     std::size_t deleteHead_{},deleteCount_{},validCount_{};
     bool dispatching_{},orderDirty_{},hasBound_{},closing_{},finalized_{},cleanupSucceeded_{true};
     double left_{},right_{},bottom_{},top_{};
     bool Active(ObjectHandle) const noexcept;
-    bool Candidate(ObjectHandle,std::int32_t) const noexcept;
+    bool Candidate(const Object&,std::int32_t) const noexcept;
     bool Intersects(ObjectHandle,ObjectHandle) const;
+    bool Intersects(const Object&,const Object&) const;
     void Compact() noexcept;
     void Reclaim(ObjectHandle,ObjectCallbacks&) noexcept;
     ObjectHandle PopDeletion() noexcept;

@@ -18,7 +18,8 @@ struct Dispatch {
 };
 }
 ObjectSystem::ObjectSystem(std::uint32_t capacity):pool_(capacity),deletions_(capacity) {
-    for(auto* list:{&order_,&activeOrder_,&snapshot_,&activate_,&sources_,&targets_}) list->reserve(capacity);
+    for(auto* list:{&order_,&activeOrder_,&snapshot_,&activate_}) list->reserve(capacity);
+    sources_.reserve(capacity); targets_.reserve(capacity);
 }
 void ObjectSystem::Compact() noexcept {
     if(!orderDirty_) return;
@@ -140,39 +141,52 @@ void ObjectSystem::Render(ObjectCallbacks& cb) {
     Dispatch dispatch(dispatching_); Compact(); snapshot_.assign(activeOrder_.begin(),activeOrder_.end());
     for(auto h:snapshot_) if(Active(h) && Get(h)->scheduling.render) cb.Render(h);
 }
-bool ObjectSystem::Candidate(ObjectHandle h,std::int32_t group) const noexcept {
-    const auto* obj=Get(h);
-    return obj && obj->lifecycle.status==Object::Status::active && obj->collision.enabled && obj->collision.group==group;
+bool ObjectSystem::Candidate(const Object& obj,std::int32_t group) const noexcept {
+    return obj.lifecycle.status==Object::Status::active && obj.collision.enabled && obj.collision.group==group;
 }
 bool ObjectSystem::Intersects(ObjectHandle first,ObjectHandle second) const {
+    return Intersects(*Get(first),*Get(second));
+}
+bool ObjectSystem::Intersects(const Object& first,const Object& second) const {
     const auto collider=[](const Object& obj) {
         return Collision::Collider{obj.transform.x,obj.transform.y,obj.collision.a,obj.collision.b,obj.transform.rot,obj.collision.rectangle};
     };
-    return Collision::Intersects(collider(*Get(first)),collider(*Get(second)));
+    return Collision::Intersects(collider(first),collider(second));
 }
 void ObjectSystem::Collide(std::int32_t groupA,std::int32_t groupB,ObjectCallbacks& cb) {
     if(groupA<0 || groupB<0) throw std::invalid_argument("Object collision groups must be non-negative");
     Dispatch dispatch(dispatching_); Compact(); sources_.clear(); targets_.clear();
+    // Pool storage is reserved to its fixed capacity. Create cannot move existing
+    // objects, and Delete only queues reclamation. Dispatch excludes Commit and
+    // FinalizeShutdown, the only operations that can move or reclaim objects.
+    // Keep addresses only for this dispatch; all eligibility and geometry remain
+    // live, including after callbacks. Exceptions must clear the snapshot too.
+    struct ResetSnapshot {
+        std::vector<CollisionEntry>& sources;
+        std::vector<CollisionEntry>& targets;
+        ~ResetSnapshot() { sources.clear(); targets.clear(); }
+    } reset{sources_,targets_};
     for(auto h:activeOrder_) {
-        if(!Active(h)) continue;
-        const auto group=Get(h)->collision.group;
-        if(group==groupA) sources_.push_back(h);
-        if(groupA!=groupB && group==groupB) targets_.push_back(h);
+        auto* obj=Get(h);
+        if(!obj || obj->lifecycle.status!=Object::Status::active) continue;
+        const auto group=obj->collision.group;
+        if(group==groupA) sources_.push_back({h,obj});
+        if(groupA!=groupB && group==groupB) targets_.push_back({h,obj});
     }
     if(groupA==groupB) {
         for(std::size_t i=0;i<sources_.size();++i) for(std::size_t j=i+1;j<sources_.size();++j) {
             const auto a=sources_[i],b=sources_[j];
-            if(!Candidate(a,groupA)) break;
-            if(!Candidate(b,groupA) || !Intersects(a,b)) continue;
-            cb.Collision(a,b);
+            if(!Candidate(*a.object,groupA)) break;
+            if(!Candidate(*b.object,groupA) || !Intersects(*a.object,*b.object)) continue;
+            cb.Collision(a.handle,b.handle);
             // This pair's geometry is evaluated once. Live eligibility is checked
             // again; changed positions/sizes affect subsequent pairs.
-            if(Candidate(a,groupA) && Candidate(b,groupA)) cb.Collision(b,a);
+            if(Candidate(*a.object,groupA) && Candidate(*b.object,groupA)) cb.Collision(b.handle,a.handle);
         }
     } else {
         for(auto a:sources_) for(auto b:targets_) {
-            if(!Candidate(a,groupA)) break;
-            if(Candidate(b,groupB) && Intersects(a,b)) cb.Collision(a,b);
+            if(!Candidate(*a.object,groupA)) break;
+            if(Candidate(*b.object,groupB) && Intersects(*a.object,*b.object)) cb.Collision(a.handle,b.handle);
         }
     }
 }
