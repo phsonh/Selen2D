@@ -36,6 +36,14 @@ float GpuFloat(double value) {
     if (!std::isfinite(result)) throw std::invalid_argument("3D value exceeds GPU float range");
     return result;
 }
+// Compare only initialized float elements, never structure padding. Exact GPU
+// representations preserve signed zero; no epsilon or resource-identity shortcut.
+bool SameSpriteSampling(const detail::SpriteParameters& a,const detail::SpriteParameters& b) noexcept {
+    static_assert(sizeof(float)==4 && std::numeric_limits<float>::is_iec559);
+    return std::memcmp(a.region.data(),b.region.data(),a.region.size()*sizeof(float))==0 &&
+        std::memcmp(a.flags.data(),b.flags.data(),a.flags.size()*sizeof(float))==0 &&
+        std::memcmp(a.logical.data(),b.logical.data(),a.logical.size()*sizeof(float))==0;
+}
 struct FogUniform { std::array<float,4> range{}, color{}, operations{}; };
 FogUniform FogData(const std::optional<Geometry::Fog>& fog) {
     FogUniform data;
@@ -117,6 +125,12 @@ struct Renderer::Impl {
         std::vector<detail::SpriteVertex> recordedSprites;
         std::vector<Uint32> spriteIndices;
         std::vector<detail::SpriteParameters> spriteParameters;
+        std::size_t SpriteCount() const noexcept { return recordedSprites.size()/4; }
+        bool HasVertexBudget(std::size_t maximum,std::size_t requested) const noexcept {
+            if(recordedVertices.size()>maximum) return false;
+            const auto remaining=maximum-recordedVertices.size(),sprites=SpriteCount();
+            return sprites<=remaining/6 && requested<=remaining-sprites*6;
+        }
         SDL_GPUBuffer* vertexBuffer{};
         SDL_GPUBuffer* parameterBuffer{};
         SDL_GPUBuffer* indexBuffer{};
@@ -210,7 +224,7 @@ struct Renderer::Impl {
         auto& frame=Recording();
         detail::Validate(image,paint);
         const auto maximum=config.maxVertexBytes/sizeof(detail::Vertex);
-        if(frame.commands.size()>=config.maxCommands || vertices.size()>maximum-frame.recordedVertices.size()-frame.spriteParameters.size()*6)
+        if(frame.commands.size()>=config.maxCommands || !frame.HasVertexBudget(maximum,vertices.size()))
             throw std::length_error("Renderer draw command/vertex budget exhausted");
         auto output=canvases.Acquire(destination);
         if(image.texture==output->texture) throw std::invalid_argument("Canvas cannot sample itself while it is the output target");
@@ -234,13 +248,13 @@ struct Renderer::Impl {
     }
     void CommitSprite(Canvas::Handle destination,const Render::Image& image,Paint paint,
         const std::array<detail::SpriteVertex,4>& vertices,const detail::SpriteParameters& parameters,
-        std::shared_ptr<Attachment> sourceCanvas) {
+        bool reuseParameters,std::shared_ptr<Attachment> sourceCanvas) {
         auto& frame=Recording();
         detail::Validate(image,paint);
         // Keep the generic B-layout six-vertex admission charge even though
         // four vertices, six indices and one parameter record use fewer bytes.
         const auto maximum=config.maxVertexBytes/sizeof(detail::Vertex);
-        if(frame.commands.size()>=config.maxCommands || 6>maximum-frame.recordedVertices.size()-frame.spriteParameters.size()*6)
+        if(frame.commands.size()>=config.maxCommands || !frame.HasVertexBudget(maximum,6))
             throw std::length_error("Renderer draw command/vertex budget exhausted");
         auto output=canvases.Acquire(destination);
         if(image.texture==output->texture) throw std::invalid_argument("Canvas cannot sample itself while it is the output target");
@@ -256,10 +270,10 @@ struct Renderer::Impl {
         const auto size=frame.recordedSprites.size()+vertices.size();
         if(size>frame.recordedSprites.capacity()) frame.recordedSprites.reserve(
             std::max(size,std::min<std::size_t>(maximum/6*4,std::max<std::size_t>(256,frame.recordedSprites.capacity()*2))));
-        if(frame.spriteParameters.size()==frame.spriteParameters.capacity()) frame.spriteParameters.reserve(
+        if(!reuseParameters && frame.spriteParameters.size()==frame.spriteParameters.capacity()) frame.spriteParameters.reserve(
             std::min<std::size_t>(maximum/6,std::max<std::size_t>(256,frame.spriteParameters.size()*2)));
         // All reservations precede publication, including the parameter index.
-        frame.spriteParameters.push_back(parameters);
+        if(!reuseParameters) frame.spriteParameters.push_back(parameters);
         frame.recordedSprites.insert(frame.recordedSprites.end(),vertices.begin(),vertices.end());
         frame.commands.push_back(std::move(command));
     }
@@ -345,7 +359,11 @@ struct Renderer::Impl {
         const auto bounds=info.bounds;
         const std::array<Geometry::Point,4> uv{{{1,0},{0,0},{0,1},{1,1}}};
         const auto parameters=SpriteSampling(image);
-        const auto parameterIndex=static_cast<std::uint32_t>(frame.spriteParameters.size());
+        // Previous successful compact sprite in this unsubmitted batch. Other
+        // command kinds leave this immutable sampling value alone; clearing the
+        // batch clears the table. Failed or skipped draws publish nothing.
+        const bool reuseParameters=!frame.spriteParameters.empty() && SameSpriteSampling(frame.spriteParameters.back(),parameters);
+        const auto parameterIndex=static_cast<std::uint32_t>(reuseParameters ? frame.spriteParameters.size()-1 : frame.spriteParameters.size());
         std::array<detail::SpriteVertex,4> quad;
         for(std::size_t i=0;i<4;++i) {
             const double q=weights ? (*weights)[i]:1;
@@ -354,7 +372,7 @@ struct Renderer::Impl {
             const auto color=explicitVertices ? (*explicitVertices)[i].color:paint.color;
             quad[i]=ProjectSprite(bounds,corners[i],u,t,q,color,parameterIndex);
         }
-        CommitSprite(destination,image,paint,quad,parameters,std::move(sourceCanvas));
+        CommitSprite(destination,image,paint,quad,parameters,reuseParameters,std::move(sourceCanvas));
     }
     void Ribbon(Canvas::Handle destination, const Render::Image& image,std::span<const Geometry::Point> points,double width,Paint paint,bool closedPath,
         std::shared_ptr<Attachment> sourceCanvas={}) {
@@ -659,7 +677,8 @@ struct Renderer::Impl {
         frame.vertices.clear();
         frame.vertices.reserve(frame.recordedVertices.size());
         frame.spriteIndices.clear();
-        frame.spriteIndices.reserve(frame.spriteParameters.size()*6);
+        // Admission caps this product (and every vertex/index offset) below Uint32.
+        frame.spriteIndices.reserve(frame.SpriteCount()*6);
         static_assert(sizeof(Uint32)==4);
         constexpr std::array<Uint32,6> quadIndices{0,1,2,0,2,3};
         for(const auto index:frame.order) {
@@ -1008,7 +1027,7 @@ void Renderer::RenderText(std::shared_ptr<const Text::LayoutResult> layout,doubl
     if(!count) return; // Layout and target validation still ran; no rectangular blank glyph.
     const bool outline=prepared->layout->style.outlineWidth>0;
     const auto vertexCount=count*6*(outline?2:1),maximum=impl->config.maxVertexBytes/sizeof(detail::Vertex);
-    if(vertexCount>maximum-frame.recordedVertices.size()-frame.spriteParameters.size()*6) throw std::length_error("Renderer text vertex budget exhausted");
+    if(!frame.HasVertexBudget(maximum,vertexCount)) throw std::length_error("Renderer text vertex budget exhausted");
     if(!impl->glyphTextures) impl->glyphTextures=std::make_unique<GlyphTextures::Store>(impl->device);
     Impl::Command command{};command.kind=Impl::Kind::Text;command.target=std::move(target);
     command.paint={color,blend,layer};command.sequence=frame.commands.size();command.text=prepared;
