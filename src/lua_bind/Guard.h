@@ -33,7 +33,11 @@ namespace lua_bind {
     }
     template<int (*Function)(lua_State*)>
     int Guard(lua_State* L) {
-        char error_buffer[4096]{};
+        // Successful calls do not read the diagnostic payload. TryFunction
+        // writes and terminates it on every exception; initialize only the
+        // empty-message sentinel for a function returning a negative result.
+        char error_buffer[4096];
+        error_buffer[0] = 0;
         const int results = TryFunction<Function>(L, error_buffer, sizeof(error_buffer));
         if (results >= 0) return results;
         // Even allocating the Lua error string happens after all catch scopes.

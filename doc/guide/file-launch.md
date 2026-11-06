@@ -193,3 +193,5 @@ Remove-Item Env:ENGINE_SPRITE_PROFILE_PATH
 `ENGINE_SPRITE_PROFILE_PATH` 是开发者主动指定的原生 CSV 输出位置；正常退出时集中写入，不属于 Lua VFS 保存日志接口。未设置路径时不采样。完成测量后用同一配置命令设置 `-DENGINE_SPRITE_PROFILE=OFF` 并重建。
 
 `uploadMs`（CSV 列 `upload_ms`）由 CPU 单调时钟测量上传准备和命令编码调用的耗时，并不是 GPU 执行 copy 的时间。`hostframeinterval_ms` 包含引擎帧之间的等待/调度，不能当作纯渲染耗时。当前没有 GPU timestamp 测量，CSV 的 `gpu_ms` 为 `-1`，应标记“未测得”。字节数和 Draw Call 计数也不能直接换算为 FPS 提升。
+
+`record_ms` 覆盖整个 Lua 帧回调，可能同时包含游戏逻辑、碰撞、对象渲染分发和绘制调用，并非纯 Renderer 记录时间。`prepare_ms` 在回调之后，包含命令排序和缓冲准备；优化这个阶段不能算成 Lua 绘制调用的提速。需要定位细节时，应单独测量调用区间，并用相同脚本、输入、LuaJIT 状态和渲染设置的正常构建进行交错对照。嵌套计时不可直接相加，预热及首次分配应与稳态样本分开。
