@@ -1,5 +1,6 @@
 #include "engine/Engine.h"
 #include "engine/Startup.h"
+#include "engine/StartupFailure.h"
 #include "core/modules/File/Profile.h"
 #include "core/runtime/Log/Log.h"
 #include <SDL3/SDL.h>
@@ -47,6 +48,7 @@ std::vector<std::string> Arguments(int argc,char* argv[]) {
 }
 
 int RunApplication(int argc, char* argv[]) {
+    engine::StartupFailure::Presentation startupFailure;
     core::modules::File::profile::Initialize();
     struct ProfileLifetime { ~ProfileLifetime() { core::modules::File::profile::Flush(); } } profile;
     // engine_app is a GUI-subsystem executable on Windows: the OS never opens
@@ -57,7 +59,12 @@ int RunApplication(int argc, char* argv[]) {
             core::runtime::Log::Shutdown();
         }
     } diagnostics;
-    if (!core::runtime::Log::Init()) return 2;
+    if (!core::runtime::Log::Init()) {
+        const auto detail=core::runtime::Log::InitializationErrorText();
+        core::runtime::Log::Shutdown();
+        startupFailure.Show(engine::StartupFailure::Kind::Logging,detail);
+        return 2;
+    }
     if (core::runtime::Log::TerminationRequested()) return 0;
     engine::Startup::Config config;
     std::uint64_t frame_limit{};
@@ -82,14 +89,20 @@ int RunApplication(int argc, char* argv[]) {
         config=engine::Startup::Load(deployment);
     } catch(const std::exception& error) {
         core::runtime::Log::Error(std::string("Startup error: ") + error.what());
+        config={}; // Release any prepared startup resources before presentation.
+        core::runtime::Log::Shutdown();
+        startupFailure.Show(engine::StartupFailure::Kind::Configuration,error.what());
         return 2;
     }
     // Startup validation is synchronous. A console signal cannot interrupt it
     // or unwind native code on the handler thread; honor it at this boundary.
     if (core::runtime::Log::TerminationRequested()) return 0;
-    const bool initialized = engine::Init(config.entry,config.files,arguments);
+    engine::StartupFailure::Failure failure;
+    const bool initialized = engine::Init(config.entry,config.files,arguments,&failure);
     const bool ran = initialized && engine::Run(frame_limit);
     const bool closed = engine::Shutdown();
+    config={};
+    if(!initialized && failure.available) startupFailure.Show(failure.kind,failure.detail);
     return initialized && ran && closed ? 0 : 1;
 }
 

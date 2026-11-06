@@ -86,7 +86,7 @@ function Loader:LoadFont(name, path) end
 
 ---HLSL 和相对 include 统一经 VFS；编译、反射、GPU 程序准备成功才发布。
 ---公开 ABI 由当前 Graphic 声明和 Shader 指南确定；不定义另一套 Shader ABI。
----编译器静态链接，运行无需外部 DXC DLL、Python 或 SDK。错误含名称、路径和诊断。
+---编译器使用 EXE 同目录随包提供的 dxcompiler.dll，运行无需安装 Python 或 SDK。错误含名称、路径和诊断。
 ---@param name string
 ---@param path string
 function Resource.LoadShader(name, path) end

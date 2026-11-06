@@ -49,6 +49,10 @@ namespace core::runtime::Log
         bool StandardStreamsReady = true;
         bool StandardStreamsReported = false;
         DWORD StandardStreamErrors[10]{}; // Restore, control setup, open, repair, verify.
+        constexpr const char* StandardStreamOperations[] = {
+            "restore stdin", "restore stdout", "restore stderr", "install console control handler",
+            "enable Ctrl+C delivery", "open parent console output",
+            "repair stdout", "repair stderr", "validate stdout", "validate stderr"};
         HANDLE OutputFallback[2]{}; // Original routes or repaired console after a failed SetStdHandle.
         // At most one handle opened by us, shared by missing output streams.
         // Its lifetime is the process, not Init/Shutdown: late native diagnostics
@@ -74,6 +78,12 @@ namespace core::runtime::Log
             // A broken pipe remains a pipe; do not replace deliberate routing
             // just because a later write fails.
             return type != FILE_TYPE_UNKNOWN || GetLastError() == ERROR_SUCCESS;
+        }
+
+        HANDLE OutputHandle(bool error) noexcept
+        {
+            const HANDLE fallback = OutputFallback[error ? 1 : 0];
+            return fallback ? fallback : GetStdHandle(error ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
         }
 
         void PrepareStandardStreams() noexcept
@@ -333,8 +343,7 @@ namespace core::runtime::Log
 #ifdef _WIN32
             // Query inherited handles at each write, including GUI builds
             // whose CRT streams are not connected to the parent handles.
-            const HANDLE fallback = OutputFallback[error ? 1 : 0];
-            const HANDLE handle = fallback ? fallback : GetStdHandle(error ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
+            const HANDLE handle = OutputHandle(error);
             DWORD mode = 0;
             const bool console = handle && handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode);
             WriteHandle(handle, console, prefix);
@@ -383,16 +392,12 @@ namespace core::runtime::Log
                     if (!StandardStreamsReported)
                     {
                         StandardStreamsReported = true;
-                        constexpr const char* operations[] = {
-                            "restore stdin", "restore stdout", "restore stderr", "install console control handler",
-                            "enable Ctrl+C delivery", "open parent console output",
-                            "repair stdout", "repair stderr", "validate stdout", "validate stderr"};
                         for (std::size_t i = 0; i < std::size(StandardStreamErrors); ++i)
                             if (StandardStreamErrors[i])
                             {
                                 char message[160];
                                 std::snprintf(message, sizeof(message),
-                                    "Cannot %s (Windows error %lu); startup aborted", operations[i],
+                                    "Cannot %s (Windows error %lu); startup aborted", StandardStreamOperations[i],
                                     static_cast<unsigned long>(StandardStreamErrors[i]));
                                 WriteLocked("ERROR", message, true, false);
                             }
@@ -433,6 +438,59 @@ namespace core::runtime::Log
 #else
         return false;
 #endif
+    }
+
+    bool HasStandardOutputRoute() noexcept
+    {
+#ifdef _WIN32
+        try
+        {
+            std::lock_guard lock(WriteMutex);
+            const auto routed = [](bool error) noexcept {
+                SetLastError(ERROR_SUCCESS);
+                const HANDLE handle = OutputHandle(error);
+                const DWORD queryError = GetLastError();
+                if (!handle || handle == INVALID_HANDLE_VALUE)
+                    return queryError != ERROR_SUCCESS && queryError != ERROR_INVALID_HANDLE;
+                SetLastError(ERROR_SUCCESS);
+                const DWORD type = GetFileType(handle);
+                // Only a known invalid handle proves no route. Unexpected
+                // query failures must not turn automation into a modal dialog.
+                return type != FILE_TYPE_UNKNOWN || GetLastError() != ERROR_INVALID_HANDLE;
+            };
+            return routed(false) || routed(true);
+        }
+        catch (...) { return true; }
+#else
+        return true; // No native startup dialog is provided on other platforms.
+#endif
+    }
+
+    std::string InitializationErrorText() noexcept
+    {
+#ifdef _WIN32
+        try
+        {
+            std::lock_guard lock(WriteMutex);
+            std::string result;
+            for (std::size_t i = 0; i < std::size(StandardStreamErrors); ++i)
+                if (StandardStreamErrors[i])
+                {
+                    char message[160];
+                    const int length = std::snprintf(message, sizeof(message),
+                        "Cannot %s (Windows error %lu); startup aborted", StandardStreamOperations[i],
+                        static_cast<unsigned long>(StandardStreamErrors[i]));
+                    if (length > 0)
+                    {
+                        if (!result.empty()) result.push_back('\n');
+                        result.append(message, (std::min)(static_cast<std::size_t>(length), sizeof(message) - 1));
+                    }
+                }
+            return result;
+        }
+        catch (...) {}
+#endif
+        return {};
     }
 
     void Debug(std::string_view message) noexcept { Write("DEBUG", message, false, false); }

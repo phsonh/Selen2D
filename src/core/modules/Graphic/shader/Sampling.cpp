@@ -1,4 +1,5 @@
 #include "Sampling.h"
+#include "DxcRuntime.h"
 #include "ImageSamplingSource.h"
 #include <algorithm>
 #include <limits>
@@ -163,7 +164,7 @@ std::vector<SamplingCall> Analyze(const Model& model,const std::function<bool()>
 #ifdef _WIN32
     Cancel(cancelled);
     if(model.source.size()>std::numeric_limits<unsigned>::max()) throw std::length_error("Shader semantic source is too large");
-    ComPtr<IDxcIntelliSense> sense;HR(DxcCreateInstance(CLSID_DxcIntelliSense,IID_PPV_ARGS(&sense)));
+    ComPtr<IDxcIntelliSense> sense;HR(DxcRuntime::Create(CLSID_DxcIntelliSense,IID_PPV_ARGS(&sense)));
     ComPtr<IDxcIndex> index;HR(sense->CreateIndex(&index));
     ComPtr<IDxcUnsavedFile> unsaved;
     constexpr const char* filename="Engine.semantic.hlsl";

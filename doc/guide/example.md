@@ -2,7 +2,7 @@
 
 运行发行目录的 EXE，按 Enter 进入花园。WASD 或方向键移动金色光点，碰到漂浮的小光点后计分并生成新的光点。P 或空格暂停，再按 P、空格或 Enter 继续。游戏中 Esc 返回菜单，菜单中 Esc 退出；可以反复进入。标题栏同步显示当前操作。
 
-根目录 `main.lua` 通过 `File.RunLuaFile("example/main.lua")` 引导示例，并检查正常读取失败的返回值。示例逻辑仍完整保存在 `example/main.lua`；图形与声音是本项目原创的小素材，文字使用原版 Noto Sans。字体的原作者、固定来源和 SHA-256 在 `example/assets/SOURCE.md`，SIL OFL 1.1 原文在同目录 `OFL.txt`；分发时保留它们。示例运行不需要 Python、SDK、网络或第三方 DLL。
+根目录 `main.lua` 通过 `File.RunLuaFile("example/main.lua")` 引导示例，并检查正常读取失败的返回值。示例逻辑仍完整保存在 `example/main.lua`；图形与声音是本项目原创的小素材，文字使用原版 Noto Sans。字体的原作者、固定来源和 SHA-256 在 `example/assets/SOURCE.md`，SIL OFL 1.1 原文在同目录 `OFL.txt`；分发时保留它们。示例使用 EXE 同目录内随包提供的 `dxcompiler.dll`，不需要安装 Python、SDK 或额外运行库，也不依赖网络。
 
 ## 一条完整的生命周期
 
@@ -28,7 +28,7 @@ UI 的两项资源同步加载，使游戏资源准备期间仍能显示文字�
 在解压后的发行目录运行：
 
 ```powershell
-.\Selen2D.exe --self-test
+.\Selen2D.exe --no-error-dialog --self-test
 ```
 
 自动模式只把键盘输入替换为确定的动作序列，调用同一套加载、更新、碰撞、绘制、暂停和退出函数。它完成两轮“菜单→加载→运行→暂停→继续→返回”，每轮真实收集至少一个光点，并检查显式删除回调、播放器/Canvas 失效、资源卸载及默认 RNG 不变。正常返回菜单后调用 Runtime.Quit，ExitFunction 写入 `output/result.json`。同目录的 PNG 保存菜单、加载、运行、暂停和重新进入画面；场景 PNG 可用于逐像素比较暂停冻结和相同种子布局。

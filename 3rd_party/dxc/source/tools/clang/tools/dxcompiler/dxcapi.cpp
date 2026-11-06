@@ -11,9 +11,7 @@
 
 #include "dxc/Support/WinIncludes.h"
 
-#if defined(ENGINE_DXC_STATIC)
-#define DXC_API_IMPORT
-#elif defined(_WIN32)
+#ifdef _WIN32
 #define DXC_API_IMPORT __declspec(dllexport)
 #else
 #define DXC_API_IMPORT __attribute__((visibility("default")))

@@ -82,47 +82,7 @@ Cleanup:
   }
   return hr;
 }
-#if defined(ENGINE_DXC_STATIC)
-// Static embedding owns the same process lifetime that DllMain owns in a DLL.
-// Shutdown is terminal and requires every compiler job and COM object to end.
-static INIT_ONCE EngineDxcInitOnce = INIT_ONCE_STATIC_INIT;
-static HRESULT EngineDxcInitResult = E_UNEXPECTED;
-static LONG EngineDxcStopped = 0;
-
-static BOOL CALLBACK EngineDxcInitializeOnce(PINIT_ONCE, PVOID, PVOID *) {
-  EventRegisterMicrosoft_Windows_DXCompiler_API();
-  DxcEtw_DXCompilerInitialization_Start();
-  EngineDxcInitResult = InitMaybeFail();
-  DxcEtw_DXCompilerInitialization_Stop(EngineDxcInitResult);
-  if (FAILED(EngineDxcInitResult))
-    EventUnregisterMicrosoft_Windows_DXCompiler_API();
-  return TRUE;
-}
-
-extern "C" HRESULT WINAPI EngineDxcInitialize() {
-  if (InterlockedCompareExchange(&EngineDxcStopped, 0, 0))
-    return E_UNEXPECTED;
-  if (!InitOnceExecuteOnce(&EngineDxcInitOnce, EngineDxcInitializeOnce, nullptr,
-                          nullptr))
-    return HRESULT_FROM_WIN32(GetLastError());
-  return EngineDxcInitResult;
-}
-
-extern "C" void WINAPI EngineDxcShutdown() {
-  if (InterlockedCompareExchange(&EngineDxcStopped, 1, 0) ||
-      FAILED(EngineDxcInitResult))
-    return;
-  DxcEtw_DXCompilerShutdown_Start();
-  DxcSetThreadMallocToDefault();
-  ::hlsl::options::cleanupHlslOptTable();
-  ::llvm::sys::fs::CleanupPerThreadFileSystem();
-  ::llvm::llvm_shutdown();
-  DxcClearThreadMalloc();
-  DxcCleanupThreadMalloc();
-  DxcEtw_DXCompilerShutdown_Stop(S_OK);
-  EventUnregisterMicrosoft_Windows_DXCompiler_API();
-}
-#elif defined(LLVM_ON_UNIX)
+#if defined(LLVM_ON_UNIX)
 HRESULT __attribute__((constructor)) DllMain() { return InitMaybeFail(); }
 
 void __attribute__((destructor)) DllShutdown() {

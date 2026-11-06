@@ -1,5 +1,5 @@
 -- Orbit Garden: a complete, editable Lua example. See doc/guide/example.md.
--- Only example/... and output/... are authorized by the default launch.h.
+-- The public default launch configuration authorizes safe paths under the EXE directory.
 local settings = {width = 960, height = 640, speed = 210, seed = 7241, motes = 8}
 local selfTest = false
 for _, argument in ipairs(Runtime.GetArguments()) do

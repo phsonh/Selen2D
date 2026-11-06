@@ -1,7 +1,10 @@
 # Selen2D 入门
 
+Windows x64 发行包是自包含目录，保留同目录的 `Selen2D.exe` 和 `dxcompiler.dll`，再放置游戏资源。无需另行安装编译器或运行库；不要只复制 EXE。
+
 默认 EXE 执行部署根的 `main.lua`，其中用 `File.RunLuaFile("example/main.lua")` 引导 Orbit Garden。默认授权安全部署根路径；运行时不读取外部 JSON 或启动头文件。Orbit Garden 展示菜单、异步加载、对象更新、暂停与返回菜单：Enter 开始，WASD 或方向键移动，P / 空格暂停，游戏中 Esc 返回菜单、菜单中 Esc 退出。随包包含原创图片/铃声和附 OFL 许可的 Noto Sans 字体；普通运行不会写入截图或测试结果。
 
+- [版本与兼容性变更](../../CHANGELOG.md)：按版本列出的部署、JSON 和日志迁移。
 - [开始运行与修改 Lua](getting-started.md)：目录、入口、固定项目根和常用修改。
 - [完整 Lua 示例](example.md)：资源加载、显式 Object 提交、独立 RNG、播放器、Canvas、释放与两轮自动流程。
 - [编写 Shader](shader.md)：运行时编译、相对 include、Lua 参数与 Engine.hlsl ABI。

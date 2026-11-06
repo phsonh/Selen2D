@@ -1,4 +1,5 @@
 #include "Compiler.h"
+#include "DxcRuntime.h"
 #include "Sampling.h"
 #include "core/modules/File/Vfs.h"
 #include <algorithm>
@@ -16,7 +17,6 @@
 #include <objbase.h>
 #include <oleauto.h>
 #include <dxc/dxcapi.h>
-#include <EngineDxcStatic.h>
 #include <d3d12shader.h>
 #include <wrl/client.h>
 #endif
@@ -240,19 +240,6 @@ std::string Utf8(const wchar_t* input) {
     WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,input,-1,result.data(),count,nullptr,nullptr);
     result.pop_back(); return result;
 }
-struct Library {
-    DxcCreateInstanceProc create{};
-    Library() {
-        // The compiler and validator are real static implementations. Keep their
-        // process lifetime independent of repeated Engine Init/Shutdown cycles.
-        HR(EngineDxcInitialize(),"initialize static Shader compiler");
-        create=&DxcCreateInstance;
-    }
-    // Normal host shutdown has already drained resource jobs and COM owners.
-    ~Library() { EngineDxcShutdown(); }
-};
-const Library& RuntimeCompiler() { static const Library value; return value; }
-
 class Includes final : public IDxcIncludeHandler {
 public:
     Includes(ComPtr<IDxcUtils> utilities,std::shared_ptr<const File::FileSystem> fs,std::function<bool()> stop)
@@ -329,9 +316,8 @@ struct Compiler {
     std::function<bool()> cancelled;
     Compiler(std::shared_ptr<const File::FileSystem> files,std::string p,std::function<bool()> stop)
         :path(std::move(p)),cancelled(std::move(stop)) {
-        const auto& library=RuntimeCompiler();
-        HR(library.create(CLSID_DxcUtils,IID_PPV_ARGS(&utils)),"create DXC utilities");
-        HR(library.create(CLSID_DxcCompiler,IID_PPV_ARGS(&compiler)),"create DXC compiler");
+        HR(DxcRuntime::Create(CLSID_DxcUtils,IID_PPV_ARGS(&utils)),"create DXC utilities");
+        HR(DxcRuntime::Create(CLSID_DxcCompiler,IID_PPV_ARGS(&compiler)),"create DXC compiler");
         includes.Attach(new Includes(utils,std::move(files),cancelled));
     }
     ComPtr<IDxcResult> Run(std::string_view source,const std::vector<std::wstring>& options,const char* entry) {

@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "StartupFailure.h"
 #include "core/modules/File/Profile.h"
 #include "ResourceHost.h"
 #include "BuildInfo.h"
@@ -18,6 +19,7 @@
 #include "core/modules/Debug/Debug.h"
 #include "core/modules/Math/Math.h"
 #include "core/modules/Graphic/Graphic.h"
+#include "core/modules/Graphic/shader/DxcRuntime.h"
 #include "core/modules/Graphic/render/Renderer.h"
 #include "core/modules/Graphic/render/Profile.h"
 #include "core/modules/Graphic/upload/Upload.h"
@@ -96,15 +98,23 @@ bool Pump() {
 }
 }
 bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::FileSystem> fileSystem,
-    const std::vector<std::string>& arguments) {
+    const std::vector<std::string>& arguments, StartupFailure::Failure* failure) {
     VFS_PROFILE_SCOPE(EngineInit);
+    if(failure) { failure->available=false; failure->detail.clear(); }
     if(started) { Log::Error("Engine must be shut down before reinitialization"); return false; }
     started=true; initialized=bindingsReady=ran=quitRequested=exitCalled=false; exitSucceeded=true;
     clock.Reset(SDL_GetTicksNS());
-    if(!Log::Init()) return false;
+    if(!Log::Init()) {
+        if(failure) failure->Set(StartupFailure::Kind::Logging,Log::InitializationErrorText());
+        return false;
+    }
     Log::Info(std::string(build::Title) + " | " + build::Developer + " | MIT License (third-party notices retained)");
     Log::Info("Engine initializing");
+    auto phase=StartupFailure::Kind::Dxc;
+    bool entryStarted{};
     try {
+        Graphic::Shader::DxcRuntime::Initialize();
+        phase=StartupFailure::Kind::NativeServices;
 #ifdef ENGINE_SPRITE_PROFILE
         Graphic::Render::profile::Initialize();
 #endif
@@ -122,12 +132,19 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         bindingsReady=true; // Entry errors must still run an already registered ExitFunction.
         std::string error;
         VFS_PROFILE_MARK(BeforeEntryElapsed);
+        phase=StartupFailure::Kind::Configuration;
         {
             VFS_PROFILE_SCOPE(Entry);
-            if(!entry.empty() && !Lua::DoFile(entry,*files,error)) {
-                ReportLua("Failed to execute entry script",error); return false;
+            if(!entry.empty() && !Lua::DoFile(entry,*files,error,&entryStarted)) {
+                if(entryStarted) ReportLua("Failed to execute entry script",error);
+                else {
+                    if(failure) failure->Set(phase,error);
+                    Report("Failed to read entry script",error);
+                }
+                return false;
             }
         }
+        entryStarted=true; // Subsequent presentation failures are not startup I/O.
         // Finish the current initialization/entry call before processing an
         // asynchronous console request. It must never run cleanup on a worker
         // thread or interrupt Lua/native code halfway through an operation.
@@ -138,7 +155,10 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         }
         initialized=true; // Do not overwrite Quit requested by entry Lua.
         Log::Info("Engine initialized"); return true;
-    } catch(const std::exception& error) { Report("Engine initialization failed",error.what()); return false; }
+    } catch(const std::exception& error) {
+        if(failure && !entryStarted) failure->Set(phase,error.what());
+        Report("Engine initialization failed",error.what()); return false;
+    }
 }
 bool Run(std::uint64_t frameLimit) {
     if(!initialized || ran) { Log::Error("Engine.Run requires a newly initialized host"); return false; }

@@ -10,12 +10,14 @@ param(
     [switch]$PublicRelease,
     [switch]$StageRelease,
     [string]$Python,
-    [string]$ToolsetVersion = '14.44'
+    [string]$ToolsetVersion
 )
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $OutputEncoding
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$taskPreset = if ($PublicRelease) { 'selen2d-public-release' } else { 'selen2d-' + $Configuration.ToLowerInvariant() }
+$taskBuildDirectory = if ($PublicRelease) { 'build/public-release' } else { "build/$($Configuration.ToLowerInvariant())" }
 if ($LaunchConfig -and $DefaultLaunch) { throw 'Choose -LaunchConfig or -DefaultLaunch, not both.' }
 if ($PublicRelease -and ($Configuration -ne 'Release' -or $LaunchConfig)) {
     throw '-PublicRelease requires Release and the built-in default JSON; no custom -LaunchConfig.'
@@ -41,16 +43,37 @@ $Python = (Get-Command $Python -ErrorAction Stop).Source
 if ($Test -and -not (Test-Path -LiteralPath (Join-Path $taskRoot 'tests/CMakeLists.txt'))) {
     throw 'The -Test option requires local tests/CMakeLists.txt; tests are not included in this checkout.'
 }
+# Keep an existing Ninja tree's compiler and developer-shell libraries aligned.
+# Fresh checkouts select the installed default; CI does not assume a minor version.
+$taskCompilerRecords = @(Get-ChildItem -Path (Join-Path $taskRoot "$taskBuildDirectory/CMakeFiles/*/CMakeCXXCompiler.cmake") -ErrorAction SilentlyContinue)
+if ($taskCompilerRecords.Count) {
+    $taskRecord = $taskCompilerRecords | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $taskCompilerText = [IO.File]::ReadAllText($taskRecord.FullName)
+    if ($taskCompilerText -match 'set\(CMAKE_CXX_COMPILER "([^"\r\n]+/MSVC/([0-9.]+)/[^"\r\n]+)"\)') {
+        $taskCachedCompiler = $Matches[1]
+        $taskCachedToolset = $Matches[2]
+        if (-not (Test-Path -LiteralPath $taskCachedCompiler)) { throw 'The cached compiler is no longer installed; use a fresh build configuration. Existing caches were preserved.' }
+        if ($ToolsetVersion -and -not ($taskCachedToolset -eq $ToolsetVersion -or $taskCachedToolset.StartsWith($ToolsetVersion + '.'))) {
+            throw 'Requested toolset differs from the existing build configuration. Existing caches were preserved.'
+        }
+        $ToolsetVersion = $taskCachedToolset
+        Write-Output "Reusing configured MSVC toolset: $ToolsetVersion"
+    }
+}
 $taskVsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $taskVs = & $taskVsWhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $taskVs) { throw 'Visual Studio C++ tools are required.' }
 Import-Module (Join-Path $taskVs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
-Enter-VsDevShell -VsInstallPath $taskVs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64 -vcvars_ver=$ToolsetVersion"
+$taskDevArguments = '-arch=x64 -host_arch=x64'
+if ($ToolsetVersion) { $taskDevArguments += " -vcvars_ver=$ToolsetVersion" }
+Enter-VsDevShell -VsInstallPath $taskVs -SkipAutomaticLocation -DevCmdArguments $taskDevArguments
+$taskCompiler = (Get-Command cl.exe -ErrorAction Stop).Source
+Write-Output "Visual Studio: $taskVs"
+Write-Output "MSVC: $taskCompiler ($((Get-Item -LiteralPath $taskCompiler).VersionInfo.FileVersion))"
+Write-Output "Windows SDK: $env:WindowsSDKVersion"
 $taskCMake = Join-Path $taskVs 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
 $taskNinja = Join-Path $taskVs 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja'
 $env:PATH = "$taskNinja;$(Split-Path $taskCMake);$env:PATH"
-$taskPreset = if ($PublicRelease) { 'selen2d-public-release' } else { 'selen2d-' + $Configuration.ToLowerInvariant() }
-$taskBuildDirectory = if ($PublicRelease) { 'build/public-release' } else { "build/$($Configuration.ToLowerInvariant())" }
 Push-Location -LiteralPath $taskRoot
 try {
     $taskBuildTesting = if ($Test) { 'ON' } else { 'OFF' }

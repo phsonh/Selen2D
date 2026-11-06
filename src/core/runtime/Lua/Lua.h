@@ -13,7 +13,10 @@ namespace core::runtime::Lua
     bool DoFile(
         const std::string& path,
         const core::modules::File::FileSystem& files,
-        std::string& error
+        std::string& error,
+        // Internal host distinction: unreadable VFS input remains false; a
+        // Lua syntax/runtime diagnostic or started Lua execution sets true.
+        bool* enteredLua = nullptr
     );
 
     bool SetFrameFunction(lua_State* caller, int index);

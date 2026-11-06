@@ -58,6 +58,8 @@ GUI 不把 secret 作为命令行参数，不打印 JSON 内容，构建日志�
 
 构建按钮使用仓库已有 PowerShell/CMake 流程，需要 Visual Studio C++ 工具链。界面异步显示日志、退出码和结果，不创建正式发行包。公开发行仍使用独立的显式 `-PublicRelease` 构建和 Release-only 发布流程；GUI 私有配置不会隐式成为公共发行配置。
 
+构建输出是一个运行目录。部署游戏时将同配置的 `Selen2D.exe` 和 `dxcompiler.dll` 与资源包一同复制，并保留项目与第三方许可。DLL 从固定源码构建，不能用 SDK 或其他配置的 DLL 替换；玩家无需另行安装编译器、运行库或 Python。GUI 不把开发机的 `dxc.exe` 放入游戏目录。
+
 Windows 下每次构建都放入独立 Job Object。辅助进程在进入 Job 前不启动任何构建子进程；取消或 GUI 异常退出会终止该次受控进程树，不杀用户终端或其他构建。无法建立 Job 时，构建明确失败，不退化为无法安全取消的后台任务。取消可能留下正常的增量中间产物，下一次构建可继续。
 
 目前构建按钮仅支持 Windows。JSON 编辑与包处理的实现可跨平台，但本轮实际验证以 Windows x64 为准。唯一公开 Python 入口为 `tools/pack/main.py`：无参数启动 GUI；`main.py launch build|inspect|verify` 使用启动配置 CLI；`main.py pack|inspect|verify` 使用资源包 CLI。`main.py --help` 仅需 Python 标准库，CI 的 launch 子命令不加载 GUI、压缩或加密依赖。实现放在内部 `selen2d_pytools/` 包，不能直接运行其中的文件。

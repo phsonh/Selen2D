@@ -1,0 +1,71 @@
+# Selen2D Changelog
+
+按已存在的 Git 历史和当前开发内容记录。带“开发修订”的版本不表示已创建标签或发布二进制；当前公开版本仍以仓库的正式标签和 Releases 为准。
+
+## 2.2.3 — 开发修订，未发布
+
+- Windows x64 的运行时 HLSL 编译改用随包的 `dxcompiler.dll`。部署时必须保留同配置的 EXE 和 DLL；普通游戏运行无需安装 SDK、Python 或另外的编译器。
+- 引擎只从 EXE 绝对目录加载 DLL，并检查 `DxcCreateInstance` 导出；运行时不检查 DLL 版本号或 SHA256。固定源码版本、架构、依赖及摘要由构建和打包检查，不是运行时的防替换机制。
+- 内置 Shader 的构建工具仍与运行时 DLL 分开。普通引擎代码变动不触发 DXC 全量编译，DLL 单独变化也会刷新开发目录。
+- 增加 Windows 构建、CPU 编译器/加载器/包检查和非阻断 GPU smoke 工作流。GitHub Actions 尚未执行；不能把本机验证当作托管 CI 已通过。
+- 原生启动失败在没有日志输出接收方、没有控制台或调试器且确认有交互桌面时，可在必要清理后显示一次错误框。Lua 执行错误不触发该框。自动化可传入 `--no-error-dialog`；详见[日志与启动诊断](doc/guide/debug-console.md)。
+- Lua API、`Engine.hlsl`、资源包格式、VFS 授权和 `Debug.GetLog()` 规则不变。当前正式支持范围仍是 Windows x64 / Direct3D 12 / DXIL。
+
+## 2.2.2 — 开发修订，未单独发布
+
+Git 范围：`a445cc76` 至 `8780736a`。
+
+- 调整原生文件身份检查和读取路径，复用一次操作内已经验证的视图，并增加可选启动/VFS 性能记录。跨操作全树 O(N) 扫描及无关深层目录独占可能导致其他访问返回 `resource_busy` 的问题仍是已知限制；本版本没有消除它们。
+- 删除 `Debug.SetConsoleVisible()` 和 `Debug.IsConsoleVisible()`。调用者应删除显隐调用，改用 CMD、PowerShell、VS Code Task 或 stdout/stderr 重定向查看日志；不提供兼容别名或独立控制台窗口。
+- 不再自动创建、覆盖或写入 `engine.log`。`Debug.GetLog()` 只返回本次运行中的 Lua `Debug.Log/Warn/Error` 及宿主报告的 Lua 错误，不包括普通原生初始化/关闭日志。缓存有界且不因读取清空；Lua 可通过获准的 File 路径自行保存。
+- 标准输出覆盖完整原生和 Lua 生命周期。仅缺少输出句柄时尝试附着父控制台，保留文件、管道、NUL、broken pipe 和 stdin 路由；修复非 NULL 无效句柄的启动边界。
+- 附着后的 Ctrl+C/Ctrl+Break 请求主线程正常退出，不抢占正在运行的 Lua；关闭终端仍不保证退出回调及资源清理完成。
+- 清理内部元表名称和公开文档中的历史开发术语。
+
+迁移方式和错误边界见[日志指南](doc/guide/debug-console.md)。
+
+## 2.2.1 — 开发修订，未单独发布
+
+Git 范围：`609f360d` 至 `e0bc76d0`。
+
+- 压缩精灵顶点颜色，把 2D 精灵共享采样参数移出重复顶点数据。
+- 排序命令引用而非搬移资源快照；2D 四边形使用四顶点和六个 32 位索引，减少排序后的顶点复制。
+- 增加默认关闭的内部精灵计时与数据量记录。`uploadMs`/CSV `upload_ms` 是 CPU 上传准备计时，不是 GPU 执行时间；没有 GPU 时间戳时 `gpu_ms` 为 `-1`。
+- 保持 Lua 绘制接口、透明排序、资源代次和在途生命周期规则。
+
+## 2.2.0 — 正式版本
+
+标签：`v2.2.0`，提交：`a8191657`。
+
+- 汇入 2.1.1 开发期间的 JSON 自动构建、PyQt6 工具和标准发行配置隔离。
+- 默认根入口为 `main.lua`，通过 `File.RunLuaFile("example/main.lua")` 启动完整 Orbit Garden；示例代码、Shader 和素材仍位于 `example/`。
+- JSON 目录类型统一为 `root` 和 `local_app_data`。旧 `deployment` / `user_data` 分别迁移为这两个值；GUI 经用户确认后备份并转换，CLI 严格拒绝旧值。Windows 用户数据使用 LocalAppData，不是 Roaming AppData。
+
+完整字段规则及迁移步骤见[旧配置迁移](doc/guide/file-launch.md#旧配置迁移)。只改变这些 `base` 值，不自行改写入口、包记录或 secret。
+
+## 2.1.1 — 开发修订，最终汇入 2.2.0
+
+Git 范围：`8c40c4bd` 至 `9855ceb1`。
+
+- 启动 JSON 成为源码开发配置入口，构建自动验证并生成内部头文件；运行时不读取外部 JSON。
+- 增加 PyQt6 资源打包、配置和构建界面，与命令行共用 SLPK 实现。
+- 增加当时的独立调试控制台显隐接口；这些接口后来在 **2.2.2 删除**，新项目不要采用它们。
+- 标准发行使用独立公开配置，避免带入私有入口或密钥；改进编译器依赖输入跟踪和增量构建。
+
+## 2.1.0 — 正式版本
+
+标签：`v2.1.0`，提交：`36c755f5`。
+
+- 明确 Object 的显式 `Commit()` 生命周期、身份快照遍历及独立随机数生成器。
+- 加入编译期启动配置、统一 VFS 授权、SLPK 工具和资源异步原子发布。
+- 完成显式音频播放器、Canvas 绘制双入口、Mesh 更新、`Engine.hlsl` 公共 Shader 契约和普通文字功能。
+- 更新应用图标、完整示例和公开 API 定义，整理构建及打包工具目录。
+
+## 2.0.0 — 初始正式基线
+
+标签：`v2.0.0`，提交：`93e44f78`。
+
+- 建立可独立构建的 Selen2D 源码基线、依赖许可证、Lua API 定义和 Orbit Garden 示例。
+- 正式打包改为显式 Release-only 目标，Debug 构建不覆盖正式发行目录或 ZIP。
+
+后续开发保留这些已发布标签；本文件不会把开发修订回填成历史正式发布。

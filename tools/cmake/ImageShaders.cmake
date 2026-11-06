@@ -1,19 +1,8 @@
 # Native build tools only. GPU/backend-specific bytecode is selected at this
 # boundary; Graphics commands and public APIs use SDL_GPU types exclusively.
-# Migrate the former host-tool key once; it is unrelated to runtime DXC builds.
-if(DEFINED SOLONGO_DXC)
-    if(DEFINED ENGINE_DXC_EXECUTABLE)
-        message(WARNING "SOLONGO_DXC is deprecated and ignored because ENGINE_DXC_EXECUTABLE is set; removing the old key.")
-    elseif(NOT "${SOLONGO_DXC}" STREQUAL "" AND NOT "${SOLONGO_DXC}" MATCHES "(^|-)NOTFOUND$"
-            AND EXISTS "${SOLONGO_DXC}" AND NOT IS_DIRECTORY "${SOLONGO_DXC}")
-        set(ENGINE_DXC_EXECUTABLE "${SOLONGO_DXC}" CACHE FILEPATH "Host DXC shader compiler")
-        message(WARNING "SOLONGO_DXC is deprecated; migrated its value to ENGINE_DXC_EXECUTABLE and removed the old key.")
-    else()
-        message(WARNING "SOLONGO_DXC is deprecated and has no usable file; removing it and discovering ENGINE_DXC_EXECUTABLE.")
-    endif()
-    unset(SOLONGO_DXC CACHE)
-    unset(SOLONGO_DXC)
-endif()
+# Discard the retired cache key without migrating its value. Runtime DXC
+# has a separate pinned DLL build; this variable names a host executable only.
+unset(SOLONGO_DXC CACHE)
 if(DEFINED ENGINE_DXC_EXECUTABLE)
     if("${ENGINE_DXC_EXECUTABLE}" STREQUAL "" OR "${ENGINE_DXC_EXECUTABLE}" MATCHES "(^|-)NOTFOUND$")
         unset(ENGINE_DXC_EXECUTABLE CACHE)

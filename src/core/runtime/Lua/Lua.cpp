@@ -1,6 +1,7 @@
 #include "Lua.h"
 #include "VfsScripts.h"
 #include "Error.h"
+#include "core/modules/File/Profile.h"
 #include "core/runtime/Log/Log.h"
 
 namespace core::runtime::Lua {
@@ -50,12 +51,25 @@ bool Init() {
     return true;
 }
 lua_State* GetState() { return state; }
-bool DoFile(const std::string& path, const core::modules::File::FileSystem& files, std::string& error) {
+bool DoFile(const std::string& path, const core::modules::File::FileSystem& files, std::string& error,
+    bool* enteredLua) {
+    if(enteredLua) *enteredLua=false;
     error.clear();
     if(!state) { error="Lua runtime is not initialized"; return false; }
-    const auto status=RunScript(state,files,path);
-    if(status==ScriptStatus::Error) { ReadError(error); return false; }
+    // Keep exactly one VFS admission/read. Native read failures must not be
+    // classified as Lua errors merely because the host is preparing its entry.
+    const auto status=LoadScript(state,files,path);
     if(status==ScriptStatus::Unreadable) { error="Cannot read Lua script from VFS: "+path; return false; }
+    if(enteredLua) *enteredLua=true;
+    if(status==ScriptStatus::Error) { ReadError(error); return false; }
+    VFS_PROFILE_SCOPE(ScriptExecute);
+    // Same protected-call/traceback convention as RunScript; no results escape
+    // an engine entry script. File.RunLuaFile and the VFS loaders are unchanged.
+    const int function=lua_gettop(state);
+    lua_pushcfunction(state,ErrorTraceback); lua_insert(state,function);
+    const int executed=lua_pcall(state,0,0,function);
+    lua_remove(state,function);
+    if(executed) { ReadError(error); return false; }
     return true;
 }
 bool SetFrameFunction(lua_State* caller, int index) { return SetCallback(caller,index,frameRef); }

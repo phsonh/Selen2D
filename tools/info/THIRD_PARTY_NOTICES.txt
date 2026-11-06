@@ -44,10 +44,11 @@ The source tools also include the Unicode 18.0.0 CaseFolding data, copyright
 tools/pack/selen2d_pytools/unicode/LICENSE.txt in the source checkout. This build-time data is not
 required by the running engine.
 
-DXC notices come from the pinned compiler source, including its LICENSE.TXT,
-ThirdPartyNotices.txt and nested component licenses. The source revision and
-local static-integration changes are described in licenses/dxc/STATIC-INTEGRATION.md
-and licenses/dxc/patches/static-embedding.patch, relative to this document.
+The included dxcompiler.dll is built from the pinned compiler source, including
+its LICENSE.TXT, ThirdPartyNotices.txt and nested component licenses. The source
+revision and external build integration are described in
+licenses/dxc/RUNTIME-INTEGRATION.md, relative to this document. The pinned DXC
+source is unmodified; the project-owned ATL/build wrappers are kept separately.
 Older Windows SDK DLL redistribution files are not
 the license record for this source integration and are not included here.
 

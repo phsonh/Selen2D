@@ -1,0 +1,28 @@
+# Build-only command. Runtime lookup never consults this file or the cache.
+set(context_file "@ENGINE_DXC_RUNTIME_BINARY_DIR@/runtime-context.txt")
+if(EXISTS "${context_file}")
+    file(READ "${context_file}" old_context)
+    string(STRIP "${old_context}" old_context)
+    if(NOT old_context STREQUAL "@context@")
+        message(FATAL_ERROR "Runtime DXC toolchain/configuration differs. Select a fresh ENGINE_DXC_RUNTIME_BINARY_DIR; existing caches are preserved.")
+    endif()
+elseif(EXISTS "@ENGINE_DXC_RUNTIME_BINARY_DIR@/CMakeCache.txt")
+    message(FATAL_ERROR "Runtime DXC directory has an unowned CMake cache. Select a fresh ENGINE_DXC_RUNTIME_BINARY_DIR; no existing cache will be reset.")
+endif()
+execute_process(COMMAND "@CMAKE_COMMAND@" -E env PYTHONDONTWRITEBYTECODE=1 "@CMAKE_COMMAND@"
+    -S "@source@" -B "@ENGINE_DXC_RUNTIME_BINARY_DIR@" -G Ninja -C "@integration@/Options.cmake"
+    "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@"
+    "-DCMAKE_C_COMPILER=@CMAKE_C_COMPILER@"
+    "-DCMAKE_CXX_COMPILER=@CMAKE_CXX_COMPILER@"
+    "-DCMAKE_MAKE_PROGRAM=@CMAKE_MAKE_PROGRAM@"
+    "-DPython3_EXECUTABLE=@dxc_python@"
+    "-DENGINE_DXC_ATL_INCLUDE_DIR=@ENGINE_DXC_ATL_INCLUDE_DIR@"
+    COMMAND_ERROR_IS_FATAL ANY)
+file(WRITE "${context_file}" "@context@\n")
+execute_process(COMMAND "@CMAKE_COMMAND@" -E env PYTHONDONTWRITEBYTECODE=1 "@CMAKE_COMMAND@"
+    --build "@ENGINE_DXC_RUNTIME_BINARY_DIR@" --target dxcompiler --parallel @ENGINE_DXC_JOBS@
+    COMMAND_ERROR_IS_FATAL ANY)
+if(NOT EXISTS "@runtime@")
+    message(FATAL_ERROR "Runtime DXC build did not produce the expected DLL: @runtime@")
+endif()
+file(TOUCH "@stamp@")

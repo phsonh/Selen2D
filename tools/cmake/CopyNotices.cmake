@@ -30,7 +30,7 @@ function(engine_require_generated_path candidate expected)
     endif()
 endfunction()
 
-# Called both after linking and by release staging. Return an explicit list so
+# Called by repeatable build deployment and release staging. Return an explicit list so
 # stale files in a reused bin/licenses directory can never enter a new package.
 function(engine_copy_notices source_root destination)
     file(REAL_PATH "${source_root}" source_root)
@@ -57,8 +57,8 @@ function(engine_copy_notices source_root destination)
     foreach(source IN LISTS candidates)
         file(RELATIVE_PATH relative "${source_root}/3rd_party" "${source}")
         get_filename_component(name "${source}" NAME)
-        # The old dxc/ root describes SDK DLL redistribution. The static build
-        # uses the pinned source's licenses, including its nested components.
+        # The runtime DLL is built from pinned source; use that source's
+        # licenses, including nested components, not SDK redistribution files.
         if(relative MATCHES "^dxc/source/(.+)$")
             set(relative "dxc/${CMAKE_MATCH_1}")
         elseif(relative MATCHES "^dxc/")
@@ -72,7 +72,7 @@ function(engine_copy_notices source_root destination)
         endif()
     endforeach()
     foreach(relative IN ITEMS README.md SDL_LOCAL_PATCHES.md LuaJIT/HOST_PATCHES.md stb_image/README.md
-            dxc/STATIC-INTEGRATION.md dxc/patches/static-embedding.patch)
+            dxc/RUNTIME-INTEGRATION.md)
         get_filename_component(parent "${relative}" DIRECTORY)
         file(MAKE_DIRECTORY "${destination}/licenses/${parent}")
         file(COPY_FILE "${source_root}/3rd_party/${relative}"

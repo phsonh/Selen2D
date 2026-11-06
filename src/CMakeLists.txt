@@ -65,9 +65,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/image_sampling.hlsli" ENGINE_IMAGE_SAMPLING_SOURCE)
 configure_file(core/modules/Graphic/shader/ImageSamplingSource.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/ImageSamplingSource.h" @ONLY)
 add_library(engine_shader_compiler STATIC core/modules/Graphic/shader/Model.cpp core/modules/Graphic/shader/Compiler.cpp
-    core/modules/Graphic/shader/Sampling.cpp)
+    core/modules/Graphic/shader/Sampling.cpp core/modules/Graphic/shader/DxcRuntime.cpp)
 target_include_directories(engine_shader_compiler PUBLIC . PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(engine_shader_compiler PUBLIC engine_file DependencyDXC)
+target_link_libraries(engine_shader_compiler PUBLIC engine_file DependencyDXC PRIVATE engine_log ole32 oleaut32)
 add_library(engine_shader_programs STATIC core/modules/Graphic/shader/Program.cpp)
 target_include_directories(engine_shader_programs PUBLIC .)
 target_link_libraries(engine_shader_programs PUBLIC engine_shader_compiler SDL3::SDL3-static)
@@ -175,11 +175,12 @@ set(ENGINE_ICON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/res/windows/selen2d-logo.ico")
 configure_file(res/windows/app-icon.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/app-icon.rc" @ONLY)
 set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/generated/app-icon.rc"
     PROPERTIES OBJECT_DEPENDS "${ENGINE_ICON_FILE}")
-add_executable(engine_app main.cpp
+add_executable(engine_app main.cpp engine/StartupFailure.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/generated/engine-version.rc"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/app-icon.rc")
 if(WIN32)
     set_target_properties(engine_app PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_libraries(engine_app PRIVATE user32 wtsapi32)
 endif()
 target_include_directories(engine_app PRIVATE "${CMAKE_BINARY_DIR}/generated")
 add_library(engine_startup STATIC engine/Startup.cpp)

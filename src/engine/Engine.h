@@ -5,11 +5,12 @@
 #include <vector>
 
 namespace core::modules::File { class FileSystem; }
+namespace engine::StartupFailure { struct Failure; }
 
 namespace engine
 {
     bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::FileSystem> files,
-        const std::vector<std::string>& arguments = {});
+        const std::vector<std::string>& arguments = {}, StartupFailure::Failure* failure = nullptr);
     bool Run(std::uint64_t frame_limit = 0);
     bool Shutdown();
 }

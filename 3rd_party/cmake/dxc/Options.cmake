@@ -2,7 +2,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../dxc/source/cmake/caches/PredefinedParam
 set_property(GLOBAL APPEND PROPERTY JOB_POOLS engine_dxc_compile=4 engine_dxc_link=1)
 set(CMAKE_JOB_POOL_COMPILE engine_dxc_compile CACHE STRING "" FORCE)
 set(CMAKE_JOB_POOL_LINK engine_dxc_link CACHE STRING "" FORCE)
-set(ENGINE_DXC_STATIC ON CACHE BOOL "Embed the complete DXC implementation")
 set(DXC_DISABLE_ALLOCATOR_OVERRIDES ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(ENABLE_SPIRV_CODEGEN OFF CACHE BOOL "" FORCE)

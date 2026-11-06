@@ -124,14 +124,7 @@ if (MSVC)
   find_package(DiaSDK REQUIRED) # Used for constants and declarations.
 endif (MSVC)
 
-if (ENGINE_DXC_STATIC)
-  list(REMOVE_ITEM SOURCES DXCompiler.rc DXCompiler.def)
-  add_clang_library(dxcompiler STATIC ${SOURCES})
-  target_compile_definitions(dxcompiler PRIVATE ENGINE_DXC_STATIC=1 _CINDEX_LIB_)
-  target_compile_definitions(dxcompiler PUBLIC DXC_API_IMPORT=)
-else()
-  add_clang_library(dxcompiler SHARED ${SOURCES})
-endif()
+add_clang_library(dxcompiler SHARED ${SOURCES})
 add_dependencies(dxcompiler TablegenHLSLOptions) 
 if (MSVC)
   # No DxcEtw on non-Windows platforms.

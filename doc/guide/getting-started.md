@@ -1,9 +1,10 @@
 # 开始运行与修改 Lua
 
-将发行 ZIP 解压到一个独立项目目录，再运行其中的 `Selen2D.exe`。默认发行包只提供 EXE、示例和文档；不放入 Python 打包工具、启动头文件、构建元数据、DLL 或预先生成的日志。许可证随文档提供。这里描述当前 Windows 开发示例，不代表全部模块或其他平台已经完成验收。
+将发行 ZIP 完整解压到一个独立项目目录，再运行其中的 `Selen2D.exe`。这是自包含运行目录：EXE、同目录的 `dxcompiler.dll`、示例和文档一起发布，不需要另行安装编译器或运行库。包中不放入 Python 打包工具、启动头文件、构建元数据或预先生成的日志，许可证随文档提供。当前发行面向 Windows x64 / Direct3D 12，不代表其他平台已经完成验收。
 
 ```text
 Selen2D.exe
+dxcompiler.dll -- 与 EXE 同次构建、同一配置的运行时 Shader 编译器
 main.lua      -- File.RunLuaFile("example/main.lua") 启动引导
 example/
   main.lua
@@ -17,6 +18,7 @@ doc/
   guide/
     LICENSE
     THIRD_PARTY_NOTICES.txt
+    CHANGELOG.md
     licenses/
 ```
 
@@ -37,11 +39,13 @@ end
 
 Lua 使用相对 VFS 根的虚拟路径。默认部署根不随终端工作目录、快捷方式或当前脚本改变。示例仍以 `example/effect.hlsl` 等完整虚拟路径加载资源；你可以创建自己的 `assets/`、`scripts/` 等目录。`.` 只是配置中的特殊根标记，Lua 路径仍禁止 `.`、`..`、绝对路径和链接逃逸。
 
-默认运行不需要资源包、SDK、tools 目录或 Python。缺少根 `main.lua` 会导致启动失败。子目录不会自动创建；写入前可调用 `File.CreateDirectory('save')`。`output/` 只是示例自测选择的输出位置，不是额外权限边界。标准 Lua 的文件名入口也经过 VFS，保留各自的 LuaJIT 返回形式。FFI、`popen`、`os.execute` 和主动编译字符串不是完整沙箱保证，详见 [File 与启动配置](file-launch.md)。
+默认运行不需要资源包、SDK、tools 目录或 Python。缺少根 `main.lua` 或同目录的 `dxcompiler.dll` 会导致启动失败。子目录不会自动创建；写入前可调用 `File.CreateDirectory('save')`。`output/` 只是示例自测选择的输出位置，不是额外权限边界。标准 Lua 的文件名入口也经过 VFS，保留各自的 LuaJIT 返回形式。FFI、`popen`、`os.execute` 和主动编译字符串不是完整沙箱保证，详见 [File 与启动配置](file-launch.md)。
+
+部署或升级前可查看[版本与兼容性变更](../../CHANGELOG.md)。启动无画面或遇到错误时，先按[诊断指南](debug-console.md)从终端获取日志；自动化使用 `--no-error-dialog` 禁用原生启动错误框。
 
 关闭程序，修改根 `main.lua` 或 `example/` 下的 Lua/HLSL，保存后重新运行即可；示例没有自动热重载。只有源码开发者要改变编译期入口、授权或包记录时，才编辑唯一项目 JSON 并重新构建。操作方法见 [启动配置指南](file-launch.md)。Shader 的内置 include 为 `Engine.hlsl`。
 
-源码普通构建只刷新对应 `build/<配置>/bin` 中的引擎与示例，不写入正式发行目录。Debug 和自定义项目 Release 都不能发布标准包。标准发行使用独立目录和公开默认配置：
+源码普通构建只刷新对应 `build/<配置>/bin` 中的 EXE、匹配的 DXC DLL、示例与许可，不写入正式发行目录。单独更新 DLL 后再次构建也会更新部署，无需重链接 EXE。Debug 和自定义项目 Release 都不能发布标准包。标准发行使用独立目录和公开默认配置：
 
 ```powershell
 .\tools\build.ps1 -Configuration Release -PublicRelease -StageRelease

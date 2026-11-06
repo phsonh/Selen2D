@@ -12,6 +12,7 @@
   <a href="https://github.com/phsonh/Selen2D/releases/latest">Latest release</a> ·
   <a href="doc/guide/README.md">Guides</a> ·
   <a href="doc/api/">Lua API</a> ·
+  <a href="CHANGELOG.md">Changelog / 变更记录 / 変更履歴</a> ·
   <a href="LICENSE">MIT License</a>
 </p>
 <p align="center">
@@ -27,7 +28,7 @@
 
 Selen2D is a C++20 game engine with **LuaJIT** scripting and **SDL3 / SDL_GPU** rendering. It provides windowing, input, graphics, audio, resources, and file access through Lua. Game code controls the frame loop, object updates, and draw order.
 
-The v2.2.0 release targets **Windows x64 / Direct3D 12**. The executable includes its shader compiler and other native runtime components; running a game requires no Python installation or separate third-party runtime DLLs.
+The 2.2.3 development build targets **Windows x64 / Direct3D 12**. It is a self-contained directory: keep `Selen2D.exe`, the included `dxcompiler.dll`, and your game resources together. No separate compiler/runtime installation or Python installation is needed to run a game.
 
 [LÖVE](https://love2d.org/) provides a Lua game framework with conventional callbacks. [Defold](https://defold.com/) combines Lua scripting with an editor and content pipeline. Selen2D keeps its workflow close to Lua code, explicit rendering targets, and a small set of native systems.
 
@@ -76,6 +77,7 @@ The standard release is the quickest way to start. Extract the ZIP and run `Sele
 ```text
 Selen2D/
 ├── Selen2D.exe
+├── dxcompiler.dll
 ├── main.lua
 ├── example/
 │   ├── main.lua
@@ -148,15 +150,16 @@ Here `source` is relative to the final EXE directory; `target` is the path visib
 .\tools\build.ps1 -Configuration Release
 ```
 
-The executable is written to `build/release/bin/Selen2D.exe`. You can also start the build from the GUI. `Debug` is available in place of `Release`.
+The executable and matching `dxcompiler.dll` are written to `build/release/bin/`. You can also start the build from the GUI. `Debug` is available in place of `Release`; keep its DLL with the same configuration's EXE.
 
 **3. Pack your game files.** In Selen2D Tools, select `MyGame/content/` as the source and `MyGame/dist/data.slpk` as the output. Choose **SLPK v2 encrypted** to use the secret from `launch/launch.json`. The tool verifies the package after writing it. Plain SLPK v1 packages are also supported.
 
-**4. Deploy.** Copy the built executable beside the package:
+**4. Deploy.** Copy the built executable and its matching `dxcompiler.dll` beside the package, retaining the accompanying license notices:
 
 ```text
 MyGame/dist/
 ├── Selen2D.exe
+├── dxcompiler.dll
 └── data.slpk
 ```
 
@@ -173,7 +176,9 @@ Windows source builds require **MSVC (Visual Studio C++ tools)**, the **Windows 
 .\tools\build.ps1 -Configuration Release
 ```
 
-Diagnostics use stdout (Info/Debug) and stderr (Warn/Error/Fatal). No console window or log file is created automatically. `Debug.GetLog()` returns a bounded snapshot of Lua logs and reported Lua errors; use the authorized File API to save it if desired.
+Diagnostics use stdout (Info/Debug) and stderr (Warn/Error/Fatal). No console window or log file is created automatically. `Debug.GetLog()` returns a bounded snapshot of Lua logs and reported Lua errors; use the authorized File API to save it if desired. Native startup failures may show one error dialog only for an interactive launch without an output receiver; automation can pass `--no-error-dialog`. See [diagnostics](doc/guide/debug-console.md).
+
+Compatibility changes and version history: [CHANGELOG](CHANGELOG.md). This includes removed console controls, Lua log snapshots, JSON directory names, and deployment of the runtime DLL.
 
 Documentation: [Getting started](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shaders](doc/guide/shader.md) · [Resources and startup configuration](doc/guide/file-launch.md) · [Lua API](doc/api/).
 
@@ -188,7 +193,7 @@ Documentation: [Getting started](doc/guide/getting-started.md) · [Selen2D Tools
 
 Selen2D 是一款使用 **LuaJIT** 编写游戏逻辑、以 **C++20** 和 **SDL3 / SDL_GPU** 实现底层功能的轻量级游戏引擎。窗口、输入、图形、音频、资源和文件访问都有对应的 Lua 接口。每帧要更新什么、何时处理对象生命周期、按什么顺序绘制，都由 Lua 代码安排。
 
-v2.2.0 提供经过验证的 **Windows x64 / Direct3D 12** 版本。Shader 编译器及所需原生运行组件集成在可执行文件中，运行游戏无需安装 Python，也无需额外部署第三方运行库 DLL。
+2.2.3 开发版面向 **Windows x64 / Direct3D 12**，采用自包含目录：保留同目录的 `Selen2D.exe`、随包提供的 `dxcompiler.dll` 和游戏资源，运行时无需另行安装编译器、运行库或 Python。
 
 [LÖVE](https://love2d.org/) 提供基于 Lua 回调的游戏框架；[Defold](https://defold.com/) 提供编辑器和资源构建流程。Selen2D 的使用方式更接近直接编写 Lua，通过明确的 API 控制对象、画布、资源和帧流程。
 
@@ -237,6 +242,7 @@ end)
 ```text
 Selen2D/
 ├── Selen2D.exe
+├── dxcompiler.dll
 ├── main.lua
 ├── example/
 │   ├── main.lua
@@ -309,15 +315,16 @@ PyQt6 GUI 只维护一份私有启动配置：`launch/launch.json`。首次打�
 .\tools\build.ps1 -Configuration Release
 ```
 
-输出位于 `build/release/bin/Selen2D.exe`。也可以在 GUI 中发起构建。需要调试版时改用 `-Configuration Debug`。
+EXE 与匹配的 `dxcompiler.dll` 输出到 `build/release/bin/`。也可以在 GUI 中发起构建。需要调试版时改用 `-Configuration Debug`，部署时保留同一配置的 EXE 与 DLL。
 
 **3. 打包资源。** 在 GUI 的资源包页面，选择独立游戏项目的 `MyGame/content/` 文件夹，输出到 `MyGame/dist/data.slpk`。选择 **SLPK v2 加密**即可使用同一份 JSON 中的密钥。工具会在生成资源包后验证内容。也可以选择不加密的 SLPK v1。
 
-**4. 整理发布文件。** 将构建好的 EXE 复制到游戏部署目录：
+**4. 整理发布文件。** 将构建好的 EXE 与匹配的 `dxcompiler.dll` 一同复制到游戏部署目录，并保留随附许可说明：
 
 ```text
 MyGame/dist/
 ├── Selen2D.exe
+├── dxcompiler.dll
 └── data.slpk
 ```
 
@@ -334,7 +341,9 @@ Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows
 .\tools\build.ps1 -Configuration Release
 ```
 
-诊断日志输出到 stdout（Info/Debug）及 stderr（Warn/Error/Fatal），不自动创建控制台或日志文件。`Debug.GetLog()` 返回有界的 Lua 日志及 Lua 错误快照，需要保存时通过已授权的 File API 写入。
+诊断日志输出到 stdout（Info/Debug）及 stderr（Warn/Error/Fatal），不自动创建控制台或日志文件。`Debug.GetLog()` 返回有界的 Lua 日志及 Lua 错误快照，需要保存时通过已授权的 File API 写入。无输出接收方的交互启动遇到原生启动失败时可能显示一次错误框；自动化传 `--no-error-dialog` 禁用，详见[诊断指南](doc/guide/debug-console.md)。
+
+兼容性变更与版本归属集中在 [CHANGELOG](CHANGELOG.md)：包括控制台接口删除、Lua 日志快照、JSON 目录名称和运行时 DLL 部署。
 
 详细资料：[入门指南](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [文件与启动配置](doc/guide/file-launch.md) · [Lua API](doc/api/)。
 
@@ -349,7 +358,7 @@ Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows
 
 Selen2D は **LuaJIT** でゲームロジックを記述できる軽量なゲームエンジンです。基盤には **C++20** と **SDL3 / SDL_GPU** を採用しています。ウィンドウ、入力、描画、音声、リソース、ファイル操作を Lua API から利用でき、フレーム処理やオブジェクトの更新、描画順序をゲーム側で組み立てられます。
 
-v2.2.0 の対応・検証済み環境は **Windows x64 / Direct3D 12** です。Shader コンパイラと必要なネイティブランタイムは EXE に組み込まれており、実行時に Python や追加のサードパーティ製ランタイム DLL は必要ありません。
+2.2.3 開発版は **Windows x64 / Direct3D 12** 向けの自己完結型ディレクトリです。`Selen2D.exe`、同梱の `dxcompiler.dll`、ゲームのリソースを一緒に配置してください。実行時にコンパイラ、ランタイム、Python を別途インストールする必要はありません。
 
 [LÖVE](https://love2d.org/) は Lua のコールバックを中心としたフレームワークを提供し、[Defold](https://defold.com/) はエディタとアセット構築の環境を備えています。Selen2D は Lua コードからフレーム処理、描画先、リソースの扱いを明示的に指定するスタイルです。
 
@@ -398,6 +407,7 @@ end)
 ```text
 Selen2D/
 ├── Selen2D.exe
+├── dxcompiler.dll
 ├── main.lua
 ├── example/
 │   ├── main.lua
@@ -470,15 +480,16 @@ PyQt6 の画面で編集する設定ファイルは `launch/launch.json` の一�
 .\tools\build.ps1 -Configuration Release
 ```
 
-完成した EXE は `build/release/bin/Selen2D.exe` にあります。GUI のビルド画面からも実行できます。デバッグビルドには `-Configuration Debug` を使用します。
+EXE と対応する `dxcompiler.dll` は `build/release/bin/` にあります。GUI のビルド画面からも実行できます。デバッグビルドには `-Configuration Debug` を使用し、同じ構成の EXE と DLL を組み合わせてください。
 
 **3. ゲームデータをパッケージ化します。** GUI で `MyGame/content/` を入力、`MyGame/dist/data.slpk` を出力に指定します。**SLPK v2 暗号化**を選ぶと、同じ JSON に保存された secret を使ってパッケージを作成し、内容を検証します。平文の SLPK v1 も利用できます。
 
-**4. ファイルを配置します。** ビルドした EXE をパッケージの横にコピーします。
+**4. ファイルを配置します。** ビルドした EXE と対応する `dxcompiler.dll` をパッケージの横にコピーし、付属のライセンス文書を保持します。
 
 ```text
 MyGame/dist/
 ├── Selen2D.exe
+├── dxcompiler.dll
 └── data.slpk
 ```
 
@@ -495,7 +506,9 @@ Windows でソースをビルドするには、**Visual Studio C++ ツール（M
 .\tools\build.ps1 -Configuration Release
 ```
 
-診断ログは stdout（Info/Debug）と stderr（Warn/Error/Fatal）へ出力します。コンソールやログファイルを自動作成しません。`Debug.GetLog()` は容量制限付きの Lua ログと Lua エラーのスナップショットを返します。必要に応じて、許可された File API で保存してください。
+診断ログは stdout（Info/Debug）と stderr（Warn/Error/Fatal）へ出力します。コンソールやログファイルを自動作成しません。`Debug.GetLog()` は容量制限付きの Lua ログと Lua エラーのスナップショットを返します。必要に応じて、許可された File API で保存してください。出力先のない対話起動でネイティブの初期化に失敗した場合に限り、エラーダイアログを一度表示することがあります。自動化では `--no-error-dialog` で無効にできます。[診断ガイド](doc/guide/debug-console.md)を参照してください。
+
+互換性に関わる変更とバージョン履歴は [CHANGELOG](CHANGELOG.md) にまとめています。削除済みのコンソール API、Lua ログ、JSON のディレクトリ名、実行時 DLL の配置を確認してください。
 
 資料：[入門ガイド](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [ファイルと起動設定](doc/guide/file-launch.md) · [Lua API](doc/api/)。
 

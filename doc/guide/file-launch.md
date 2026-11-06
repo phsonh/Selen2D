@@ -19,6 +19,8 @@
 
 Windows 的 `local_app_data` 通过 Known Folder API 查询 LocalAppData，不把用户名或盘符写进配置。源码中的 macOS 实现使用用户域 Application Support，Linux 使用有效绝对 XDG_DATA_HOME 或 home 下的 `.local/share`；`local_app_data` 是跨平台的逻辑目录类型，不表示其他系统存在 Windows 环境变量；这些平台仍需独立验收。映射只授权最终项目子目录，不授权整个系统数据根；`userdata`、`save` 等名字没有额外权限。
 
+根授权也包含同目录的 `dxcompiler.dll` 等普通文件，不按运行依赖身份自动隐藏或排除。DLL 自身仍由原生加载器按 EXE 绝对目录加载，不依赖 VFS 映射。希望 Lua 只能访问游戏资源的定制构建，应使用明确的非根真实目录映射或包挂载，而不是默认整根映射；这不会放宽或改变现有路径安全规则。
+
 ## 路径、读写和错误
 
 File 路径是非空 UTF-8/NFC 虚拟路径，使用 `/`，严格区分大小写。拒绝绝对路径、盘符、反斜杠、空组件、独立 `.`/`..`、末尾 `/`、NUL、控制字符与通配符。Unicode NFC 或大小写折叠后冲突的不同名字不能同时接入。只有 `require`/`package.searchpath` 的搜索模板候选允许先去掉开头的一个 `./`。
@@ -84,7 +86,9 @@ cmake --build --preset selen2d-release
 
 JSON、校验器和 Unicode 表均属于生成依赖。修改 JSON 后，增量构建重新校验、生成头文件、编译 Startup.cpp 并链接；生成失败中止构建，旧产物不会被当作本次成功结果。生成器原子替换头文件，文件只位于 build 目录。运行时不会读取 JSON 或头文件。配置校验不会冒充部署文件存在性或包认证检查，这些仍在打包验证与引擎启动时执行。
 
-静态 DXC 使用各构建目录自己的缓存，Debug 与 Release 不共享产物。普通 JSON 或引擎源码修改不会重编 DXC；固定源码、集成脚本或工具链变更则进入其子构建更新。每轮只做轻量的库完整性检查，库变化时才校验摘要，缺失或损坏时重建。`build.ps1 -DxcJobs 1` 可降低 LLVM 编译内存压力；默认 4，可选 1～4，与普通引擎的 `-Jobs` 分开。首次编译仍从仓库内固定源码构建，不下载或部署 DXC DLL。
+运行时 DXC DLL 从仓库内固定的 v1.9.2609 源码构建，不从 SDK 或 PATH 收集 DLL。`ENGINE_DXC_RUNTIME_BINARY_DIR` 指定各构建目录内的独立缓存；Debug、Release 和公开 Release 不共享产物，历史缓存保留。普通 JSON 或引擎源码修改不会重编 DXC；固定源码、集成脚本或工具链变更则进入其子构建更新。`build.ps1 -DxcJobs 1` 可降低 LLVM 编译内存压力；默认 4，可选 1～4，与普通引擎的 `-Jobs` 分开。首次编译仍包含 LLVM 构建工作，不能由动态部署方式推断首次构建更快。
+
+正常构建将匹配配置的 `dxcompiler.dll` 复制到 EXE 旁；DLL 单独更新时，部署目标仍会刷新它，不要求 EXE 重链接。内置 Shader 的构建工具 `ENGINE_DXC_EXECUTABLE` 则是开发机 SDK/PATH 中的 `dxc.exe`，与游戏运行时的 DLL 分开；它不进入发行包。Windows 构建需要已安装的 MSVC x64、Windows SDK 和 ATL，build.ps1 默认选择实际安装的工具链，也可明确指定 `-ToolsetVersion`。
 
 仅为已有自动化保留显式 `ENGINE_LAUNCH_HEADER`；它与 `ENGINE_LAUNCH_CONFIG` 同时非空时配置失败。build.ps1 始终清空旧头文件入口，GUI 不提供手写头文件选项。直接运行 CMake 会遵循自己显式设置的 cache；恢复自动选择须清空两个变量。
 
@@ -106,7 +110,7 @@ JSON、校验器和 Unicode 表均属于生成依赖。修改 JSON 后，增量�
 cmake --build build/public-release --target stage_release
 ```
 
-普通 build/release 或任何 Debug 构建的 stage_release 明确失败；不会复制自定义 EXE。标准包只包含 EXE、根 main.lua 引导、完整 example/ 示例、许可与 doc/api、doc/guide，不包含 JSON、头文件、工具、Python 或私有 secret。默认示例 Lua/HLSL 修改后重启即可。自定义游戏请自行将编译所得 EXE 与对应包放到部署目录，勿调用标准发布目标替代游戏部署。
+普通 build/release 或任何 Debug 构建的 stage_release 明确失败；不会复制自定义 EXE。标准包包含 EXE、匹配的 `dxcompiler.dll`、根 main.lua 引导、完整 example/ 示例、许可与 doc/api、doc/guide，不包含 JSON、头文件、工具、Python、构建元数据或私有 secret。发布时单独校验 DLL 的 x64 格式、工厂导出、固定版本和系统依赖白名单，文件摘要与 PE 记录保存在 build/release-work，ZIP 只允许这一项应用 DLL。默认示例 Lua/HLSL 修改后重启即可。自定义游戏请将同配置的 EXE、DLL 与对应包一同放到部署目录，勿调用标准发布目标替代游戏部署。
 
 修改 entry、mounts、directories 或 secret 都需要重新构建 EXE。改变 secret 还需用同一配置重打加密包。CLI main.py launch 的 inspect/build/verify 继续供 CI 使用，GUI 和 build.ps1 用户无需手工调用；inspect 不显示 secret 或摘要，verify 不执行任意 C++。
 
@@ -148,7 +152,7 @@ New-Item -ItemType Directory -Force ../MyGame/dist
 .\build\tools-venv\Scripts\python.exe tools/pack/main.py verify --input ../MyGame/dist/data.bin --config launch/launch.json
 ```
 
-通过 GUI 保存唯一私有配置后直接执行 build.ps1；GUI 加密打包复用其中同一份 secret。将所得 EXE 与 `data.bin` 放入匹配的部署目录，并保留项目和第三方许可；不要部署 JSON、生成头文件或 Python 环境。
+通过 GUI 保存唯一私有配置后直接执行 build.ps1；GUI 加密打包复用其中同一份 secret。将所得 EXE、同配置的 `dxcompiler.dll` 与 `data.bin` 放入匹配的部署目录，并保留项目和第三方许可；不要部署 JSON、生成头文件或 Python 环境。
 
 密钥为一次 `SHA256(UTF8(secret))` 的 32 字节原始结果。空格、换行、NUL 和 NFC/NFD 差异全部保留，不 trim、不规范化、不追加 C 字符串终止符。显式空字符串可表达，缺少 secret 则不能请求加密。v2 使用 XChaCha20-Poly1305-IETF 认证索引和独立数据块，每次生产打包使用新的随机身份与 nonce；相同输入不保证相同密文。
 
@@ -163,3 +167,19 @@ New-Item -ItemType Directory -Force ../MyGame/dist
 宿主 stdio、`io.popen/os.execute`、FFI、`load/loadstring` 与无文件名的 stdin 代码加载仍按实际 LuaJIT 能力暴露。这些能力不构成完整不可信脚本沙箱，字符串或流不会因此被标为已认证包代码。认证加密的目标是提高直接解包与简单替换的门槛，不提供反调试、签名发行者证明或防止持密钥者重打包的保证。
 
 Shader 示例继续使用内建 `Engine.hlsl` 与现有渲染接口，见 [Shader 指南](shader.md)。File 与包的 CPU/互操作结果不能代替 Resource、Graphic、Audio 的组合测试或 GPU、音频设备验收。
+
+## 可选精灵性能记录
+
+这是源码开发用的内部采样开关，不是 Lua API；默认关闭，不在普通发行运行时自动生成数据。在已经成功配置的 Release 构建目录、对应的 MSVC 开发环境中，可以启用并重新构建：
+
+```powershell
+cmake -S . -B build/release -DENGINE_SPRITE_PROFILE=ON
+.\tools\build.ps1 -Configuration Release
+$env:ENGINE_SPRITE_PROFILE_PATH = Join-Path (Resolve-Path build) 'sprites.csv'
+Start-Process .\build\release\bin\Selen2D.exe -ArgumentList '--no-error-dialog' -Wait
+Remove-Item Env:ENGINE_SPRITE_PROFILE_PATH
+```
+
+`ENGINE_SPRITE_PROFILE_PATH` 是开发者主动指定的原生 CSV 输出位置；正常退出时集中写入，不属于 Lua VFS 保存日志接口。未设置路径时不采样。完成测量后用同一配置命令设置 `-DENGINE_SPRITE_PROFILE=OFF` 并重建。
+
+`uploadMs`（CSV 列 `upload_ms`）由 CPU 单调时钟测量上传准备和命令编码调用的耗时，并不是 GPU 执行 copy 的时间。`hostframeinterval_ms` 包含引擎帧之间的等待/调度，不能当作纯渲染耗时。当前没有 GPU timestamp 测量，CSV 的 `gpu_ms` 为 `-1`，应标记“未测得”。字节数和 Draw Call 计数也不能直接换算为 FPS 提升。

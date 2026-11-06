@@ -14,6 +14,16 @@ namespace core::runtime::Log
     // the Windows control handler never calls Lua, SDL, logging or cleanup.
     bool TerminationRequested() noexcept;
 
+    // Internal startup presentation query. Checks the same borrowed/fallback
+    // routes as native writes; it does not write, attach, repair, or probe I/O.
+    // NUL and broken pipes still count as intentional routes. Uncertainty is
+    // conservative: true prevents a blocking unattended startup dialog.
+    bool HasStandardOutputRoute() noexcept;
+
+    // Read-only detail for a failed native logger initialization. Does not log
+    // again or expose records through the Lua-only history. Empty on uncertainty.
+    std::string InitializationErrorText() noexcept;
+
     void Debug(std::string_view message) noexcept;
     void Info(std::string_view message) noexcept;
     void Warn(std::string_view message) noexcept;
