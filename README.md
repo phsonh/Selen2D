@@ -28,7 +28,9 @@
 
 Selen2D is a C++20 game engine with **LuaJIT** scripting and **SDL3 / SDL_GPU** rendering. It provides windowing, input, graphics, audio, resources, and file access through Lua. Game code controls the frame loop, object updates, and draw order.
 
-The 2.2.3 development build targets **Windows x64 / Direct3D 12**. It is a self-contained directory: keep `Selen2D.exe`, the included `dxcompiler.dll`, and your game resources together. No separate compiler/runtime installation or Python installation is needed to run a game.
+This source tree is being prepared as the **2.3.0 release candidate; it has not been published**. The last published baseline is **2.2.0**; the download link below continues to point to the published release.
+
+The candidate targets **Windows x64 / Direct3D 12 / DXIL**. Keep `Selen2D.exe`, the included `dxcompiler.dll`, and your game resources together. No separate compiler/runtime installation or Python installation is needed to run a game. See the [2.2.0 → 2.3.0 upgrade notes](doc/guide/getting-started.md#upgrade-230) before replacing an existing engine.
 
 [LÖVE](https://love2d.org/) provides a Lua game framework with conventional callbacks. [Defold](https://defold.com/) combines Lua scripting with an editor and content pipeline. Selen2D keeps its workflow close to Lua code, explicit rendering targets, and a small set of native systems.
 
@@ -72,7 +74,7 @@ end)
 
 ### Use the ready-made release
 
-The standard release is the quickest way to start. Extract the ZIP and run `Selen2D.exe`:
+The standard release is the quickest way to start. Extract the ZIP and run `Selen2D.exe`. The layout below describes the **unpublished 2.3.0 candidate**. The currently published **2.2.0** ZIP does not include or require `dxcompiler.dll`; do not add a candidate DLL to that older package.
 
 ```text
 Selen2D/
@@ -193,7 +195,9 @@ Documentation: [Getting started](doc/guide/getting-started.md) · [Selen2D Tools
 
 Selen2D 是一款使用 **LuaJIT** 编写游戏逻辑、以 **C++20** 和 **SDL3 / SDL_GPU** 实现底层功能的轻量级游戏引擎。窗口、输入、图形、音频、资源和文件访问都有对应的 Lua 接口。每帧要更新什么、何时处理对象生命周期、按什么顺序绘制，都由 Lua 代码安排。
 
-2.2.3 开发版面向 **Windows x64 / Direct3D 12**，采用自包含目录：保留同目录的 `Selen2D.exe`、随包提供的 `dxcompiler.dll` 和游戏资源，运行时无需另行安装编译器、运行库或 Python。
+当前源码正在准备 **2.3.0 发布候选，尚未发布**；上一正式基线为 **2.2.0**，下方下载链接仍指向已经发布的版本。
+
+候选版面向 **Windows x64 / Direct3D 12 / DXIL**。保留同目录的 `Selen2D.exe`、随包提供的 `dxcompiler.dll` 和游戏资源，运行时无需另行安装编译器、运行库或 Python。替换旧引擎前，请阅读 [2.2.0 → 2.3.0 升级说明](doc/guide/getting-started.md#upgrade-230)。
 
 [LÖVE](https://love2d.org/) 提供基于 Lua 回调的游戏框架；[Defold](https://defold.com/) 提供编辑器和资源构建流程。Selen2D 的使用方式更接近直接编写 Lua，通过明确的 API 控制对象、画布、资源和帧流程。
 
@@ -237,7 +241,7 @@ end)
 
 ### 路线一：下载 Release，直接编写 Lua
 
-从 [Releases](https://github.com/phsonh/Selen2D/releases/latest) 下载 Windows ZIP，解压后运行 `Selen2D.exe`。
+从 [Releases](https://github.com/phsonh/Selen2D/releases/latest) 下载 Windows ZIP，解压后运行 `Selen2D.exe`。下方目录描述**尚未发布的 2.3.0 候选**；目前已发布的 **2.2.0** ZIP 不包含也不需要 `dxcompiler.dll`，不要将候选版 DLL 加入旧包。
 
 ```text
 Selen2D/
@@ -358,7 +362,9 @@ Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows
 
 Selen2D は **LuaJIT** でゲームロジックを記述できる軽量なゲームエンジンです。基盤には **C++20** と **SDL3 / SDL_GPU** を採用しています。ウィンドウ、入力、描画、音声、リソース、ファイル操作を Lua API から利用でき、フレーム処理やオブジェクトの更新、描画順序をゲーム側で組み立てられます。
 
-2.2.3 開発版は **Windows x64 / Direct3D 12** 向けの自己完結型ディレクトリです。`Selen2D.exe`、同梱の `dxcompiler.dll`、ゲームのリソースを一緒に配置してください。実行時にコンパイラ、ランタイム、Python を別途インストールする必要はありません。
+現在のソースは **2.3.0 リリース候補を準備中で、まだ公開されていません**。直近の正式版は **2.2.0** です。下のダウンロードリンクは公開済みのリリースを指します。
+
+候補版の対象は **Windows x64 / Direct3D 12 / DXIL** です。`Selen2D.exe`、同梱の `dxcompiler.dll`、ゲームのリソースを一緒に配置してください。実行時にコンパイラ、ランタイム、Python を別途インストールする必要はありません。既存のエンジンを置き換える前に、[2.2.0 → 2.3.0 の移行手順](doc/guide/getting-started.md#upgrade-230)を確認してください。
 
 [LÖVE](https://love2d.org/) は Lua のコールバックを中心としたフレームワークを提供し、[Defold](https://defold.com/) はエディタとアセット構築の環境を備えています。Selen2D は Lua コードからフレーム処理、描画先、リソースの扱いを明示的に指定するスタイルです。
 
@@ -402,7 +408,7 @@ end)
 
 ### 方法 1：リリース版ですぐに Lua を書く
 
-[Releases](https://github.com/phsonh/Selen2D/releases/latest) から Windows ZIP を取得し、展開した `Selen2D.exe` を起動します。
+[Releases](https://github.com/phsonh/Selen2D/releases/latest) から Windows ZIP を取得し、展開した `Selen2D.exe` を起動します。以下は**未公開の 2.3.0 候補版**の構成です。現在公開されている **2.2.0** の ZIP は `dxcompiler.dll` を含まず、必要としません。候補版の DLL を旧版のパッケージに追加しないでください。
 
 ```text
 Selen2D/
