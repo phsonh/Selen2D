@@ -140,6 +140,7 @@ fs::file_status Status(const fs::path& path,std::string_view virtualPath) {
 // Keep each visited directory open while checking/using a view. On Windows the
 // missing DELETE share prevents renaming an already checked parent during I/O.
 // Configured base/project roots also retain such anchors across operations.
+using FileIdentity=std::array<std::uint64_t,3>;
 struct DirectoryAnchor {
 #ifdef _WIN32
     HANDLE handle{INVALID_HANDLE_VALUE};
@@ -171,6 +172,20 @@ struct DirectoryAnchor {
 #endif
     DirectoryAnchor(const DirectoryAnchor&)=delete;
     DirectoryAnchor& operator=(const DirectoryAnchor&)=delete;
+    FileIdentity Identity(std::string_view virtualPath) const {
+        VFS_PROFILE_ADD(IdentityQueries,1);
+#ifdef _WIN32
+        FILE_ID_INFO info{};
+        if(!GetFileInformationByHandleEx(handle,FileIdInfo,&info,sizeof(info)))
+            Fail(IoErrorCode(LastError()),"inspect anchored directory identity",virtualPath);
+        FileIdentity result{info.VolumeSerialNumber,0,0};
+        std::memcpy(&result[1],info.FileId.Identifier,16); return result;
+#else
+        struct stat info{};
+        if(fstat(handle,&info)) Fail(IoErrorCode(LastError()),"inspect anchored directory identity",virtualPath);
+        return {static_cast<std::uint64_t>(info.st_dev),static_cast<std::uint64_t>(info.st_ino),0};
+#endif
+    }
     bool Same(const DirectoryAnchor& other) const {
 #ifdef _WIN32
         BY_HANDLE_FILE_INFORMATION a{},b{};
@@ -263,7 +278,6 @@ fs::path ProjectPath(const fs::path& base,std::string_view relative,std::string_
     }
     return result;
 }
-using FileIdentity=std::array<std::uint64_t,3>;
 struct DiskEntry { NodeInfo info; std::optional<FileIdentity> identity; std::uint64_t links{}; std::optional<FileIdentity> directoryIdentity; };
 #if !defined(_WIN32) || !defined(_MSC_VER)
 NodeInfo DiskInfo(const fs::path& disk,const fs::file_status& status,std::string_view path) {
@@ -547,6 +561,8 @@ struct FileSystem::Impl {
             VFS_PROFILE_ADD(DirectoriesVisited,1);
             try {
                 auto anchor=Guard(current,name,view.guards);
+                if(entry.directoryIdentity&&anchor->Identity(name)!=*entry.directoryIdentity)
+                    throw ConflictError("enumerated directory identity changed at '"+name+"'");
                 if(name==d.target) {
                     if(d.rootAnchor&&!d.rootAnchor->Same(*anchor)) throw ConflictError("configured root identity changed at '"+name+"'");
                     if(!d.rootAnchor) d.rootAnchor=anchor;
@@ -690,6 +706,9 @@ struct FileSystem::Impl {
     }
     void AnchorLocal(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
         const auto anchor=Guard(disk,path,view.guards);
+        const auto* observed=view.Find(path);
+        if(observed&&observed->directoryIdentity&&anchor->Identity(path)!=*observed->directoryIdentity)
+            throw ConflictError("enumerated directory identity changed at '"+path+"'");
         if(path==d.target) {
             if(d.rootAnchor&&!d.rootAnchor->Same(*anchor))
                 throw ConflictError("configured root identity changed at '"+path+"'");
@@ -963,6 +982,14 @@ void FileSystem::WalkDirectory(std::string_view path,std::uint64_t maxDepth,
         std::optional<FileIdentity> directoryIdentity;
     };
     struct Child { std::string path; NodeType type; std::optional<FileIdentity> directoryIdentity; };
+    struct Observation {
+        NodeType type;
+        std::optional<FileIdentity> file,directory;
+    };
+    // Only an alias fallback observes below the current directory. Retain its
+    // observations in the requested subtree until this walk ends, without any
+    // handles or authorization proof. The normal local path has no such table.
+    std::map<std::string,Observation,std::less<>> fallbackObservations;
     std::vector<Pending> pending{{root,{}}};
     std::size_t index=0;
     while(!pending.empty()) {
@@ -979,6 +1006,39 @@ void FileSystem::WalkDirectory(std::string_view path,std::uint64_t maxDepth,
             if(current.observed&&current.directoryIdentity!=node->directoryIdentity)
                 throw ConflictError("enumerated directory identity changed at '"+current.path+"'");
             const auto prefix=current.path+'/';
+            const auto checkObservation=[&](const auto& observed) {
+                view.RequireComplete(observed.first);
+                const auto* fresh=view.Find(observed.first);
+                if(!fresh) Fail("not_found","enumerated entry disappeared",observed.first);
+                if(fresh->info.type!=observed.second.type||
+                    (observed.second.file&&fresh->identity!=observed.second.file)||
+                    (observed.second.directory&&fresh->directoryIdentity!=observed.second.directory))
+                    throw ConflictError("enumerated entry changed after alias validation at '"+observed.first+"'");
+            };
+            if(view.local) {
+                // The current path and its direct children were revalidated.
+                // Check old entries as well as new ones, including removals;
+                // descendants outside this scope are checked when reached.
+                if(const auto found=fallbackObservations.find(current.path);found!=fallbackObservations.end())
+                    checkObservation(*found);
+                for(auto it=fallbackObservations.lower_bound(prefix);
+                    it!=fallbackObservations.end()&&it->first.starts_with(prefix);++it)
+                    if(std::string_view(it->first).substr(prefix.size()).find('/')==std::string_view::npos)
+                        checkObservation(*it);
+            } else {
+                for(const auto& observed:fallbackObservations) checkObservation(observed);
+                for(const auto& [name,observed]:view.nodes) {
+                    if(!PathContains(root,name)) continue;
+                    const auto [found,added]=fallbackObservations.try_emplace(name,
+                        Observation{observed.info.type,observed.identity,observed.directoryIdentity});
+                    // Synthetic ancestors can gain physical evidence. Do not
+                    // replace any previously observed identity with no identity.
+                    if(!added) {
+                        if(!found->second.file) found->second.file=observed.identity;
+                        if(!found->second.directory) found->second.directory=observed.directoryIdentity;
+                    }
+                }
+            }
             for(auto it=view.nodes.lower_bound(prefix);it!=view.nodes.end()&&it->first.starts_with(prefix);++it) {
                 const auto tail=std::string_view(it->first).substr(prefix.size());
                 if(tail.find('/')!=std::string_view::npos) continue;

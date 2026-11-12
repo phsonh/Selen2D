@@ -23,7 +23,7 @@ bool Component(std::string_view part) {
     for(const auto c:part) if(std::string_view(":*?/\\").find(c)!=std::string_view::npos) return false;
     return true;
 }
-bool Syntax(std::string_view input) {
+bool Syntax(std::string_view input,bool extension=false) {
     if(input.empty()||input.size()>4096||input.front()=='/'||input.back()=='/') return false;
     for(std::size_t i=0;i<input.size();) {
         utf8proc_int32_t scalar{};
@@ -34,7 +34,8 @@ bool Syntax(std::string_view input) {
     }
     for(std::size_t start=0;start<input.size();) {
         auto end=input.find('/',start); if(end==std::string_view::npos) end=input.size();
-        if(!Component(input.substr(start,end-start))) return false;
+        const auto part=input.substr(start,end-start);
+        if(!Component(part)&&!(extension&&(part=="."||part==".."))) return false;
         start=end+1;
     }
     return true;
@@ -101,11 +102,14 @@ std::string ReplaceExtension(std::string_view path,std::string_view extension) {
     if(!extension.empty()) {
         if(extension.front()!='.'||extension.find('/')!=extension.npos||extension.find('\\')!=extension.npos)
             throw InvalidPath("extension must start with a dot and contain no path separator");
-        // Prefix permits the explicitly valid suffix "." without treating it
-        // as the forbidden standalone path component. Backend names are later
-        // checked by the actual VFS mutation, not by these pure string tools.
+        // Suffixes "." and ".." are valid syntax, unlike standalone path
+        // components. Validate the suffix itself: a temporary prefix would
+        // incorrectly charge an extra byte before NFC can shorten the input.
         if(extension.size()>4096) throw InvalidPath("extension exceeds 4096 UTF-8 bytes");
-        suffix=Checked(std::string("x")+std::string(extension)).substr(1);
+        if(!Syntax(extension,true)) throw InvalidPath("expected a nonempty canonical relative UTF-8 path");
+        auto value=Map(extension,static_cast<utf8proc_option_t>(UTF8PROC_STABLE|UTF8PROC_COMPOSE));
+        if(!value||!Syntax(*value,true)) throw InvalidPath("expected a nonempty canonical relative UTF-8 path");
+        suffix=std::move(*value);
     }
     const auto slash=normalized.rfind('/');
     const auto begin=slash==std::string::npos?0:slash+1;
