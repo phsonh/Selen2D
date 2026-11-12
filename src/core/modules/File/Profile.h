@@ -8,7 +8,7 @@
 // collected. Timed scopes are inclusive: nested durations must not be summed.
 namespace core::modules::File::profile {
 #define VFS_PROFILE_METRICS(X) \
-    X(Construct) X(Scan) X(AddDisk) X(Child) X(Stat) X(Open) X(ListDirectory) \
+    X(Construct) X(Scan) X(ScopedView) X(AliasFallback) X(AddDisk) X(Child) X(Stat) X(Open) X(ListDirectory) \
     X(CheckCodeSource) X(CreateDirectory) X(Remove) X(Rename) X(Copy) X(Move) \
     X(Replace) X(ReadSnapshot) X(OpenReadSource) X(DirectoriesVisited) \
     X(DirectoryEnumerations) X(EntriesEnumerated) X(FilesVisited) \

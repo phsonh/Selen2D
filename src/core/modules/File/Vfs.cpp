@@ -403,6 +403,7 @@ struct FileSystem::Impl {
         std::map<std::string,std::string,std::less<>> folded;
         std::map<FileIdentity,const Directory*> identities;
         Guards guards;
+        bool local{};
         struct Pending { std::string path; const Directory* directory; std::string failure; };
         std::vector<Pending> pending;
         void RequireComplete(std::string_view path,bool subtree=false) const {
@@ -411,7 +412,7 @@ struct FileSystem::Impl {
                     throw IoError("resource_busy",entry.failure);
         }
         bool NeedsSingleLink(const Directory* directory) const {
-            return std::any_of(pending.begin(),pending.end(),[&](const auto& entry){return entry.directory!=directory;});
+            return local||std::any_of(pending.begin(),pending.end(),[&](const auto& entry){return entry.directory!=directory;});
         }
         void RequireAliases(const Node* node,const Directory* destination=nullptr) const {
             if(node&&node->identity&&node->links!=1&&NeedsSingleLink(destination?destination:node->directory))
@@ -571,6 +572,146 @@ struct FileSystem::Impl {
         }
         return view;
     }
+    template<class F> void PackageChildren(const Mount& mount,std::string_view path,F visit) const {
+        const auto relative=Tail(mount.target,path);
+        const auto prefix=relative.empty()?std::string{}:relative+'/';
+        const auto& entries=mount.package->Entries();
+        for(auto it=entries.lower_bound(prefix);it!=entries.end()&&it->first.starts_with(prefix);) {
+            if(it->first.empty()) { ++it; continue; }
+            const auto tail=std::string_view(it->first).substr(prefix.size());
+            const auto slash=tail.find('/');
+            if(slash==std::string_view::npos) {
+                VFS_PROFILE_ADD(PackageViewEntries,1);
+                visit(Join(path,tail),Node{it->second,&mount,nullptr,{},it->first}); ++it;
+            } else {
+                // Skip only after entering the descendant range: siblings such
+                // as a!.txt sort between a and a/... and must not be skipped.
+                it=entries.lower_bound(prefix+std::string(tail.substr(0,slash))+"/\xff");
+            }
+        }
+    }
+    void AddPackageScope(View& view,std::string_view path,bool listing) const {
+        for(const auto& m:mounts) {
+            if(!PathContains(m.target,path)&&!PathContains(path,m.target)) continue;
+            VFS_PROFILE_ADD(PackageViewPasses,1);
+            view.Insert(m.target,Node{NodeInfo{NodeType::Directory},&m});
+            if(!PathContains(m.target,path)) continue;
+            for(auto name=std::string(path);name!=m.target;name=Parent(name)) {
+                const auto relative=Tail(m.target,name);
+                const auto found=m.package->Entries().find(relative);
+                if(found!=m.package->Entries().end()) {
+                    VFS_PROFILE_ADD(PackageViewEntries,1);
+                    view.Insert(name,Node{found->second,&m,nullptr,{},relative},true);
+                }
+            }
+            if(listing) PackageChildren(m,path,[&](const auto& name,const Node& node){view.Insert(name,node,true);});
+        }
+    }
+    using Names=std::map<std::string,fs::path,std::less<>>;
+    Names DirectNames(View& view,const fs::path& disk,const std::string& path) const {
+        VFS_PROFILE_ADD(DirectoryEnumerations,1);
+        Names names;
+        std::set<std::string,std::less<>> folds;
+        // Reuse each package's existing bounded immutable index; don't retain a
+        // second aggregate index or any real-directory cache between operations.
+        const auto packageName=[&](const std::string& name) {
+            const auto [found,added]=view.folded.emplace(FoldPath(name),name);
+            if(!added&&found->second!=name) throw ConflictError("Unicode case collision at '"+name+"'");
+        };
+        for(const auto& m:mounts) {
+            if(PathContains(m.target,path))
+                PackageChildren(m,path,[&](const auto& name,const Node&){packageName(name);});
+            else if(PathContains(path,m.target)) {
+                const auto relative=Tail(path,m.target);
+                packageName(Join(path,std::string_view(relative).substr(0,relative.find('/'))));
+            }
+        }
+        std::error_code ec; fs::directory_iterator it(disk,ec),end;
+        Check(ec,"enumerate",path);
+        while(it!=end) {
+            VFS_PROFILE_ADD(EntriesEnumerated,1);
+            auto name=Normalize(Utf8(it->path().filename()));
+            if(!name||name->find('/')!=std::string::npos)
+                throw ConflictError("unaddressable directory entry at '"+path+"'");
+            const auto full=Join(path,*name),fold=FoldPath(full);
+            if(!folds.insert(fold).second) throw ConflictError("Unicode collision at '"+path+"'");
+            const auto [found,added]=view.folded.emplace(fold,full);
+            if(!added&&found->second!=full) throw ConflictError("Unicode case collision at '"+full+"'");
+            names.emplace(std::move(*name),it->path());
+            it.increment(ec); Check(ec,"enumerate",path);
+        }
+        return names;
+    }
+    bool AddLocalNode(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
+        const auto entry=InspectDisk(disk,path);
+        if(entry.info.type==NodeType::Missing) return false;
+        view.Insert(path,Node{entry.info,nullptr,&d,disk,{},entry.identity,entry.links});
+        if(entry.info.type==NodeType::File) VFS_PROFILE_ADD(FilesVisited,1);
+        else VFS_PROFILE_ADD(DirectoriesVisited,1);
+        return true;
+    }
+    void AnchorLocal(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
+        const auto anchor=Guard(disk,path,view.guards);
+        if(path==d.target) {
+            if(d.rootAnchor&&!d.rootAnchor->Same(*anchor))
+                throw ConflictError("configured root identity changed at '"+path+"'");
+            if(!d.rootAnchor) d.rootAnchor=anchor;
+        }
+    }
+    View Scoped(std::string_view path,bool listing=false) const {
+        VFS_PROFILE_SCOPE(ScopedView);
+        View view; view.local=true;
+        AddPackageScope(view,path,listing);
+        for(const auto& d:directories) {
+            if(!PathContains(d.target,path)&&!PathContains(path,d.target)) continue;
+            const auto base=Guard(d.base,d.target,view.guards);
+            if(!d.baseAnchor->Same(*base))
+                throw ConflictError("configured base identity changed at '"+d.target+"'");
+            const auto root=ProjectPath(d.base,d.path,d.target,view.guards);
+            if(PhysicalKey(root)!=PhysicalKey(d.root))
+                throw ConflictError("configured root identity changed at '"+d.target+"'");
+            const auto status=Status(root,d.target);
+            if(fs::exists(status)&&!fs::is_directory(status))
+                throw ConflictError("configured directory root is occupied by a file at '"+d.target+"'");
+            view.Insert(d.target,Node{NodeInfo{NodeType::Directory}});
+            if(!fs::is_directory(status)) continue;
+            AddLocalNode(view,d,root,d.target);
+            AnchorLocal(view,d,root,d.target);
+            // Ancestors of a mapping are virtual directories. Its physical root
+            // is verified, but enumerating the ancestor doesn't inspect below it.
+            if(!PathContains(d.target,path)) continue;
+            auto current=d.target; auto disk=root;
+            const auto relative=Tail(d.target,path);
+            bool reached=true;
+            for(std::size_t start=0;start<relative.size();) {
+                const auto names=DirectNames(view,disk,current);
+                auto end=relative.find('/',start); if(end==std::string::npos) end=relative.size();
+                const auto part=std::string_view(relative).substr(start,end-start);
+                const auto found=names.find(part);
+                if(found==names.end()) { reached=false; break; }
+                current=Join(current,part); disk=found->second;
+                if(!AddLocalNode(view,d,disk,current)) { reached=false; break; }
+                const auto* node=view.Find(current);
+                if(node->info.type==NodeType::Directory) AnchorLocal(view,d,disk,current);
+                else if(end!=relative.size()) { reached=false; break; }
+                start=end+1;
+            }
+            if(reached&&listing&&view.Find(current)->info.type==NodeType::Directory) {
+                for(const auto& [name,child]:DirectNames(view,disk,current))
+                    AddLocalNode(view,d,child,Join(current,name));
+            }
+        }
+        for(const auto& [name,node]:view.nodes) {
+            if(node.identity&&node.links!=1) {
+                // A local view cannot rule out aliases elsewhere. Drop its
+                // transient anchors before falling back; never cache that proof.
+                VFS_PROFILE_ADD(AliasFallback,1);
+                view=View{};
+                return Scan();
+            }
+        }
+        return view;
+    }
     fs::path Destination(const View& view,const Directory& d,std::string_view path) const {
         NativeName(Tail(d.target,path),path);
         auto disk=d.root; auto current=d.target;
@@ -725,21 +866,21 @@ FileSystem::~FileSystem()=default;
 std::optional<std::string> FileSystem::NormalizePath(std::string_view path) const { return impl_->Authorize(path); }
 void FileSystem::CheckCodeSource(std::string_view path) const {
     VFS_PROFILE_SCOPE(CheckCodeSource);
-    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scoped(p);
     view.RequireComplete(p);
     view.RequireAliases(view.Resolve(p));
     impl_->CheckCode(view,p);
 }
 NodeInfo FileSystem::Stat(std::string_view path,bool codeSource) const {
     VFS_PROFILE_SCOPE(Stat);
-    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scoped(p);
     view.RequireComplete(p);
     if(codeSource) impl_->CheckCode(view,p);
     const auto* node=view.Resolve(p); view.RequireAliases(node); return node?node->info:NodeInfo{};
 }
 std::optional<std::vector<std::string>> FileSystem::ListDirectory(std::string_view path) const {
     VFS_PROFILE_SCOPE(ListDirectory);
-    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scan();
+    const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex); const auto view=impl_->Scoped(p,true);
     view.RequireComplete(p);
     const auto* node=view.Resolve(p);
     if(!node) Fail("not_found","list",p);
@@ -769,7 +910,7 @@ SDL_IOStream* FileSystem::OpenValidated(std::string_view path,const OpenMode& mo
     const auto p=impl_->Authorize(path); std::lock_guard lock(impl_->mutex);
     std::optional<std::chrono::steady_clock::time_point> retryDeadline;
     for(unsigned attempt=0;attempt!=8;++attempt) {
-        const auto view=impl_->Scan();
+        const auto view=impl_->Scoped(p);
         if(codeSource) impl_->CheckCode(view,p);
         try { return impl_->OpenInView(view,p,mode); }
         catch(const detail::NativeViewChanged&) {

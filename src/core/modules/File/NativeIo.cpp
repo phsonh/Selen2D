@@ -216,7 +216,13 @@ bool OpenRelative(NativeStream& source,const NativeOpenTarget& target,std::strin
     NativeFileIdentity actual{identity.VolumeSerialNumber,0,0};
     std::memcpy(&actual[1],identity.FileId.Identifier,sizeof(identity.FileId.Identifier));
     if(target.expectedIdentity&&actual!=*target.expectedIdentity) throw NativeViewChanged();
-    if(target.requireSingleLink&&info.nNumberOfLinks!=1) { source.Fail("resource_busy"); return false; }
+    if(target.requireSingleLink&&info.nNumberOfLinks!=1) {
+        // Atomic replacement can unlink the already opened, matching generation.
+        // Rebuild the path evidence instead of confusing it with a new alias.
+        // This check still precedes truncation and never accepts an extra link.
+        if(info.nNumberOfLinks==0) throw NativeViewChanged();
+        source.Fail("resource_busy"); return false;
+    }
     if(mode.base=='w'&&target.expectedIdentity) {
         // CREATE_ALWAYS refuses existing hidden/system files with our flags.
         // Preserve that result before touching an already verified generation.
