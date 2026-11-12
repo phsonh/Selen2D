@@ -187,11 +187,12 @@ bool Run(std::uint64_t frameLimit) {
     auto& uploads=Graphic::Uploads();
     bool recording{};
     try {
+        Event::BeginFrame();
         while(!quitRequested) {
-            Event::BeginFrame();
+            // Like Coral2D's Begin/End: all host work belongs to this actual
+            // frame. Late work or sleep never shortens a later frame's budget.
+            clock.BeginFrame(SDL_GetTicksNS());
             if(!Pump()) break;
-            // Maintenance and GPU room consume the pending frame budget too;
-            // doing them after the wait made every low-load frame run late.
             resources->Tick();
             uploads.Tick();
             if(!uploads.FatalError().empty()) throw std::runtime_error(uploads.FatalError());
@@ -202,20 +203,12 @@ bool Run(std::uint64_t frameLimit) {
                 SDL_Delay(1);
             }
             if(!recording) break;
-            // Keep collecting input while waiting. TryBeginFrame only reserves
-            // a CPU recording slot; no swapchain image is held during this wait.
-            // Clock retains only bounded small errors, never a stale frame debt.
-            while(Pump()) {
-                const auto remaining=clock.Remaining(SDL_GetTicksNS());
-                if(!remaining) break;
-                SDL_DelayNS(std::min<std::uint64_t>(remaining,4'000'000));
-            }
             if(!Pump()) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             Event::EndFrame();
             const auto windowMetrics=core::modules::Window::GetFrameMetrics();
             renderer.Canvases().PublishWindowMetrics(windowMetrics.logicalSize.width,windowMetrics.logicalSize.height);
             if(quitRequested) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
-            clock.BeginFrame(SDL_GetTicksNS(),Lua::HasFrameFunction());
+            if(Lua::HasFrameFunction()) clock.BeginCallback(SDL_GetTicksNS());
 #ifdef ENGINE_SPRITE_PROFILE
             Graphic::Render::profile::Begin(clock.FrameCount(),renderer.GetStats());
 #endif
@@ -244,6 +237,26 @@ bool Run(std::uint64_t frameLimit) {
 #endif
             ++hostFrames;
             if(frameLimit && hostFrames>=frameLimit) quitRequested=true;
+            if(quitRequested) break;
+            // Collect next callback's input throughout this frame's end wait.
+            // Do not clear it at the next loop start (notably mouse wheel).
+            Event::BeginFrame();
+            while(Pump()) {
+                const auto remaining=clock.Remaining(SDL_GetTicksNS());
+                if(!remaining) break;
+                // SDL_DelayPrecise may still enter the OS sleep for sub-ms
+                // requests. Keep a fixed, current-frame tail instead of paying
+                // that oversleep back in a later frame. Long waits stay sliced
+                // for events; only the final <=1 ms is explicitly busy-waited.
+                if(remaining>6'000'000)
+                    SDL_DelayNS(std::min<std::uint64_t>(remaining-2'000'000,4'000'000));
+                else if(remaining>1'000'000)
+                    SDL_DelayPrecise(remaining-1'000'000);
+                else {
+                    do { SDL_CPUPauseInstruction(); }
+                    while(clock.Remaining(SDL_GetTicksNS()));
+                }
+            }
         }
     } catch(const std::exception& error) {
         Report("Engine frame failed",error.what()); succeeded=false;
