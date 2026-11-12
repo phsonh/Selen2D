@@ -240,14 +240,82 @@ int Open(lua_State* L) {
 int Exists(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type != Native::NodeType::Missing); return 1; }
 int IsFile(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type == Native::NodeType::File); return 1; }
 int IsDirectory(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type == Native::NodeType::Directory); return 1; }
-int ListDirectory(lua_State* L) {
-    Count(L, 1, 1);
-    const auto entries = Filesystem(L).ListDirectory(CheckString(L, 1));
-    if (!entries) throw Native::IoError("io_error", "failed to list VFS directory");
-    if (entries->size() > std::size_t(std::numeric_limits<int>::max())) throw std::runtime_error("too many directory entries for Lua");
-    lua_createtable(L, static_cast<int>(entries->size()), 0);
+std::uint64_t Depth(lua_State* L) {
+    if(lua_isnoneornil(L,2)) return 1;
+    if(lua_type(L,2)!=LUA_TNUMBER) throw std::invalid_argument("directory max_depth must be an integer");
+    const auto value=lua_tonumber(L,2);
+    if(!std::isfinite(value)||value<0||value>9007199254740991.0||std::floor(value)!=value)
+        throw std::invalid_argument("directory max_depth must be a non-negative finite integer at most 2^53-1");
+    return static_cast<std::uint64_t>(value);
+}
+template<Native::NodeType Type> int List(lua_State* L) {
+    Count(L,1,2);
+    const auto path=CheckString(L,1); const auto depth=Depth(L);
+    std::vector<std::string> entries;
+    Filesystem(L).WalkDirectory(path,depth,[&](const Native::DirectoryEntry& entry) {
+        if(entry.type!=Type) return;
+        if(entries.size()==std::size_t(std::numeric_limits<int>::max())) throw std::length_error("too many directory entries for Lua");
+        entries.push_back(entry.relativePath);
+    });
+    // Full relative UTF-8 byte order, independent of traversal/basename order.
+    std::sort(entries.begin(),entries.end());
+    entries.erase(std::unique(entries.begin(),entries.end()),entries.end());
+    lua_createtable(L,static_cast<int>(entries.size()),0);
     int index = 0;
-    for (const auto& entry : *entries) { lua_pushlstring(L, entry.data(), entry.size()); lua_rawseti(L, -2, ++index); }
+    for(const auto& entry:entries) { lua_pushlstring(L,entry.data(),entry.size()); lua_rawseti(L,-2,++index); }
+    return 1;
+}
+int ListFiles(lua_State* L) { return List<Native::NodeType::File>(L); }
+int ListDirectories(lua_State* L) { return List<Native::NodeType::Directory>(L); }
+int GetMaxDepth(lua_State* L) {
+    Count(L,1,1); std::uint64_t depth=0;
+    Filesystem(L).WalkDirectory(CheckString(L,1),0,[&](const Native::DirectoryEntry& entry) { depth=std::max(depth,entry.depth); });
+    lua_pushnumber(L,static_cast<lua_Number>(depth)); return 1;
+}
+int GetTree(lua_State* L) {
+    Count(L,1,2);
+    const auto path=CheckString(L,1); const auto depth=Depth(L);
+    std::vector<Native::DirectoryEntry> entries;
+    Filesystem(L).WalkDirectory(path,depth,[&](const Native::DirectoryEntry& entry) {
+        if(entry.index>=std::size_t(std::numeric_limits<int>::max())) throw std::length_error("too many directory entries for Lua");
+        entries.push_back(entry);
+    });
+    // A temporary table indexes parents; only the root tree escapes. Lua stack
+    // usage is constant even for deeply nested directories, with no metatables.
+    lua_newtable(L); const int parents=lua_gettop(L);
+    lua_newtable(L); const int root=lua_gettop(L);
+    lua_pushvalue(L,root); lua_rawseti(L,parents,0);
+    std::vector<int> fileCounts(entries.size()+1,0);
+    for(const auto& entry:entries) {
+        lua_rawgeti(L,parents,static_cast<int>(entry.parentIndex));
+        const auto slash=entry.relativePath.rfind('/');
+        const auto name=std::string_view(entry.relativePath).substr(slash==std::string::npos?0:slash+1);
+        if(entry.type==Native::NodeType::File) {
+            lua_pushlstring(L,name.data(),name.size());
+            lua_rawseti(L,-2,++fileCounts[entry.parentIndex]);
+        } else {
+            lua_pushlstring(L,name.data(),name.size()); lua_newtable(L);
+            lua_pushvalue(L,-1); lua_rawseti(L,parents,static_cast<int>(entry.index));
+            lua_rawset(L,-3);
+        }
+        lua_pop(L,1);
+    }
+    lua_remove(L,parents); return 1;
+}
+int ChangeExtension(lua_State* L) { Count(L,2,2); lua_pushboolean(L,Filesystem(L).ChangeExtension(CheckString(L,1),CheckString(L,2))); return 1; }
+int JoinPath(lua_State* L) {
+    Count(L,1,std::numeric_limits<int>::max());
+    std::vector<std::string_view> fragments;
+    for(int i=1;i<=lua_gettop(L);++i) fragments.push_back(CheckString(L,i));
+    const auto result=Native::Path::Join(fragments);
+    lua_pushlstring(L,result.data(),result.size()); return 1;
+}
+template<std::string (*F)(std::string_view)> int PathValue(lua_State* L) {
+    Count(L,1,1); const auto result=F(CheckString(L,1)); lua_pushlstring(L,result.data(),result.size()); return 1;
+}
+int GetParent(lua_State* L) {
+    Count(L,1,1); const auto result=Native::Path::GetParent(CheckString(L,1));
+    if(result) lua_pushlstring(L,result->data(),result->size()); else lua_pushnil(L);
     return 1;
 }
 int CreateDirectory(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).CreateDirectory(CheckString(L, 1))); return 1; }
@@ -302,10 +370,15 @@ void Register(lua_State* L, std::shared_ptr<const Native::FileSystem> filesystem
     lua_pushlightuserdata(L, &contextKey); lua_pushvalue(L, -2); lua_rawset(L, LUA_REGISTRYINDEX);
     const luaL_Reg functions[] = {
         {"Open", Guard<IoResult<Open, ResultKind::Value>>}, {"Exists", Guard<IoResult<Exists, ResultKind::Boolean>>}, {"IsFile", Guard<IoResult<IsFile, ResultKind::Boolean>>}, {"IsDirectory", Guard<IoResult<IsDirectory, ResultKind::Boolean>>},
-        {"ListDirectory", Guard<IoResult<ListDirectory, ResultKind::Value>>}, {"CreateDirectory", Guard<IoResult<CreateDirectory, ResultKind::Boolean>>}, {"Remove", Guard<IoResult<Remove, ResultKind::Boolean>>},
+        {"ListFiles", Guard<IoResult<ListFiles, ResultKind::Value>>}, {"ListDirectories", Guard<IoResult<ListDirectories, ResultKind::Value>>},
+        {"GetMaxDepth", Guard<IoResult<GetMaxDepth, ResultKind::Value>>}, {"GetTree", Guard<IoResult<GetTree, ResultKind::Value>>},
+        {"ChangeExtension", Guard<IoResult<ChangeExtension, ResultKind::Boolean>>}, {"CreateDirectory", Guard<IoResult<CreateDirectory, ResultKind::Boolean>>}, {"Remove", Guard<IoResult<Remove, ResultKind::Boolean>>},
         {"Rename", Guard<IoResult<Rename, ResultKind::Boolean>>}, {"Copy", Guard<IoResult<Copy, ResultKind::Boolean>>}, {"Move", Guard<IoResult<Move, ResultKind::Boolean>>}, {"Replace", Guard<IoResult<Replace, ResultKind::Boolean>>},
         {"RunLuaFile", RunLuaFile}, {"GetScriptPath", Guard<GetScriptPath>}, {nullptr, nullptr}};
     luaL_openlib(L, "File", functions, 1);
+    const luaL_Reg paths[]={{"Join",Guard<JoinPath>},{"GetFileName",Guard<PathValue<Native::Path::GetFileName>>},
+        {"GetParent",Guard<GetParent>},{"GetExtension",Guard<PathValue<Native::Path::GetExtension>>},{nullptr,nullptr}};
+    lua_newtable(L); luaL_register(L,nullptr,paths); lua_setfield(L,-2,"Path");
     lua_pop(L, 1);
 }
 }

@@ -23,17 +23,18 @@ Windows 的 `local_app_data` 通过 Known Folder API 查询 LocalAppData，不�
 
 ## 路径、读写和错误
 
-File 路径是非空 UTF-8/NFC 虚拟路径，使用 `/`，严格区分大小写。拒绝绝对路径、盘符、反斜杠、空组件、独立 `.`/`..`、末尾 `/`、NUL、控制字符与通配符。Unicode NFC 或大小写折叠后冲突的不同名字不能同时接入。只有 `require`/`package.searchpath` 的搜索模板候选允许先去掉开头的一个 `./`。
+File 路径是非空 UTF-8 虚拟路径，自动转为 NFC，使用 `/`，严格区分大小写；输入及规范化结果均不得超过 4096 个 UTF-8 字节。返回名称和路径均为 NFC。拒绝绝对路径、盘符、反斜杠、空组件、独立 `.`/`..`、末尾 `/`、NUL、控制字符及 `: * ?`。空串和 `.` 不能作为查询根目录。Unicode NFC 或大小写折叠后冲突的不同名字不能同时接入。只有 `require`/`package.searchpath` 的搜索模板候选允许先去掉开头的一个 `./`。
 
 授权按完整路径组件匹配：`output` 不授权 `output2`。根映射授权全部安全部署路径；自定义非根映射的范围外查询也抛权限错误，不返回假“文件不存在”。范围内普通 I/O 失败返回独立 `{code, message}` 错误表；程序按 `code` 分支，诊断文本不作为稳定协议。完整签名见 [File API](../api/modules/File.lua)。
 
 | 调用 | 成功或正常否定 | 普通 I/O 失败 |
 |---|---|---|
-| `Open`、`ListDirectory`、句柄 `Tell` | `value, nil` | `nil, err` |
+| `Open`、`ListFiles/ListDirectories/GetTree/GetMaxDepth`、句柄 `Tell` | `value, nil` | `nil, err` |
 | 修改函数、`RunLuaFile`、句柄 `Write/Seek/Close` | `true, nil` | `false, err` |
 | `Exists/IsFile/IsDirectory` | `true, nil` 或正常 `false, nil` | `false, err` |
 | `Read/ReadLine/ReadLines` | `data, true, nil` | `nil, false, err` |
 | `GetScriptPath` | 来源字符串或单个 `nil` | 无可靠来源不算 I/O 失败 |
+| `File.Path.Join/GetFileName/GetParent/GetExtension` | 单个字符串；`GetParent` 也可返回单个 `nil` | 纯字符串操作，非法参数抛错 |
 
 EOF 分别是 `Read` 的 `"", true, nil`、`ReadLine` 的 `nil, true, nil`、`ReadLines` 的 `{}, true, nil`。File 按原始字节读写，不隐式转换编码或换行。参数错误、关闭后使用、授权失败与异常 VFS 结构仍抛 Lua 错误。
 
@@ -50,6 +51,94 @@ if not closed then error(closeError.message) end
 
 包内文件只读。`Copy` 可从包复制到获准真实目录中的新路径；不会借写模式在原虚拟路径建立覆盖副本。`Move/Replace` 要求同一实际文件系统，跨设备失败保留源。映射根与合并来源的目录不能作为普通目录整体搬移或卸载。根授权与 local_app_data→save 等另一真实源会形成重叠，不能组合；受保护游戏应改用明确的非根映射。包与真实文件同一完整虚拟路径仍报冲突。
 
+## 目录查询与资源扫描
+
+**2.3.4 移除公开 `File.ListDirectory`，没有兼容别名。** 只要文件时使用 `ListFiles`，只要目录时使用 `ListDirectories`；需要同次查询的直属混合内容时使用 `GetTree(path, 1)`。递归收集文件改用 `ListFiles(path, 0)`，不再逐条调用 `IsDirectory` 判断类型。这些接口在原生遍历中复用本次取得的条目类型。
+
+统一深度规则如下：查询目录自身为 0，直接文件和子目录为 1，之后逐层加一。`max_depth` 省略或 `nil` 为 1；`0` 表示不限深度；正整数 N 最多返回深度 N 的条目。只接受 `[0, 2^53-1]` 范围内的有限整数，字符串、负数、小数、NaN 和无穷大均抛错。深度限制控制实际下降，边界目录仍检查但不枚举其后代；必要的权限、来源和多硬链接回退检查不能被深度限制绕过。
+
+| 接口 | 结果 |
+|---|---|
+| `File.ListFiles(path, max_depth?)` | 普通文件的相对路径数组，不带查询目录前缀。 |
+| `File.ListDirectories(path, max_depth?)` | 子目录的相对路径数组，包括可见虚拟挂载目录，不包含查询目录自身。边界目录保留名称。 |
+| `File.GetMaxDepth(path)` | 全部后代文件及目录的最大深度，空目录也计入。空目录为 0，只有直属条目为 1；`a/b/c` 空目录链为 3。不读取文件内容，不构造完整列表。 |
+| `File.GetTree(path, max_depth?)` | 下述混合表，不额外包装查询目录根节点。 |
+
+列表从索引 1 开始连续排列，按**完整相对路径的 UTF-8 字节序**排序去重，不同目录的同名文件不会合并。无匹配项为 `{}, nil`。四个接口固定返回两值；缺失目录为 `nil, not_found` 错误表，非目录为 `nil, not_directory`，其他普通失败为 `nil, err`。`GetMaxDepth` 无法精确表示结果时返回 `nil, out_of_range`，无需先调用它再发起全量查询，直接使用 `max_depth=0` 即可。
+
+`GetTree` 的连续数字索引保存直属文件名，按 UTF-8 字节序排序；字符串键为直属子目录名，值为同结构的独立子表。表没有元表或循环引用，不在不同目录之间共享可变子表。`ipairs(tree)` 只遍历直属文件；`pairs(tree)` 包含全部直接内容但不保证顺序；`#tree` 只计算直属文件数。例如目录有 `a.txt`、`dir/b.txt` 和空目录 `dir/empty`：
+
+```lua
+-- GetTree("assets", 1) 的成功结果：
+local depth1 = { "a.txt", dir = {} }
+-- GetTree("assets", 0) 的成功结果：
+local fullTree = { "a.txt", dir = { "b.txt", empty = {} } }
+```
+
+有限深度返回的 `{}` 不区分空目录与未展开目录；只有不限深度、且查询成功时，它才表示本次观察到的空目录。
+
+这些查询不提供整树原子快照，也不建立跨调用快照。已经枚举到的条目若在后续验证或下降时消失、改变类型或无法访问，整次查询失败，不交付部分列表、树或已见最大深度，也不会用 `{}` 掩盖失败。未实际观察到的并发变化不承诺检测。内存或 Lua 结果表容量不足抛错，不返回截短的成功结果。
+
+下面的资源扫描器只收集路径，目录须已获准。它处理普通 I/O 失败；路径、授权和异常结构错误仍按 API 契约抛出。
+
+```lua
+local function collectResourceFiles(root)
+    local relativeFiles, err = File.ListFiles(root, 0)
+    if not relativeFiles then return nil, err end
+
+    local paths = {}
+    for i, relativePath in ipairs(relativeFiles) do
+        paths[i] = File.Path.Join(root, relativePath)
+    end
+    return paths, nil
+end
+
+local files, err = collectResourceFiles("example/assets")
+if not files then
+    Debug.Error(err.message)
+    return
+end
+Debug.Log("Resource files: " .. #files)
+for _, path in ipairs(files) do
+    Debug.Log(path)
+end
+```
+
+## 路径工具与修改扩展名
+
+`File.Path` 只处理字符串，不检查文件存在、类型或授权，不能授予访问权限。四个函数固定返回一个值；非法输入抛错。每个输入片段的原始字节与 NFC 结果都满足路径上限，连接后的实际结果也不能超过 4096 字节。
+
+| 接口 | 行为 |
+|---|---|
+| `File.Path.Join(...)` | 至少一个非空字符串；片段可含内部 `/`。逐片段验证及 NFC 后，以单个 `/` 连接并校验结果。不忽略空串或 nil，不整理多余分隔符、不解析父目录跳转；单参数也规范化。 |
+| `File.Path.GetFileName(path)` | 返回最后一段名称，包括扩展名，不判断其是文件还是目录。 |
+| `File.Path.GetParent(path)` | 返回移除最后组件后的父路径；单组件返回单个 nil，不返回空串、`.` 或宿主根。 |
+| `File.Path.GetExtension(path)` | 只处理最后一段名称：忽略开头连续的点，再取其余部分最后一个点及后缀。含前导点，保留大小写；没有扩展名返回空串。 |
+
+| 名称 | `GetExtension` |
+|---|---|
+| `main.lua` | `.lua` |
+| `archive.tar.gz` | `.gz` |
+| `README`、`.gitignore`、`..config` | `""` |
+| `.config.json` | `.json` |
+| `name.` | `.` |
+| `Photo.PNG` | `.PNG` |
+
+`File.ChangeExtension(path, extension)` 会实际改名普通文件，保持父目录并保留原内容，不转换格式。它采用上述扩展名解析；空后缀删除原扩展名，非空后缀必须以点开头，符合 UTF-8/NFC 且不含分隔符或其他非法名称字符。`.tar.gz` 是完整新后缀，只替换原来的最后一段扩展名。例如 `archive.tar.gz` 加 `.zip` 得到 `archive.tar.zip`，`.gitignore` 加 `.bak` 得到 `.gitignore.bak`。
+
+成功固定返回 `true, nil`；源缺失为 `false, not_found`，源是目录为 `false, is_directory`，目标另有合法目录项为 `false, already_exists`。这里的错误名称代表 `err.code`，第二返回值仍是错误表。最终目标还必须符合后端名称规则：后缀 `"."` 语法合法，但 Windows 不支持 `name.`，实际修改返回 `false, unsupported`。
+
+新旧 NFC 路径完全相同时，仍须验证源是存在的普通文件，再返回成功；此分支不执行修改、不要求写权限，包文件也允许。包文件需要实际改名时返回 `false, read_only`。异常 VFS 结构仍抛错。
+
+`Rename`、`Move`、`ChangeExtension` 支持仅大小写改名，例如 `Photo.PNG` → `Photo.png` 会实际改变目录项。大小写变化不是无改动成功；另一个不同名称即使是同一物理文件的硬链接，也不能视为同名或覆盖。`Rename/Move` 没有 `ChangeExtension` 的完全同路径成功特例。实际改名仍走 VFS 授权、父目录、身份和包后端检查，不创建父目录、不预删文件、不以复制后删除回退。
+
+```lua
+local changed, err = File.ChangeExtension("output/screenshot.PNG", ".png")
+if not changed then
+    Debug.Warn(err.code .. ": " .. err.message)
+end
+```
+
 ## VFS 验证与目录占用
 
 启动阶段完整检查所有已授权来源的结构、NFC/大小写冲突、重解析点及跨映射物理别名；不能用被锁目录的旧内容代替检查。启动入口校验与构造使用同一验证视图，随后释放临时目录句柄。稍后的 Lua 实际读取仍建立新视图，并通过已锚定父目录打开文件、核对实际文件身份，不能沿用启动快照作为授权证明。
@@ -59,9 +148,9 @@ if not closed then error(closeError.message) end
 | 操作 | 当前验证范围 |
 |---|---|
 | `Exists/IsFile/IsDirectory`、文件打开及脚本/资源读取 | 相关配置根与映射身份、必经祖先、父目录直接名称集合、目标当前类型/身份，以及可能参与该虚拟路径解析的包和真实来源。正常否定也必须取得相关来源的当前证据。 |
-| `ListDirectory` | 上述路径验证，加上目标目录的直接条目与合并来源；返回值仍为去重、排序后的直接名称。不递归验证每个子目录的后代。 |
+| `ListFiles/ListDirectories/GetTree/GetMaxDepth` | 上述路径验证，加上实际访问目录的直接条目与合并来源，复用取得的类型。按请求深度下降；最大深度查询遍历全部后代。有限深度的边界目录仍检查，不表示其后代均已验证。 |
 | 实际文件打开 | 从本次已锚定父目录打开实际叶节点，重新检查类型、重解析点、文件身份和必要的链接数；截断在验证之后。遇到替换竞态时有限重试，持续变化可以返回 `resource_busy`。 |
-| `CreateDirectory/Remove/Copy/Rename/Move/Replace` | 保留较大范围的全量结构验证；搬移目录还检查受影响子树、源/目标与包后端保护。这些操作可能仍受无关来源的错误或扫描成本影响。 |
+| `CreateDirectory/Remove/Copy/Rename/Move/Replace`、实际 `ChangeExtension` | 保留较大范围的全量结构验证；搬移目录还检查受影响子树、源/目标与包后端保护。这些操作可能仍受无关来源的错误或扫描成本影响。`ChangeExtension` 完全同路径分支只验证源普通文件，不取得写路由。 |
 
 父目录名称检查会拒绝直接名称中的 NFC/大小写冲突，但普通文件查询不会为了检查一个目标而打开所有兄弟文件。对目标、必经父目录或相关来源的权限拒绝、共享冲突、未知 I/O、重解析点及已发现的结构冲突，仍按现有规则失败，不能当作不存在。一个无关深层目录或兄弟文件的独占不会自动使正常目标读取失败；列举该目录或访问被锁目标则仍需验证。
 
@@ -71,9 +160,11 @@ if not closed then error(closeError.message) end
 
 ## 目录扫描的性能边界
 
-既有 `File.ListDirectory()` 加逐项 `File.IsDirectory()` 的递归代码可以直接受益，无须迁移到新接口。各次调用仍分别取得当前证据，但不再为普通单链接目标重新遍历无关子树。逐项 `Open`、JSON 读取、`require`、`loadfile`、`File.RunLuaFile` 和资源加载共用该路径；已打开句柄的每次读写不会重新解析路径。
+2.3.4 的目录查询共用原生带类型遍历，不通过旧列表加逐项 `IsDirectory/Stat` 拼装结果，也不为类型过滤重复遍历同一目录。平铺列表按最终完整相对路径排序；`GetTree` 构造独立子表；`GetMaxDepth` 只统计深度，不先构造列表或树。遍历不依赖无限递归的原生或 Lua 调用栈，不跨调用保留目录句柄。
 
-这不是所有操作的常数时间保证。启动仍完整扫描；查找仍枚举必经父目录的直接名称，大型单目录、很深的路径、多个竞争来源、多硬链接全量回退和上述修改操作仍有相应成本。增加同一必要父目录的兄弟条目，与增加无关深层子树不是同一工况。减少逐项日志或使用资源清单可以减少额外工作，但清单不代替当前来源、结构和实际身份验证。本版本没有新增 File API。
+逐项 `Open`、JSON 读取、`require`、`loadfile`、`File.RunLuaFile` 和资源加载保留 2.3.3 的相关范围验证路径；已打开句柄的每次读写不会重新解析路径。新目录接口不提供永久缓存，也不替代后续读取的身份验证。
+
+这不是所有操作的常数时间保证。启动仍完整扫描；查找仍枚举必经父目录的直接名称，大型单目录、很深的路径、多个竞争来源、多硬链接全量回退和上述修改操作仍有相应成本。增加同一必要父目录的兄弟条目，与增加无关深层子树不是同一工况。减少逐项日志或使用资源清单可以减少额外工作，但清单不代替当前来源、结构和实际身份验证。
 
 ## JSON 驱动的源码开发构建
 

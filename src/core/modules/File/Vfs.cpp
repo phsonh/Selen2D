@@ -264,7 +264,7 @@ fs::path ProjectPath(const fs::path& base,std::string_view relative,std::string_
     return result;
 }
 using FileIdentity=std::array<std::uint64_t,3>;
-struct DiskEntry { NodeInfo info; std::optional<FileIdentity> identity; std::uint64_t links{}; };
+struct DiskEntry { NodeInfo info; std::optional<FileIdentity> identity; std::uint64_t links{}; std::optional<FileIdentity> directoryIdentity; };
 #if !defined(_WIN32) || !defined(_MSC_VER)
 NodeInfo DiskInfo(const fs::path& disk,const fs::file_status& status,std::string_view path) {
     if(fs::is_directory(status)) return {NodeType::Directory};
@@ -296,7 +296,7 @@ FileIdentity Identity(const fs::path& disk,std::string_view path) {
 #endif
 }
 #endif
-DiskEntry InspectDisk(const fs::path& disk,std::string_view path) {
+DiskEntry InspectDisk(const fs::path& disk,std::string_view path,bool directoryIdentity=false) {
 #if defined(_WIN32) && defined(_MSC_VER)
     // Query live metadata and identity through one handle. Directory enumeration
     // metadata is allowed to be stale and is never an authorization substitute.
@@ -329,7 +329,16 @@ DiskEntry InspectDisk(const fs::path& disk,std::string_view path) {
     if(!GetFileInformationByHandle(handle,&info)) Fail(IoErrorCode(LastError()),"inspect",path);
     if(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)
         throw AccessError("redirected filesystem path refused at '"+std::string(path)+"'");
-    if(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) return {{NodeType::Directory},{}};
+    if(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) {
+        if(!directoryIdentity) return {{NodeType::Directory},{}};
+        FILE_ID_INFO id{};
+        VFS_PROFILE_ADD(IdentityQueries,1);
+        if(!GetFileInformationByHandleEx(handle,FileIdInfo,&id,sizeof(id)))
+            Fail(IoErrorCode(LastError()),"inspect directory identity",path);
+        FileIdentity identity{id.VolumeSerialNumber,0,0};
+        std::memcpy(&identity[1],id.FileId.Identifier,16);
+        return {{NodeType::Directory},{},0,identity};
+    }
     if(directoryOnly) throw ConflictError("directory type changed at '"+std::string(path)+"'");
     if(GetFileType(handle)!=FILE_TYPE_DISK)
         throw ConflictError("non-regular filesystem entry at '"+std::string(path)+"'");
@@ -348,7 +357,8 @@ DiskEntry InspectDisk(const fs::path& disk,std::string_view path) {
 #else
     const auto status=Status(disk,path);
     const auto info=DiskInfo(disk,status,path);
-    return {info,info.type==NodeType::File?std::optional<FileIdentity>(Identity(disk,path)):std::nullopt};
+    return {info,info.type==NodeType::File?std::optional<FileIdentity>(Identity(disk,path)):std::nullopt,0,
+        directoryIdentity&&info.type==NodeType::Directory?std::optional<FileIdentity>(Identity(disk,path)):std::nullopt};
 #endif
 }
 struct StreamCloser { void operator()(SDL_IOStream* value) const { if(value) SDL_CloseIO(value); } };
@@ -397,6 +407,7 @@ struct FileSystem::Impl {
         std::string relative;
         std::optional<FileIdentity> identity;
         std::uint64_t links{};
+        std::optional<FileIdentity> directoryIdentity;
     };
     struct View {
         std::map<std::string,Node,std::less<>> nodes;
@@ -453,7 +464,7 @@ struct FileSystem::Impl {
                     old=std::move(node);
                 } else if(node.directory) {
                     if(old.directory&&PhysicalKey(old.disk)!=PhysicalKey(node.disk)) throw ConflictError("multiple directory destinations at '"+path+"'");
-                    old.directory=node.directory; old.disk=std::move(node.disk);
+                    old.directory=node.directory; old.disk=std::move(node.disk); old.directoryIdentity=node.directoryIdentity;
                 }
             }
             for(auto ancestor=Parent(path);!ancestor.empty();ancestor=Parent(ancestor)) {
@@ -501,15 +512,31 @@ struct FileSystem::Impl {
         if(protectedCode&&node&&node->info.type==NodeType::File&&(!node->mount||!node->mount->encrypted))
             throw AccessError("file code is not authenticated package content at '"+std::string(path)+"'");
     }
-    void AddDisk(View& view,const Directory& d,const fs::path& disk,const std::string& path,bool deferSharing) const {
+    static NodeType ObservedType(const fs::directory_entry& entry,std::string_view path) {
+        std::error_code ec;
+        const auto status=entry.symlink_status(ec); Check(ec,"inspect enumerated entry",path);
+        if(!fs::exists(status)) Fail("not_found","enumerated entry disappeared",path);
+        if(fs::is_symlink(status)) throw AccessError("redirected filesystem path refused at '"+std::string(path)+"'");
+        if(!fs::is_directory(status)&&!fs::is_regular_file(status))
+            throw ConflictError("non-regular filesystem entry at '"+std::string(path)+"'");
+        return fs::is_directory(status)?NodeType::Directory:NodeType::File;
+    }
+    void AddDisk(View& view,const Directory& d,const fs::path& disk,const std::string& path,bool deferSharing,bool strictEntries=false) const {
         VFS_PROFILE_SCOPE(AddDisk);
-        std::vector<std::pair<fs::path,std::string>> pending{{disk,path}};
+        struct Pending { fs::path disk; std::string path; std::optional<NodeType> type; };
+        std::vector<Pending> pending{{disk,path,{}}};
         while(!pending.empty()) {
-            auto [current,name]=std::move(pending.back()); pending.pop_back();
-            const auto entry=InspectDisk(current,name);
+            auto [current,name,expected]=std::move(pending.back()); pending.pop_back();
+            const auto entry=InspectDisk(current,name,strictEntries);
             const auto info=entry.info;
-            if(info.type==NodeType::Missing) continue;
+            if(info.type==NodeType::Missing) {
+                if(strictEntries) Fail("not_found","enumerated entry disappeared",name);
+                continue;
+            }
+            if(expected&&info.type!=*expected)
+                throw ConflictError("enumerated entry type changed at '"+name+"'");
             Node node{info,nullptr,&d,current,{}};
+            node.directoryIdentity=entry.directoryIdentity;
             if(info.type==NodeType::File) {
                 VFS_PROFILE_ADD(FilesVisited,1);
                 node.identity=entry.identity;
@@ -533,7 +560,8 @@ struct FileSystem::Impl {
                     const auto child=Normalize(Utf8(it->path().filename()));
                     if(!child||child->find('/')!=std::string::npos) throw ConflictError("unaddressable directory entry at '"+name+"'");
                     if(!originals.insert(FoldPath(*child)).second) throw ConflictError("Unicode collision at '"+name+"'");
-                    pending.emplace_back(it->path(),Join(name,*child));
+                    const auto childPath=Join(name,*child);
+                    pending.push_back({it->path(),childPath,strictEntries?std::optional<NodeType>(ObservedType(*it,childPath)):std::nullopt});
                     it.increment(ec); Check(ec,"enumerate",name);
                 }
             } catch(const SharingConflict& error) {
@@ -546,7 +574,7 @@ struct FileSystem::Impl {
             }
         }
     }
-    View Scan(bool deferSharing=true) const {
+    View Scan(bool deferSharing=true,bool strictEntries=false) const {
         VFS_PROFILE_SCOPE(Scan);
         View view;
         // All package records are checked before resolving overlays. A real
@@ -568,7 +596,7 @@ struct FileSystem::Impl {
             if(PhysicalKey(root)!=PhysicalKey(d.root)) throw ConflictError("configured root identity changed at '"+d.target+"'");
             const auto status=Status(root,d.target);
             if(fs::exists(status)&&!fs::is_directory(status)) throw ConflictError("configured directory root is occupied by a file at '"+d.target+"'");
-            if(fs::is_directory(status)) AddDisk(view,d,root,d.target,deferSharing);
+            if(fs::is_directory(status)) AddDisk(view,d,root,d.target,deferSharing,strictEntries);
         }
         return view;
     }
@@ -608,7 +636,8 @@ struct FileSystem::Impl {
         }
     }
     using Names=std::map<std::string,fs::path,std::less<>>;
-    Names DirectNames(View& view,const fs::path& disk,const std::string& path) const {
+    using Types=std::map<std::string,NodeType,std::less<>>;
+    Names DirectNames(View& view,const fs::path& disk,const std::string& path,Types* observed=nullptr) const {
         VFS_PROFILE_ADD(DirectoryEnumerations,1);
         Names names;
         std::set<std::string,std::less<>> folds;
@@ -637,15 +666,24 @@ struct FileSystem::Impl {
             if(!folds.insert(fold).second) throw ConflictError("Unicode collision at '"+path+"'");
             const auto [found,added]=view.folded.emplace(fold,full);
             if(!added&&found->second!=full) throw ConflictError("Unicode case collision at '"+full+"'");
+            if(observed) {
+                observed->emplace(*name,ObservedType(*it,full));
+            }
             names.emplace(std::move(*name),it->path());
             it.increment(ec); Check(ec,"enumerate",path);
         }
         return names;
     }
-    bool AddLocalNode(View& view,const Directory& d,const fs::path& disk,const std::string& path) const {
-        const auto entry=InspectDisk(disk,path);
-        if(entry.info.type==NodeType::Missing) return false;
-        view.Insert(path,Node{entry.info,nullptr,&d,disk,{},entry.identity,entry.links});
+    bool AddLocalNode(View& view,const Directory& d,const fs::path& disk,const std::string& path,
+        bool strictEntries=false,std::optional<NodeType> expected={}) const {
+        const auto entry=InspectDisk(disk,path,strictEntries);
+        if(entry.info.type==NodeType::Missing) {
+            if(strictEntries) Fail("not_found","enumerated entry disappeared",path);
+            return false;
+        }
+        if(expected&&entry.info.type!=*expected)
+            throw ConflictError("enumerated entry type changed at '"+path+"'");
+        view.Insert(path,Node{entry.info,nullptr,&d,disk,{},entry.identity,entry.links,entry.directoryIdentity});
         if(entry.info.type==NodeType::File) VFS_PROFILE_ADD(FilesVisited,1);
         else VFS_PROFILE_ADD(DirectoriesVisited,1);
         return true;
@@ -658,7 +696,7 @@ struct FileSystem::Impl {
             if(!d.rootAnchor) d.rootAnchor=anchor;
         }
     }
-    View Scoped(std::string_view path,bool listing=false) const {
+    View Scoped(std::string_view path,bool listing=false,bool strictEntries=false) const {
         VFS_PROFILE_SCOPE(ScopedView);
         View view; view.local=true;
         AddPackageScope(view,path,listing);
@@ -675,7 +713,7 @@ struct FileSystem::Impl {
                 throw ConflictError("configured directory root is occupied by a file at '"+d.target+"'");
             view.Insert(d.target,Node{NodeInfo{NodeType::Directory}});
             if(!fs::is_directory(status)) continue;
-            AddLocalNode(view,d,root,d.target);
+            AddLocalNode(view,d,root,d.target,strictEntries);
             AnchorLocal(view,d,root,d.target);
             // Ancestors of a mapping are virtual directories. Its physical root
             // is verified, but enumerating the ancestor doesn't inspect below it.
@@ -684,21 +722,23 @@ struct FileSystem::Impl {
             const auto relative=Tail(d.target,path);
             bool reached=true;
             for(std::size_t start=0;start<relative.size();) {
-                const auto names=DirectNames(view,disk,current);
+                Types observed;
+                const auto names=DirectNames(view,disk,current,strictEntries?&observed:nullptr);
                 auto end=relative.find('/',start); if(end==std::string::npos) end=relative.size();
                 const auto part=std::string_view(relative).substr(start,end-start);
                 const auto found=names.find(part);
                 if(found==names.end()) { reached=false; break; }
                 current=Join(current,part); disk=found->second;
-                if(!AddLocalNode(view,d,disk,current)) { reached=false; break; }
+                if(!AddLocalNode(view,d,disk,current,strictEntries,strictEntries?std::optional<NodeType>(observed.at(std::string(part))):std::nullopt)) { reached=false; break; }
                 const auto* node=view.Find(current);
                 if(node->info.type==NodeType::Directory) AnchorLocal(view,d,disk,current);
                 else if(end!=relative.size()) { reached=false; break; }
                 start=end+1;
             }
             if(reached&&listing&&view.Find(current)->info.type==NodeType::Directory) {
-                for(const auto& [name,child]:DirectNames(view,disk,current))
-                    AddLocalNode(view,d,child,Join(current,name));
+                Types observed;
+                for(const auto& [name,child]:DirectNames(view,disk,current,strictEntries?&observed:nullptr))
+                    AddLocalNode(view,d,child,Join(current,name),strictEntries,strictEntries?std::optional<NodeType>(observed.at(name)):std::nullopt);
             }
         }
         for(const auto& [name,node]:view.nodes) {
@@ -706,8 +746,22 @@ struct FileSystem::Impl {
                 // A local view cannot rule out aliases elsewhere. Drop its
                 // transient anchors before falling back; never cache that proof.
                 VFS_PROFILE_ADD(AliasFallback,1);
-                view=View{};
-                return Scan();
+                if(!strictEntries) { view=View{}; return Scan(); }
+                // Preserve observations made before the full alias fallback.
+                // A disappeared/retyped child must not become a partial query.
+                auto complete=Scan(true,true);
+                for(const auto& [observedPath,observed]:view.nodes) {
+                    const auto* current=complete.Find(observedPath);
+                    if(!current) Fail("not_found","enumerated entry disappeared",observedPath);
+                    // A synthetic ancestor has no observed physical identity.
+                    // Full validation may discover its real directory source;
+                    // that is additional evidence, not an identity replacement.
+                    if(current->info.type!=observed.info.type||
+                        (observed.identity&&current->identity!=observed.identity)||
+                        (observed.directoryIdentity&&current->directoryIdentity!=observed.directoryIdentity))
+                        throw ConflictError("enumerated entry changed during alias validation at '"+observedPath+"'");
+                }
+                return complete;
             }
         }
         return view;
@@ -895,6 +949,58 @@ std::optional<std::vector<std::string>> FileSystem::ListDirectory(std::string_vi
     }
     return result;
 }
+void FileSystem::WalkDirectory(std::string_view path,std::uint64_t maxDepth,
+    const std::function<void(const DirectoryEntry&)>& visitor) const {
+    VFS_PROFILE_SCOPE(ListDirectory);
+    if(maxDepth>MaxFilePosition) throw std::invalid_argument("directory depth is outside the supported integer range");
+    const auto root=impl_->Authorize(path);
+    std::lock_guard lock(impl_->mutex);
+    struct Pending {
+        std::string path,relative;
+        std::uint64_t depth{};
+        std::size_t index{};
+        bool observed{};
+        std::optional<FileIdentity> directoryIdentity;
+    };
+    struct Child { std::string path; NodeType type; std::optional<FileIdentity> directoryIdentity; };
+    std::vector<Pending> pending{{root,{}}};
+    std::size_t index=0;
+    while(!pending.empty()) {
+        auto current=std::move(pending.back()); pending.pop_back();
+        std::vector<Child> children;
+        {
+            // This view is released before walking another directory. Pending
+            // work retains identity values, never handles/authorization proofs.
+            const auto view=impl_->Scoped(current.path,true,true);
+            view.RequireComplete(current.path);
+            const auto* node=view.Resolve(current.path);
+            if(!node) Fail("not_found","walk directory",current.path);
+            if(node->info.type!=NodeType::Directory) Fail("not_directory","walk directory",current.path);
+            if(current.observed&&current.directoryIdentity!=node->directoryIdentity)
+                throw ConflictError("enumerated directory identity changed at '"+current.path+"'");
+            const auto prefix=current.path+'/';
+            for(auto it=view.nodes.lower_bound(prefix);it!=view.nodes.end()&&it->first.starts_with(prefix);++it) {
+                const auto tail=std::string_view(it->first).substr(prefix.size());
+                if(tail.find('/')!=std::string_view::npos) continue;
+                view.RequireComplete(it->first);
+                view.RequireAliases(&it->second);
+                children.push_back({it->first,it->second.info.type,it->second.directoryIdentity});
+            }
+        }
+        if(!children.empty()&&current.depth==MaxFilePosition) Fail("out_of_range","directory depth",current.path);
+        const auto begin=pending.size();
+        for(const auto& child:children) {
+            if(index==std::numeric_limits<std::size_t>::max()) throw std::length_error("too many directory entries");
+            const auto relative=child.path.substr(root.size()+1);
+            const DirectoryEntry entry{relative,child.type,current.depth+1,++index,current.index};
+            visitor(entry);
+            if(child.type==NodeType::Directory&&(!maxDepth||entry.depth<maxDepth))
+                pending.push_back({child.path,relative,entry.depth,entry.index,true,child.directoryIdentity});
+        }
+        // Preserve directory-name traversal order without recursive native calls.
+        std::reverse(pending.begin()+begin,pending.end());
+    }
+}
 SDL_IOStream* FileSystem::Open(std::string_view path,std::string_view mode) const { return Open(path,ParseMode(mode)); }
 std::shared_ptr<const ReadSource> FileSystem::OpenReadSource(std::string_view path) const {
     VFS_PROFILE_SCOPE(OpenReadSource);
@@ -980,6 +1086,19 @@ bool FileSystem::Rename(std::string_view directory,std::string_view oldName,std:
     (void)impl_->Authorize(source); (void)impl_->Authorize(destination);
     return MoveValidated(source,destination,false);
 }
+bool FileSystem::ChangeExtension(std::string_view path,std::string_view extension) const {
+    const auto source=impl_->Authorize(path);
+    const auto destination=Path::ReplaceExtension(source,extension);
+    if(source==destination) {
+        // A true no-op only needs a readable, currently valid ordinary file;
+        // it does not acquire a write route and also works for package files.
+        const auto info=Stat(source);
+        if(info.type==NodeType::Missing) Fail("not_found","change extension",source);
+        if(info.type==NodeType::Directory) Fail("is_directory","change extension",source);
+        return true;
+    }
+    return MoveValidated(source,destination,false);
+}
 bool FileSystem::Copy(std::string_view source,std::string_view destination) const {
     VFS_PROFILE_SCOPE(Copy);
     const auto a=impl_->Authorize(source),b=impl_->Authorize(destination);
@@ -1028,7 +1147,13 @@ bool FileSystem::MoveValidated(std::string_view source,std::string_view destinat
     if(!allowDirectory&&from&&from->info.type==NodeType::Directory) Fail("is_directory","rename",a);
     impl_->MutationSource(view,from,a,true);
     if(view.Resolve(b)) Fail("already_exists","move",b);
-    const auto& d=impl_->Route(b); impl_->CheckNewName(view,b); impl_->RequireParent(view,d,b);
+    const auto& d=impl_->Route(b);
+    const auto folded=view.folded.find(FoldPath(b));
+    // Only this exact source directory entry may occupy the folded target name.
+    // A second name pointing at the same file is still an existing destination.
+    const bool caseOnly=Parent(a)==Parent(b)&&a!=b&&folded!=view.folded.end()&&folded->second==a;
+    if(!caseOnly) impl_->CheckNewName(view,b);
+    impl_->RequireParent(view,d,b);
     if(PathContains(a,b)) Fail("unsupported","move into own subtree",b);
     const auto disk=impl_->Destination(view,d,b); impl_->CheckBacking(disk,b,true);
     impl_->CheckMovedAliases(view,a,b,d);

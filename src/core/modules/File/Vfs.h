@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 #include <array>
+#include <functional>
 
 namespace core::modules::File {
 class ReadSource;
@@ -15,6 +16,14 @@ enum class NodeType { Missing, File, Directory };
 struct NodeInfo {
     NodeType type{NodeType::Missing};
     std::uint64_t size{}, modified{};
+};
+// Native typed traversal. Root has index 0 and is not emitted. Indices describe
+// parentage without recursion or retaining an entire tree of directory handles.
+struct DirectoryEntry {
+    std::string relativePath;
+    NodeType type{};
+    std::uint64_t depth{};
+    std::size_t index{}, parentIndex{};
 };
 struct MountSpec {
     std::filesystem::path source; // Strict path relative to executable directory.
@@ -55,6 +64,10 @@ public:
     // lookup/read. This flag is not exposed by the Lua File module.
     NodeInfo Stat(std::string_view path, bool codeSource = false) const;
     std::optional<std::vector<std::string>> ListDirectory(std::string_view path) const;
+    // maxDepth: 0 means unlimited; otherwise direct children have depth 1.
+    // A visitor must not publish a partial successful result when this throws.
+    void WalkDirectory(std::string_view path, std::uint64_t maxDepth,
+        const std::function<void(const DirectoryEntry&)>& visitor) const;
     // Caller owns the SDL stream. Ordinary failures throw IoError; parameter,
     // authorization and structural errors use distinct exception classes.
     SDL_IOStream* Open(std::string_view path, const OpenMode& mode) const;
@@ -65,6 +78,7 @@ public:
     bool CreateDirectory(std::string_view path) const;
     bool Remove(std::string_view path) const;
     bool Rename(std::string_view directory, std::string_view oldName, std::string_view newName) const;
+    bool ChangeExtension(std::string_view path, std::string_view extension) const;
     bool Copy(std::string_view source, std::string_view destination) const;
     bool Move(std::string_view source, std::string_view destination) const;
     bool Replace(std::string_view source, std::string_view destination) const;
