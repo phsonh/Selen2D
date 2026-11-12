@@ -987,8 +987,9 @@ void FileSystem::WalkDirectory(std::string_view path,std::uint64_t maxDepth,
         std::optional<FileIdentity> file,directory;
     };
     // Only an alias fallback observes below the current directory. Retain its
-    // observations in the requested subtree until this walk ends, without any
-    // handles or authorization proof. The normal local path has no such table.
+    // observations in the requested subtree and its ancestors until this walk
+    // ends, without handles or authorization proof. The normal local path has
+    // no such table.
     std::map<std::string,Observation,std::less<>> fallbackObservations;
     std::vector<Pending> pending{{root,{}}};
     std::size_t index=0;
@@ -1016,11 +1017,21 @@ void FileSystem::WalkDirectory(std::string_view path,std::uint64_t maxDepth,
                     throw ConflictError("enumerated entry changed after alias validation at '"+observed.first+"'");
             };
             if(view.local) {
-                // The current path and its direct children were revalidated.
-                // Check old entries as well as new ones, including removals;
+                // Scoped revalidated the whole ancestor chain, not just this
+                // directory: a replaced ancestor can contain the original child.
+                // Check every earlier observation on that chain, including the
+                // internal root, without another filesystem lookup.
+                if(!fallbackObservations.empty()) {
+                    for(auto ancestor=std::string_view(current.path);;) {
+                        if(const auto found=fallbackObservations.find(ancestor);found!=fallbackObservations.end())
+                            checkObservation(*found);
+                        if(ancestor.empty()) break;
+                        const auto slash=ancestor.rfind('/');
+                        ancestor=slash==std::string_view::npos?std::string_view{}:ancestor.substr(0,slash);
+                    }
+                }
+                // Also check old direct children, including removals; deeper
                 // descendants outside this scope are checked when reached.
-                if(const auto found=fallbackObservations.find(current.path);found!=fallbackObservations.end())
-                    checkObservation(*found);
                 for(auto it=fallbackObservations.lower_bound(prefix);
                     it!=fallbackObservations.end()&&it->first.starts_with(prefix);++it)
                     if(std::string_view(it->first).substr(prefix.size()).find('/')==std::string_view::npos)
@@ -1028,7 +1039,7 @@ void FileSystem::WalkDirectory(std::string_view path,std::uint64_t maxDepth,
             } else {
                 for(const auto& observed:fallbackObservations) checkObservation(observed);
                 for(const auto& [name,observed]:view.nodes) {
-                    if(!PathContains(root,name)) continue;
+                    if(!PathContains(root,name)&&!PathContains(name,root)) continue;
                     const auto [found,added]=fallbackObservations.try_emplace(name,
                         Observation{observed.info.type,observed.identity,observed.directoryIdentity});
                     // Synthetic ancestors can gain physical evidence. Do not
