@@ -25,9 +25,10 @@ function Runtime.SetExitFunction(func) end
 ---重复请求安全；不会直接销毁 VM，不自动中断当前 Lua 语句。
 function Runtime.Quit() end
 
----立即修改目标主循环 FPS（默认 60），本轮余下等待使用新预算；超时不追赶历史欠帧。
+---立即修改目标主循环 FPS（默认 60），本轮余下等待使用新预算；小幅节拍误差可有限补偿。
+---补偿最多 1 ms 且不超过目标周期的 1/8；更大的延误重新定位节拍，不追赶历史逻辑帧。
 ---fps 必须有限且 0 < fps <= 1000，且对应纳秒帧间隔可表示为 int64；否则抛错并保持原值。
----这不改变游戏逻辑更新次数，也不同于 Window 的 VSync。
+---这不改变游戏逻辑更新次数，也不同于 Window 的 VSync；GPU/系统调度/工作量可能使实际帧率低于目标。
 ---@param fps number
 function Runtime.SetTargetFPS(fps) end
 

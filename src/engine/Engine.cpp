@@ -189,14 +189,9 @@ bool Run(std::uint64_t frameLimit) {
     try {
         while(!quitRequested) {
             Event::BeginFrame();
-            // Bound each sleep so SDL events remain responsive even at low FPS.
-            // Only the previous ACTUAL start is used, never accumulated deadlines.
-            while(Pump()) {
-                const auto remaining=clock.Remaining(SDL_GetTicksNS());
-                if(!remaining) break;
-                SDL_DelayNS(std::min<std::uint64_t>(remaining,4'000'000));
-            }
-            if(quitRequested) break;
+            if(!Pump()) break;
+            // Maintenance and GPU room consume the pending frame budget too;
+            // doing them after the wait made every low-load frame run late.
             resources->Tick();
             uploads.Tick();
             if(!uploads.FatalError().empty()) throw std::runtime_error(uploads.FatalError());
@@ -207,6 +202,14 @@ bool Run(std::uint64_t frameLimit) {
                 SDL_Delay(1);
             }
             if(!recording) break;
+            // Keep collecting input while waiting. TryBeginFrame only reserves
+            // a CPU recording slot; no swapchain image is held during this wait.
+            // Clock retains only bounded small errors, never a stale frame debt.
+            while(Pump()) {
+                const auto remaining=clock.Remaining(SDL_GetTicksNS());
+                if(!remaining) break;
+                SDL_DelayNS(std::min<std::uint64_t>(remaining,4'000'000));
+            }
             if(!Pump()) { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); break; }
             Event::EndFrame();
             const auto windowMetrics=core::modules::Window::GetFrameMetrics();
