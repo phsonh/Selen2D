@@ -71,14 +71,14 @@ function File.IsDirectory(path) end
 -- 以下目录查询不提供整树原子快照或跨调用快照。已枚举条目若在后续验证/下降时
 -- 消失、类型改变或不可访问，整次失败，不交付部分结果；不承诺发现未观察到的并发变化。
 -- 内存或 Lua 结果表容量不足抛错，不返回截短的成功结果。
--- 统一深度：查询目录为 0，直接条目为 1。max_depth 省略/nil 为 1，0 不限，
--- 正整数 N 最多返回深度 N；只接受 [0,2^53-1] 有限整数，不接受数字字符串。
+-- 统一深度：查询目录为 0，直接条目为 1。max_depth 省略/nil 不限深度，
+-- 正整数 N 最多返回深度 N；显式值只接受 [1,2^53-1] 有限整数，0 和数字字符串均抛错。
 
 ---返回普通文件的相对路径（不带查询目录前缀），连续数组，完整路径按 UTF-8 字节序排序去重。
 ---不同目录同名文件分别保留；不匹配或空目录 {},nil。目录缺失 nil,not_found，
 ---非目录 nil,not_directory，其他普通失败 nil,err；类型过滤不省略必要结构验证。
 ---@param path string
----@param max_depth? integer 省略/nil 为 1；0 表示不限深度。
+---@param max_depth? integer 省略/nil 不限深度；显式值必须为 [1,2^53-1] 的有限整数。
 ---@return string[]|nil files
 ---@return FileError|nil err
 function File.ListFiles(path, max_depth) end
@@ -86,7 +86,7 @@ function File.ListFiles(path, max_depth) end
 ---返回子目录相对路径，包括虚拟挂载目录，不含查询目录自身。连续数组，完整路径排序去重。
 ---边界目录保留名称但不下降；空结果 {},nil。缺失、非目录及普通失败与 ListFiles 相同。
 ---@param path string
----@param max_depth? integer 省略/nil 为 1；0 表示不限深度。
+---@param max_depth? integer 省略/nil 不限深度；显式值必须为 [1,2^53-1] 的有限整数。
 ---@return string[]|nil directories
 ---@return FileError|nil err
 function File.ListDirectories(path, max_depth) end
@@ -103,7 +103,7 @@ function File.GetMaxDepth(path) end
 ---不限深度且查询成功时，{} 才表示本次观察到的空目录。
 ---缺失 nil,not_found，非目录 nil,not_directory，普通失败 nil,err；不返回部分树。
 ---@param path string
----@param max_depth? integer 省略/nil 为 1；0 表示不限深度。
+---@param max_depth? integer 省略/nil 不限深度；显式值必须为 [1,2^53-1] 的有限整数。
 ---@return FileTree|nil tree
 ---@return FileError|nil err
 function File.GetTree(path, max_depth) end

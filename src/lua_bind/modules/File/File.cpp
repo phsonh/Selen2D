@@ -241,11 +241,11 @@ int Exists(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat
 int IsFile(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type == Native::NodeType::File); return 1; }
 int IsDirectory(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type == Native::NodeType::Directory); return 1; }
 std::uint64_t Depth(lua_State* L) {
-    if(lua_isnoneornil(L,2)) return 1;
+    if(lua_isnoneornil(L,2)) return 0;
     if(lua_type(L,2)!=LUA_TNUMBER) throw std::invalid_argument("directory max_depth must be an integer");
     const auto value=lua_tonumber(L,2);
-    if(!std::isfinite(value)||value<0||value>9007199254740991.0||std::floor(value)!=value)
-        throw std::invalid_argument("directory max_depth must be a non-negative finite integer at most 2^53-1");
+    if(!std::isfinite(value)||value<=0||value>9007199254740991.0||std::floor(value)!=value)
+        throw std::invalid_argument("directory max_depth must be a positive finite integer at most 2^53-1");
     return static_cast<std::uint64_t>(value);
 }
 template<Native::NodeType Type> int List(lua_State* L) {

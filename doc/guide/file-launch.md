@@ -53,9 +53,11 @@ if not closed then error(closeError.message) end
 
 ## 目录查询与资源扫描
 
-**2.3.4 移除公开 `File.ListDirectory`，没有兼容别名。** 只要文件时使用 `ListFiles`，只要目录时使用 `ListDirectories`；需要同次查询的直属混合内容时使用 `GetTree(path, 1)`。递归收集文件改用 `ListFiles(path, 0)`，不再逐条调用 `IsDirectory` 判断类型。这些接口在原生遍历中复用本次取得的条目类型。
+**2.3.4 移除公开 `File.ListDirectory`，没有兼容别名。** 只要文件时使用 `ListFiles`，只要目录时使用 `ListDirectories`；需要同次查询的直属混合内容时使用 `GetTree(path, 1)`。递归收集文件改用 `ListFiles(path)`，不再逐条调用 `IsDirectory` 判断类型。这些接口在原生遍历中复用本次取得的条目类型。
 
-统一深度规则如下：查询目录自身为 0，直接文件和子目录为 1，之后逐层加一。`max_depth` 省略或 `nil` 为 1；`0` 表示不限深度；正整数 N 最多返回深度 N 的条目。只接受 `[0, 2^53-1]` 范围内的有限整数，字符串、负数、小数、NaN 和无穷大均抛错。深度限制控制实际下降，边界目录仍检查但不枚举其后代；必要的权限、来源和多硬链接回退检查不能被深度限制绕过。
+**2.3.5 深度参数迁移：** 需要直属结果的调用必须显式传 `1`；此前以 `0` 表示无限的调用改为省略参数或传 `nil`。`GetMaxDepth(path)` 的签名和返回规则不变。
+
+统一深度规则如下：查询目录自身为 0，直接文件和子目录为 1，之后逐层加一。`max_depth` 省略或 `nil` 表示不限深度；正整数 N 最多返回深度 N 的条目。显式值只接受 `[1, 2^53-1]` 范围内的有限整数，`0`、负零、字符串、负数、小数、NaN 和无穷大均抛参数错误。深度限制控制实际下降，边界目录仍检查但不枚举其后代；必要的权限、来源和多硬链接回退检查不能被深度限制绕过。
 
 | 接口 | 结果 |
 |---|---|
@@ -64,14 +66,14 @@ if not closed then error(closeError.message) end
 | `File.GetMaxDepth(path)` | 全部后代文件及目录的最大深度，空目录也计入。空目录为 0，只有直属条目为 1；`a/b/c` 空目录链为 3。不读取文件内容，不构造完整列表。 |
 | `File.GetTree(path, max_depth?)` | 下述混合表，不额外包装查询目录根节点。 |
 
-列表从索引 1 开始连续排列，按**完整相对路径的 UTF-8 字节序**排序去重，不同目录的同名文件不会合并。无匹配项为 `{}, nil`。四个接口固定返回两值；缺失目录为 `nil, not_found` 错误表，非目录为 `nil, not_directory`，其他普通失败为 `nil, err`。`GetMaxDepth` 无法精确表示结果时返回 `nil, out_of_range`，无需先调用它再发起全量查询，直接使用 `max_depth=0` 即可。
+列表从索引 1 开始连续排列，按**完整相对路径的 UTF-8 字节序**排序去重，不同目录的同名文件不会合并。无匹配项为 `{}, nil`。四个接口固定返回两值；缺失目录为 `nil, not_found` 错误表，非目录为 `nil, not_directory`，其他普通失败为 `nil, err`。`GetMaxDepth` 无法精确表示结果时返回 `nil, out_of_range`，无需先调用它再发起全量查询，省略 `max_depth` 即可。
 
 `GetTree` 的连续数字索引保存直属文件名，按 UTF-8 字节序排序；字符串键为直属子目录名，值为同结构的独立子表。表没有元表或循环引用，不在不同目录之间共享可变子表。`ipairs(tree)` 只遍历直属文件；`pairs(tree)` 包含全部直接内容但不保证顺序；`#tree` 只计算直属文件数。例如目录有 `a.txt`、`dir/b.txt` 和空目录 `dir/empty`：
 
 ```lua
 -- GetTree("assets", 1) 的成功结果：
 local depth1 = { "a.txt", dir = {} }
--- GetTree("assets", 0) 的成功结果：
+-- GetTree("assets") 或 GetTree("assets", nil) 的成功结果：
 local fullTree = { "a.txt", dir = { "b.txt", empty = {} } }
 ```
 
@@ -85,7 +87,7 @@ local fullTree = { "a.txt", dir = { "b.txt", empty = {} } }
 
 ```lua
 local function collectResourceFiles(root)
-    local relativeFiles, err = File.ListFiles(root, 0)
+    local relativeFiles, err = File.ListFiles(root)
     if not relativeFiles then return nil, err end
 
     local paths = {}
