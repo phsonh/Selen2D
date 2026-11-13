@@ -72,6 +72,56 @@ function Object.Delete(object) end
 ---@return boolean valid
 function Object.IsValid(value) end
 
+---以极坐标设置速度；唯一状态是 vx/vy，不保存独立 speed/angle，不修改 rot/位置/加速度/rate/timer。
+---严格三个参数，speed/angle 必须为有限 number；角度单位度，0 沿 +X，90 沿 +Y，允许任意有限角与负 speed。
+---两个最终分量均有限后一起写入；计算失败不部分写入。无隐式 Update/Commit 或回调。
+---允许有效待激活对象；待删除/过期/跨服务对象报错，自身 Delete 回调也不能写原生运动状态。
+---@param object ObjectInstance
+---@param speed number
+---@param angle number
+---@return boolean success 成功固定为 true；失败抛 Lua 错误。
+function Object.SetVelocity(object, speed, angle) end
+
+---读取当前 vx/vy，返回非负 hypot 与 atan2 方向（度，[-180,180]）；零向量固定返回 0,0。
+---严格一个对象参数；模长溢出报错，不返回无穷大；直接修改 vx/vy 后立即反映。
+---可读取有效待激活对象及当前自身 Delete 回调中的对象；其他失效/跨服务对象报错。
+---@param object ObjectInstance
+---@return number speed
+---@return number angle
+function Object.GetVelocity(object) end
+
+---把 speed/angle 转为分量后加到当前 vx/vy；参数、生命周期及原子写入规则同 SetVelocity。
+---仅要求两个最终分量有限，不要求其合成模长可表示；GetVelocity 仍可能因模长溢出报错。
+---@param object ObjectInstance
+---@param speed number
+---@param angle number
+---@return boolean success 成功固定为 true；失败抛 Lua 错误。
+function Object.AddVelocity(object, speed, angle) end
+
+---以极坐标设置 ax/ay，单位是每逻辑步加速度；不修改 vx/vy、rot、位置、rate 或 timer。
+---严格三个参数；幅值及角度为有限 number，允许负幅值及任意有限角；0 沿 +X，90 沿 +Y。
+---两个最终分量均有限后一起写入；生命周期和失败规则同 SetVelocity，无隐式调度。
+---@param object ObjectInstance
+---@param acceleration number
+---@param angle number
+---@return boolean success 成功固定为 true；失败抛 Lua 错误。
+function Object.SetAcceleration(object, acceleration, angle) end
+
+---读取当前 ax/ay，返回非负 hypot 与 atan2 方向（度，[-180,180]）；零向量固定为 0,0。
+---严格一个参数；模长溢出报错；生命周期和自身 Delete 只读例外同 GetVelocity。
+---@param object ObjectInstance
+---@return number acceleration
+---@return number angle
+function Object.GetAcceleration(object) end
+
+---把 acceleration/angle 转为分量后加到当前 ax/ay；严格三个参数，其余规则同 SetAcceleration。
+---仅要求两个最终分量有限；成功固定返回单个 true，失败不部分写入，不隐式更新或 Commit。
+---@param object ObjectInstance
+---@param acceleration number
+---@param angle number
+---@return boolean success
+function Object.AddAcceleration(object, acceleration, angle) end
+
 ---立即返回宿主初始化的实际对象池容量，在此运行实例内固定；无参数，只读且无隐式 Commit。
 ---容量是最大同时占用槽位数，不是 count、空闲数、reserve 值或字节数；零容量返回 0。
 ---待删除对象及其 Delete 回调尚未返回时仍占槽位，因此 capacity-count 不等于可立即 New 的数量。

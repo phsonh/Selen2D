@@ -1,11 +1,13 @@
 #include "Object.h"
 #include "core/modules/Object/ObjectSystem.h"
 #include "core/runtime/Log/Log.h"
+#include "core/runtime/Lua/Error.h"
 #include "lua_bind/Guard.h"
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <new>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -93,6 +95,8 @@ struct Context::Impl final:Native::ObjectCallbacks {
     std::uint32_t callbackDepth{},nativeEntryDepth{};
     bool closing{},shutdownRequested{},finalized{},cleanupFailed{};
     std::string cleanupError;
+    std::size_t cleanupExtraBytes{};
+    bool cleanupTruncated{};
     Impl(lua_State* state,std::uint32_t capacity):L(state),callbackState(state),system(std::make_unique<Native::ObjectSystem>(capacity)),roots(capacity) {
         if(!state) throw std::invalid_argument("Object Context requires a Lua VM"); token->owner=this;
     }
@@ -123,7 +127,23 @@ struct Context::Impl final:Native::ObjectCallbacks {
     void CleanupError(const char* message) noexcept override {
         cleanupFailed=true;
         // Diagnostics must never prevent another queued object's reclamation.
-        try { if(cleanupError.empty()) cleanupError=message; } catch(...) {}
+        try {
+            if(cleanupError.empty()) cleanupError=message;
+            else if(!cleanupTruncated) {
+                constexpr std::size_t limit=64*1024;
+                constexpr std::string_view separator="\nAdditional Object shutdown failure: ";
+                const std::string_view text(message);
+                const auto remaining=limit-cleanupExtraBytes;
+                if(separator.size()+text.size()<=remaining) {
+                    cleanupError.reserve(cleanupError.size()+separator.size()+text.size());
+                    cleanupError.append(separator); cleanupError.append(text);
+                    cleanupExtraBytes+=separator.size()+text.size();
+                } else {
+                    cleanupError+="\n[additional Object shutdown diagnostics truncated]";
+                    cleanupTruncated=true;
+                }
+            }
+        } catch(...) {}
         try { core::runtime::Log::LuaError(std::string("Object shutdown deletion failed: ")+message); } catch(...) {}
     }
     void Finalize(lua_State* state) noexcept {
@@ -203,10 +223,12 @@ struct Context::Impl final:Native::ObjectCallbacks {
         Callback callback(*this);
         if(!lua_checkstack(state,10)) throw std::runtime_error("Object callback stack exceeded");
         PushInstance(state,h); const int instance=lua_gettop(state);
-        PushClass(state,instance); LookupHook(state,lua_gettop(state),hook);
+        PushClass(state,instance); const int classIndex=lua_gettop(state);
+        lua_pushcfunction(state,core::runtime::Lua::ErrorTraceback); const int handler=lua_gettop(state);
+        LookupHook(state,classIndex,hook);
         if(lua_isnil(state,-1)) return;
         lua_pushvalue(state,instance); if(other.is_valid()) PushInstance(state,other);
-        const int result=lua_pcall(state,other.is_valid()?2:1,0,0); RequireRunning();
+        const int result=lua_pcall(state,other.is_valid()?2:1,0,handler); RequireRunning();
         if(result) throw std::runtime_error(CallbackError(state,hook,h));
     }
     void Update(Native::ObjectHandle h) override { Invoke(h,"Update"); }
@@ -352,12 +374,13 @@ struct Context::Impl final:Native::ObjectCallbacks {
         (*slot)->handle=handle; owner.roots[handle.index]={handle.generation,reference};
         {
             Callback callback(owner); Access access(owner);
+            lua_pushcfunction(state,core::runtime::Lua::ErrorTraceback); const int handler=lua_gettop(state);
             owner.LookupHook(state,1,"Init");
             if(lua_isnil(state,-1)) lua_pop(state,1);
             else {
                 lua_pushvalue(state,instance);
                 for(int i=2;i<=arguments;++i) lua_pushvalue(state,i);
-                const int result=lua_pcall(state,arguments,0,0); owner.RequireRunning();
+                const int result=lua_pcall(state,arguments,0,handler); owner.RequireRunning();
                 if(result) throw std::runtime_error(CallbackError(state,"Init",handle));
             }
             owner.RequireRunning();
@@ -375,6 +398,36 @@ struct Context::Impl final:Native::ObjectCallbacks {
         Count(state,1,1); auto& owner=Service(state); Entry entry(owner,state); const auto& box=Box(state,1);
         if(box.token!=owner.token) throw std::invalid_argument("Object instance belongs to another Context");
         lua_pushboolean(state,owner.system->Delete(box.handle)); return 1;
+    }
+    template<bool Acceleration,bool Add> static int WritePolar(lua_State* state) {
+        Count(state,3,3); auto& owner=Service(state); Entry entry(owner,state);
+        auto& box=Box(state,1);
+        if(box.token!=owner.token) throw std::invalid_argument("Object instance belongs to another Context");
+        auto& motion=Self(state,box,true).motion;
+        const double magnitude=Number(state,2,Acceleration?"acceleration":"speed");
+        const double angle=Number(state,3,"angle");
+        // Reduce in degrees before multiplication: every finite angle remains
+        // usable without overflowing the radian conversion.
+        const double radians=std::remainder(angle,360.)*(std::numbers::pi/180.);
+        const double dx=magnitude*std::cos(radians),dy=magnitude*std::sin(radians);
+        double& x=Acceleration?motion.ax:motion.vx;
+        double& y=Acceleration?motion.ay:motion.vy;
+        const double nextX=Add?x+dx:dx,nextY=Add?y+dy:dy;
+        // Only the resulting components constrain Add, not their hypot.
+        if(!std::isfinite(nextX)||!std::isfinite(nextY)) throw std::overflow_error("Object motion components must remain finite");
+        owner.RequireRunning(); x=nextX; y=nextY;
+        lua_pushboolean(state,true); return 1;
+    }
+    template<bool Acceleration> static int ReadPolar(lua_State* state) {
+        Count(state,1,1); auto& owner=Service(state); Entry entry(owner,state);
+        auto& box=Box(state,1);
+        if(box.token!=owner.token) throw std::invalid_argument("Object instance belongs to another Context");
+        const auto& motion=Self(state,box).motion;
+        const double x=Acceleration?motion.ax:motion.vx,y=Acceleration?motion.ay:motion.vy;
+        const double magnitude=std::hypot(x,y);
+        if(!std::isfinite(magnitude)) throw std::overflow_error("Object motion magnitude must remain finite");
+        const double angle=x==0&&y==0?0.:std::atan2(y,x)*(180./std::numbers::pi);
+        owner.RequireRunning(); lua_pushnumber(state,magnitude); lua_pushnumber(state,angle); return 2;
     }
     static int UpdateAll(lua_State* state) {
         Count(state,0,0); auto& owner=Service(state); Entry entry(owner,state); owner.RequireBatch();
@@ -473,6 +526,8 @@ void Register(lua_State* L,Context& context) {
         {"GetObjectCount",Guard<Context::Impl::GetObjectCount>},{"GetBound",Guard<Context::Impl::GetBound>},
         {"GetPoolCapacity",Guard<Context::Impl::GetPoolCapacity>},{"GetAll",Guard<Context::Impl::GetAll>},
         {"GetGroup",Guard<Context::Impl::GetGroup>},{"IsColliding",Guard<Context::Impl::IsColliding>},{"Commit",Guard<Context::Impl::Commit>},
+        {"SetVelocity",Guard<Context::Impl::WritePolar<false,false>>},{"AddVelocity",Guard<Context::Impl::WritePolar<false,true>>},{"GetVelocity",Guard<Context::Impl::ReadPolar<false>>},
+        {"SetAcceleration",Guard<Context::Impl::WritePolar<true,false>>},{"AddAcceleration",Guard<Context::Impl::WritePolar<true,true>>},{"GetAcceleration",Guard<Context::Impl::ReadPolar<true>>},
         {nullptr,nullptr}};
     luaL_openlib(L,"Object",functions,1); owner.RequireRunning();
 }

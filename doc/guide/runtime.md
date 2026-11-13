@@ -65,6 +65,32 @@ FPS、Delta 仍在准备完成后的真实 Lua 回调开始时统计，不提前
 软件限速与 `Window.SetVSync` 独立：引擎不替游戏改变 VSync，也不会因 VSync 开启就取消软件限速。
 实际可达频率仍受工作量、交换链、系统等待精度和调度影响；目标 `(0,1000]` 不是实时保证，0 也不表示不限帧。
 
+## Object 极坐标运动辅助
+
+`Object.SetVelocity(object, speed, angle)` 和 `Object.SetAcceleration(object, acceleration, angle)`
+把极坐标转换后设置 `vx/vy` 或 `ax/ay`；对应的 `AddVelocity`、`AddAcceleration` 将转换后的分量加到当前值。
+四个函数严格接收三个参数，成功只返回 `true`；错误抛出，不返回 `false, err`。幅值和角度必须为有限 number，
+不接受数字字符串、NaN 或无穷大。角度使用度，0 沿 +X、90 沿 +Y；允许负幅值和任意有限角度。
+
+`Object.GetVelocity(object)`、`Object.GetAcceleration(object)` 严格接收一个对象，返回当前分量计算出的
+非负模长与 `atan2` 角度（`[-180,180]` 度）。零向量固定返回 `0,0`；模长溢出时报错。
+直接修改 `vx/vy/ax/ay` 后立即反映，没有另外缓存的幅值或角度，也没有对象方法别名。
+
+```lua
+local bullet = Object.New(Object.Class())
+Object.SetVelocity(bullet, 3, 90)       -- 尚未 Commit 也可设置运动。
+Object.AddVelocity(bullet, 1, 0)
+Object.SetAcceleration(bullet, 0.02, -90)
+local speed, angle = Object.GetVelocity(bullet)
+```
+
+计算和校验全部成功后才一起写入两个分量，失败不会只更新其中一个。Add 只要求最终两个分量有限，
+不额外要求它们的合成模长可表示；因此一次 Add 成功后，Get 仍可能因极大模长而报错。
+这些调用不修改位置、`rot`、`rate`、`timer` 或另一组运动分量，不执行 Update、Commit 或回调。
+
+有效的待激活对象可以使用全部六个函数。待删除、过期或其他服务的对象报错；仅在对象自身的 Delete 回调内，
+Get 可按既有只读例外读取当前运动，Set/Add 仍禁止写入。原生积分继续在 `Object.UpdateAll()` 中执行。
+
 ## 碰撞分发与性能边界
 
 `Object.CheckCollision(a, b)` 保留入口的活动组成员及其顺序，也包含当时 `colli=false` 的成员。

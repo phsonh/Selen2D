@@ -21,7 +21,8 @@ namespace lua_bind::modules::Object {
         // the Lua VM. Drain requested Delete callbacks (including tail additions)
         // once, keep going after cleanup errors, then release all other objects
         // without callbacks or activation. False reports cleanup failure; error
-        // contains its first diagnostic. Repeated calls preserve that result.
+        // preserves the first diagnostic plus up to 64 KiB of subsequent
+        // diagnostics (with a truncation marker). Repeated calls preserve it.
         bool FinalizeShutdown(std::string& error);
 
         // Emergency/destructor fallback, before lua_close. Invalidates old
