@@ -43,7 +43,7 @@ Lua 使用相对 VFS 根的虚拟路径。默认部署根不随终端工作目�
 
 默认运行不需要资源包、SDK、tools 目录或 Python。缺少根 `main.lua` 或同目录的 `dxcompiler.dll` 会导致启动失败。子目录不会自动创建；写入前可调用 `File.CreateDirectory('save')`。`output/` 只是示例自测选择的输出位置，不是额外权限边界。标准 Lua 的文件名入口也经过 VFS，保留各自的 LuaJIT 返回形式。FFI、`popen`、`os.execute` 和主动编译字符串不是完整沙箱保证，详见 [File 与启动配置](file-launch.md)。
 
-部署或升级前可查看[版本与兼容性变更](../../CHANGELOG.md)。启动无画面或遇到错误时，先按[诊断指南](debug-console.md)从终端获取日志；自动化使用 `--no-error-dialog` 禁用原生启动错误框。
+部署或升级前可查看[版本与兼容性变更](../../CHANGELOG.md)。启动无画面或遇到错误时，先按[诊断指南](debug-console.md)从终端获取日志；自动化使用 `--no-error-dialog` 禁用未处理错误的提示框。
 
 关闭程序，修改根 `main.lua` 或 `example/` 下的 Lua/HLSL，保存后重新运行即可；示例没有自动热重载。只有源码开发者要改变编译期入口、授权或包记录时，才编辑唯一项目 JSON 并重新构建。操作方法见 [启动配置指南](file-launch.md)。Shader 的内置 include 为 `Engine.hlsl`。
 
@@ -98,7 +98,7 @@ Info/Debug 写 stdout，Warn/Error/Fatal 写 stderr。上述文件由 CMD 显式
 
 `Debug.GetLog()` 只包含本次 Lua 的 `Debug.Log/Warn/Error` 和宿主报告的 Lua 错误，**不包括普通原生初始化或 Lua VM 销毁后的清理日志**。缓存上限为 1 MiB/8192 条，超限标记截断；读取不清空、不写文件。需要保存时，在退出回调中通过已获 VFS 写入授权的 File 接口保存；此前快照不可能包含随后才产生的退出错误。完整示例及控制事件边界见[日志指南](debug-console.md)。
 
-2.2.3 起，原生启动终止在确认交互桌面且没有输出路由、控制台或调试器时，可能在清理后显示一次错误框。普通 Lua 错误、帧/退出回调错误和运行中资源加载失败不因此弹框。自动化请在独立 `--` 之前传 `--no-error-dialog`；原有参数列表、非零退出码和退出顺序不变。
+2.3.5 起，交互桌面上的未处理致命错误（含Lua入口、帧及退出/收尾回调）在清理后统一显示一次错误框，同时保留stderr。终端、重定向及调试器不禁止提示；已捕获异常和普通API错误返回不触发宿主提示。自动化请在独立 `--` 之前传 `--no-error-dialog`；原有参数列表、非零退出码和退出顺序不变。
 
 ### 文件占用与安全验证
 

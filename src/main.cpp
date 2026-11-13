@@ -88,21 +88,38 @@ int RunApplication(int argc, char* argv[]) {
         const auto deployment = std::filesystem::u8path(directory);
         config=engine::Startup::Load(deployment);
     } catch(const std::exception& error) {
-        core::runtime::Log::Error(std::string("Startup error: ") + error.what());
+        try { core::runtime::Log::Error(std::string("Startup error: ") + error.what()); }
+        catch(...) { core::runtime::Log::Error(error.what()); }
         config={}; // Release any prepared startup resources before presentation.
         core::runtime::Log::Shutdown();
         startupFailure.Show(engine::StartupFailure::Kind::Configuration,error.what());
+        return 2;
+    } catch(...) {
+        constexpr auto detail="Unknown native exception while preparing startup";
+        core::runtime::Log::Error(detail);
+        config={}; core::runtime::Log::Shutdown();
+        startupFailure.Show(engine::StartupFailure::Kind::Configuration,detail);
         return 2;
     }
     // Startup validation is synchronous. A console signal cannot interrupt it
     // or unwind native code on the handler thread; honor it at this boundary.
     if (core::runtime::Log::TerminationRequested()) return 0;
     engine::StartupFailure::Failure failure;
-    const bool initialized = engine::Init(config.entry,config.files,arguments,&failure);
-    const bool ran = initialized && engine::Run(frame_limit);
-    const bool closed = engine::Shutdown();
+    bool initialized{}, ran{};
+    try {
+        initialized = engine::Init(config.entry,config.files,arguments,&failure);
+        ran = initialized && engine::Run(frame_limit,&failure);
+    } catch(const std::exception& error) {
+        failure.Set(engine::StartupFailure::Kind::Runtime,error.what());
+        core::runtime::Log::Error(error.what());
+    } catch(...) {
+        constexpr auto detail="Unknown native exception in application host";
+        failure.Set(engine::StartupFailure::Kind::Runtime,detail);
+        core::runtime::Log::Error(detail);
+    }
+    const bool closed = engine::Shutdown(&failure);
     config={};
-    if(!initialized && failure.available) startupFailure.Show(failure.kind,failure.detail);
+    startupFailure.Show(failure);
     return initialized && ran && closed ? 0 : 1;
 }
 

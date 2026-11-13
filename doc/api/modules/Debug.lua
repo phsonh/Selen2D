@@ -15,7 +15,7 @@ function Debug.Log(message) end
 ---@param message string
 function Debug.Warn(message) end
 
----记录 Error 日志后立即抛出含原消息的 Lua 错误，没有正常返回路径，不自动弹窗。
+---记录 Error 日志后立即抛出含原消息的 Lua 错误，没有正常返回路径；捕获时不弹窗，未捕获到宿主并导致运行失败时统一提示（可用 --no-error-dialog 禁用）。
 ---pcall/xpcall/coroutine 可以捕获；捕获后可继续后续帧，不额外设置退出请求。
 ---未捕获错误到达宿主边界才安全关闭；不会取消此前独立的 Runtime.Quit 请求。
 ---@param message string

@@ -11,6 +11,6 @@ namespace engine
 {
     bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::FileSystem> files,
         const std::vector<std::string>& arguments = {}, StartupFailure::Failure* failure = nullptr);
-    bool Run(std::uint64_t frame_limit = 0);
-    bool Shutdown();
+    bool Run(std::uint64_t frame_limit = 0, StartupFailure::Failure* failure = nullptr);
+    bool Shutdown(StartupFailure::Failure* failure = nullptr);
 }

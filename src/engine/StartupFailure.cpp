@@ -1,6 +1,5 @@
 #include "StartupFailure.h"
 #include "BuildInfo.h"
-#include "core/runtime/Log/Log.h"
 #include <limits>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -11,19 +10,25 @@
 #endif
 
 namespace engine::StartupFailure {
+const char* Phase(Kind kind) noexcept {
+    switch(kind) {
+    case Kind::Logging: return "Diagnostic initialization";
+    case Kind::Configuration: return "Startup configuration / entry loading";
+    case Kind::Dxc: return "HLSL compiler initialization";
+    case Kind::NativeServices: return "Native service initialization";
+    case Kind::LuaEntry: return "Lua entry";
+    case Kind::LuaFrame: return "Lua frame callback";
+    case Kind::LuaExit: return "Lua exit callback";
+    case Kind::ObjectCleanup: return "Object shutdown callbacks";
+    case Kind::Runtime: return "Host runtime";
+    default: return "Native cleanup";
+    }
+}
 namespace {
 #ifdef _WIN32
 bool MayShowOnCurrentDesktop() noexcept {
-    // Use the logger's actual routes, including restoration fallbacks. NUL and
-    // broken pipes remain intentional routes; never probe them with a write.
-    if(core::runtime::Log::HasStandardOutputRoute() || IsDebuggerPresent()) return false;
-    BOOL remoteDebugger{};
-    if(!CheckRemoteDebuggerPresent(GetCurrentProcess(),&remoteDebugger) || remoteDebugger) return false;
-    DWORD consoleProcess{};
-    SetLastError(ERROR_SUCCESS);
-    if(GetConsoleProcessList(&consoleProcess,1)) return false;
-    if(GetLastError()!=ERROR_INVALID_HANDLE) return false;
-
+    // Output routes, an attached console and a debugger do not suppress an
+    // interactive fatal-error dialog. Never inspect/rebind those routes here.
     DWORD session{};
     if(!ProcessIdToSessionId(GetCurrentProcessId(),&session) || !session) return false;
     LPWSTR information{};
@@ -70,6 +75,12 @@ const wchar_t* Explanation(Kind kind) noexcept {
         return L"The engine could not initialize the HLSL compiler.\n"
             L"Extract the complete application directory and keep its matching dxcompiler.dll beside the EXE. "
             L"A missing, unreadable, damaged, incompatible, or incomplete DLL can cause this failure.";
+    case Kind::LuaEntry: case Kind::LuaFrame: case Kind::LuaExit: case Kind::ObjectCleanup:
+        return L"An unhandled Lua error stopped this run.\n"
+            L"Check the script location and traceback below.";
+    case Kind::Runtime: case Kind::Cleanup:
+        return L"An unrecoverable host error stopped this run.\n"
+            L"Check the application resources and the diagnostic details below.";
     default:
         return L"The engine could not initialize a required native service.\n"
             L"Check the application files and available graphics, audio, and system services.";
@@ -103,8 +114,9 @@ void Presentation::Show(Kind kind,std::string_view detail) noexcept {
     if(!MayShowOnCurrentDesktop()) return;
     try {
         auto title=Wide(build::Product);
-        title.append(L" - Startup failed");
+        title.append(L" - Error");
         std::wstring message(Explanation(kind));
+        message.append(L"\n\nPhase: "); message.append(Wide(Phase(kind)));
         if(!detail.empty()) {
             message.append(L"\n\nTechnical details:\n");
             message.append(Wide(detail));
@@ -118,5 +130,14 @@ void Presentation::Show(Kind kind,std::string_view detail) noexcept {
     (void)kind;
     (void)detail;
 #endif
+}
+void Presentation::Show(const Failure& failure) noexcept {
+    if(!failure.available) return;
+    try {
+        auto message=failure.detail;
+        if(!failure.additional.empty()) { message+="\n\nAdditional failures:"; message+=failure.additional; }
+        if(failure.truncated) message+="\n[Additional diagnostics omitted; see stderr.]";
+        Show(failure.kind,message);
+    } catch(...) { Show(failure.kind,failure.detail); }
 }
 }

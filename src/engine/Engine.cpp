@@ -7,6 +7,7 @@
 #include <exception>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <SDL3/SDL.h>
 #include "core/runtime/Log/Log.h"
 #include "core/runtime/Event/Event.h"
@@ -56,8 +57,14 @@ std::unique_ptr<lua_bind::modules::Audio::Context> audioBindings;
 std::unique_ptr<lua_bind::modules::Graphic::Context> graphicBindings;
 std::shared_ptr<const core::modules::File::FileSystem> files;
 
-void Report(const char* context,const std::string& error) { Log::Error(std::string(context)+": "+error); }
-void ReportLua(const char* context,const std::string& error) noexcept {
+void Report(const char* context,std::string_view error,StartupFailure::Failure* failure=nullptr,
+    StartupFailure::Kind kind=StartupFailure::Kind::Runtime) noexcept {
+    if(failure) failure->Set(kind,error);
+    try { std::string message(context); message+=": "; message.append(error); Log::Error(message); }
+    catch(...) { Log::Error(error); }
+}
+void ReportLua(const char* context,const std::string& error,StartupFailure::Failure* failure,StartupFailure::Kind kind) noexcept {
+    if(failure) failure->Set(kind,error);
     try { Log::LuaError(std::string(context)+": "+error); }
     catch(...) { Log::LuaError(error); } // Preserve the original diagnostic if context allocation fails.
 }
@@ -82,13 +89,19 @@ void RegisterBindings() {
     lua_bind::modules::Object::Register(L,*objects);
     lua_bind::modules::Debug::Register(L);
 }
-bool Exit() {
+bool Exit(StartupFailure::Failure* failure) {
     if(!bindingsReady || exitCalled) return exitSucceeded;
     exitCalled=true;
     if(objects) objects->BeginShutdown();
-    std::string error;
-    exitSucceeded=Lua::CallExitFunction(error);
-    if(!exitSucceeded) ReportLua("Lua exit callback failed",error);
+    try {
+        std::string error;
+        exitSucceeded=Lua::CallExitFunction(error);
+        if(!exitSucceeded) ReportLua("Lua exit callback failed",error,failure,StartupFailure::Kind::LuaExit);
+    } catch(const std::exception& error) {
+        exitSucceeded=false; Report("Exit callback dispatch failed",error.what(),failure,StartupFailure::Kind::Cleanup);
+    } catch(...) {
+        exitSucceeded=false; Report("Exit callback dispatch failed","unknown native exception",failure,StartupFailure::Kind::Cleanup);
+    }
     return exitSucceeded;
 }
 bool Pump() {
@@ -100,8 +113,8 @@ bool Pump() {
 bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::FileSystem> fileSystem,
     const std::vector<std::string>& arguments, StartupFailure::Failure* failure) {
     VFS_PROFILE_SCOPE(EngineInit);
-    if(failure) { failure->available=false; failure->detail.clear(); }
-    if(started) { Log::Error("Engine must be shut down before reinitialization"); return false; }
+    if(failure) *failure={};
+    if(started) { Report("Engine initialization failed","Engine must be shut down before reinitialization",failure,StartupFailure::Kind::NativeServices); return false; }
     started=true; initialized=bindingsReady=ran=quitRequested=exitCalled=false; exitSucceeded=true;
     clock.Reset(SDL_GetTicksNS());
     if(!Log::Init()) {
@@ -150,7 +163,7 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
         {
             VFS_PROFILE_SCOPE(Entry);
             if(!entry.empty() && !Lua::DoFile(entry,*files,error,&entryStarted)) {
-                if(entryStarted) ReportLua("Failed to execute entry script",error);
+                if(entryStarted) ReportLua("Failed to execute entry script",error,failure,StartupFailure::Kind::LuaEntry);
                 else {
                     if(failure) failure->Set(phase,error);
                     Report("Failed to read entry script",error);
@@ -158,7 +171,8 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
                 return false;
             }
         }
-        entryStarted=true; // Subsequent presentation failures are not startup I/O.
+        phase=StartupFailure::Kind::NativeServices;
+        nativeOperation="Window startup presentation";
         // Finish the current initialization/entry call before processing an
         // asynchronous console request. It must never run cleanup on a worker
         // thread or interrupt Lua/native code halfway through an operation.
@@ -172,20 +186,33 @@ bool Init(const std::string& entry, std::shared_ptr<const core::modules::File::F
     } catch(const std::exception& error) {
         // The service captured its original detail at the failing operation,
         // before SDL/native cleanup could replace a thread-local last error.
-        const std::string detail=phase==StartupFailure::Kind::NativeServices
-            ? std::string(nativeOperation)+": "+error.what() : error.what();
-        if(failure && !entryStarted) failure->Set(phase,detail);
-        Report("Engine initialization failed",detail); return false;
+        try {
+            const std::string detail=phase==StartupFailure::Kind::NativeServices
+                ? std::string(nativeOperation)+": "+error.what() : error.what();
+            if(failure) failure->Set(phase,detail);
+            Report("Engine initialization failed",detail);
+        } catch(...) {
+            Report(nativeOperation,error.what(),failure,phase);
+        }
+        return false;
+    } catch(...) {
+        Report("Engine initialization failed","unknown native exception",failure,phase); return false;
     }
 }
-bool Run(std::uint64_t frameLimit) {
-    if(!initialized || ran) { Log::Error("Engine.Run requires a newly initialized host"); return false; }
+bool Run(std::uint64_t frameLimit,StartupFailure::Failure* failure) {
+    if(!initialized || ran) { Report("Engine frame failed","Engine.Run requires a newly initialized host",failure); return false; }
     ran=true;
     bool succeeded=true;
     std::uint64_t hostFrames{};
     auto& renderer=Graphic::Frames();
     auto& uploads=Graphic::Uploads();
     bool recording{};
+    const auto abort=[&] {
+        if(!recording) return;
+        try { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); }
+        catch(const std::exception& cleanup) { Report("Engine frame cleanup failed",cleanup.what(),failure,StartupFailure::Kind::Cleanup); }
+        catch(...) { Report("Engine frame cleanup failed","unknown native exception",failure,StartupFailure::Kind::Cleanup); }
+    };
     try {
         Event::BeginFrame();
         while(!quitRequested) {
@@ -218,7 +245,7 @@ bool Run(std::uint64_t frameLimit) {
             Graphic::Render::profile::Timer recordTimer(Graphic::Render::profile::Phase::Record);
 #endif
             if(!Lua::CallFrameFunction(error)) {
-                ReportLua("Lua frame callback failed",error); succeeded=false;
+                ReportLua("Lua frame callback failed",error,failure,StartupFailure::Kind::LuaFrame); succeeded=false;
                 renderer.AbortFrame(); recording=false;
                 Graphic::ApplyPendingPresentation(); break;
             }
@@ -259,54 +286,61 @@ bool Run(std::uint64_t frameLimit) {
             }
         }
     } catch(const std::exception& error) {
-        Report("Engine frame failed",error.what()); succeeded=false;
+        Report("Engine frame failed",error.what(),failure); succeeded=false;
         // A terminal GPU failure may already have closed recording. Keep its
         // in-flight pins until Graphic shutdown drains the device.
-        if(recording) {
-            try { renderer.AbortFrame(); recording=false; Graphic::ApplyPendingPresentation(); }
-            catch(const std::exception& cleanup) { Report("Engine frame cleanup failed",cleanup.what()); }
-            catch(...) { Log::Error("Engine frame cleanup failed: unknown native exception"); }
-        }
+        abort();
+    } catch(...) {
+        Report("Engine frame failed","unknown native exception",failure); succeeded=false;
+        abort();
     }
     quitRequested=true;
-    const bool exited=Exit();
+    const bool exited=Exit(failure);
     return succeeded && exited;
 }
-bool Shutdown() {
+bool Shutdown(StartupFailure::Failure* failure) {
     if(!started) return exitSucceeded;
     quitRequested=true;
-    Exit(); // Also covers Init followed by Shutdown without Run.
+    const auto cleanup=[&](const char* operation,auto&& action) {
+        try { action(); }
+        catch(const std::exception& error) { Report(operation,error.what(),failure,StartupFailure::Kind::Cleanup); exitSucceeded=false; }
+        catch(...) { Report(operation,"unknown native exception",failure,StartupFailure::Kind::Cleanup); exitSucceeded=false; }
+    };
+    cleanup("Exit callback dispatch failed",[&]{ Exit(failure); });
     Log::Info("Engine shutting down");
-    if(objects) {
+    cleanup("Object shutdown failed",[&]{
+        if(!objects) return;
         objects->BeginShutdown();
         std::string error;
         if(!objects->FinalizeShutdown(error)) {
-            ReportLua("Object shutdown callbacks failed",error);
+            // Individual callback diagnostics were already logged by Object.
+            if(failure) failure->Set(StartupFailure::Kind::ObjectCleanup,error);
             exitSucceeded=false;
         }
-    }
-    // Exit can still use File, Audio and initialized resources. Ordinary drawing
-    // is illegal here because no frame is recording. Revoke bindings afterwards.
-    graphicBindings.reset(); resourceBindings.reset(); audioBindings.reset();
-    audio.StopAllPlayersAndDrain();
-    objects.reset(); resources.reset();
-    Lua::Shutdown();
+    });
+    // Keep the established cleanup order, and continue safe independent cleanup
+    // after a reported failure. No presentation runs here or inside a Lua call.
+    cleanup("Binding cleanup failed",[&]{ graphicBindings.reset(); resourceBindings.reset(); audioBindings.reset(); });
+    cleanup("Audio drain failed",[&]{ audio.StopAllPlayersAndDrain(); });
+    cleanup("Resource cleanup failed",[&]{ objects.reset(); resources.reset(); });
+    cleanup("Lua shutdown failed",[]{ Lua::Shutdown(); });
     startupArguments.clear();
-    core::modules::Math::Shutdown(); audio.Shutdown();
-    // Stop/join, Resource retirement and Lua finalizers can append errors after
-    // the last frame CheckErrors. Preserve them as additional diagnostics while
-    // logging is still live; never rethrow or replace the original Lua error.
-    if(audio.DrainErrors([](std::string_view message,void*) noexcept {
+    cleanup("Math shutdown failed",[]{ core::modules::Math::Shutdown(); });
+    cleanup("Audio shutdown failed",[]{ audio.Shutdown(); });
+    if(audio.DrainErrors([](std::string_view message,void* context) noexcept {
+        if(auto* result=static_cast<StartupFailure::Failure*>(context)) result->Set(StartupFailure::Kind::Cleanup,message);
         Log::Error(message);
-    })) exitSucceeded=false;
-    Graphic::Shutdown();
+    },failure)) exitSucceeded=false;
+    cleanup("Graphic shutdown failed",[]{ Graphic::Shutdown(); });
     files.reset();
-    core::modules::Input::Shutdown(); core::modules::Window::Shutdown();
-    core::modules::Debug::Shutdown(); Event::Shutdown(); core::runtime::SDL::Shutdown();
+    cleanup("Input shutdown failed",[]{ core::modules::Input::Shutdown(); });
+    cleanup("Window shutdown failed",[]{ core::modules::Window::Shutdown(); });
+    cleanup("Debug shutdown failed",[]{ core::modules::Debug::Shutdown(); });
+    cleanup("Event shutdown failed",[]{ Event::Shutdown(); });
+    cleanup("SDL shutdown failed",[]{ core::runtime::SDL::Shutdown(); });
     initialized=bindingsReady=false; started=false;
 #ifdef ENGINE_SPRITE_PROFILE
-    try { Graphic::Render::profile::Flush(); }
-    catch(const std::exception& error) { Report("Sprite profile output failed",error.what()); exitSucceeded=false; }
+    cleanup("Sprite profile output failed",[]{ Graphic::Render::profile::Flush(); });
 #endif
     Log::Info("Engine shutdown complete"); Log::Shutdown();
     return exitSucceeded;

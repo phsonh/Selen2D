@@ -2,6 +2,13 @@
 
 按已存在的 Git 历史和当前开发内容记录。带“开发修订”的版本不表示已创建标签或发布二进制；当前公开版本仍以仓库的正式标签和 Releases 为准。
 
+## 2.3.5 — 开发修订，未发布
+
+- 交互桌面上的未处理致命错误统一提供 stderr 与一次可见提示，覆盖原生启动、Lua入口/帧/退出、Object收尾及宿主运行期失败。保存首错阶段和原文/traceback，后续清理错误追加；终端或重定向不再禁止弹窗。`--no-error-dialog` 只禁用提示，参数分隔、日志、抛错和退出码不变。`Debug.Error` 保持记录并抛错；被pcall/xpcall处理时不弹窗。详见[诊断指南](doc/guide/debug-console.md)。
+- 新增 `Object.SetVelocity/AddVelocity/GetVelocity` 和 `SetAcceleration/AddAcceleration/GetAcceleration`，直接读写现有vx/vy、ax/ay；度数角、向量叠加、负幅值、原子修改及生命周期规则见[Runtime与Object指南](doc/guide/runtime.md)。不推进更新、乘rate/dt或隐式Commit。
+- **目录深度迁移**：`File.ListFiles/ListDirectories/GetTree` 省略或nil默认不限；显式0现在抛参数错误，不保留别名。旧 `(path,0)` 调用移除第二参；原来依赖默认直属查询的调用显式传1。GetMaxDepth与返回结构、排序、局部验证及并发身份观察保护不变。详见[File指南](doc/guide/file-launch.md)。
+- THKTNT当前Object.lua包装层仍用旧白名单重建Object表，部署新引擎后需保留上述原生新接口。本轮只提醒，不修改THKTNT。
+
 ## 2.3.4 — 开发修订，未发布
 
 - **File API 迁移**：移除公开 `File.ListDirectory`，不保留兼容别名。新增 `ListFiles`、`ListDirectories`、`GetTree` 和 `GetMaxDepth`；前三者省略深度时只查询直接条目，深度 `0` 表示不限。文件/目录列表返回相对路径，按完整 UTF-8 字节序排序；树以连续数字索引保存文件、名称键保存独立目录子表。详见[目录查询与资源扫描](doc/guide/file-launch.md#目录查询与资源扫描)。

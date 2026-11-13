@@ -178,7 +178,7 @@ Windows source builds require **MSVC (Visual Studio C++ tools)**, the **Windows 
 .\tools\build.ps1 -Configuration Release
 ```
 
-Diagnostics use stdout (Info/Debug) and stderr (Warn/Error/Fatal). No console window or log file is created automatically. `Debug.GetLog()` returns a bounded snapshot of Lua logs and reported Lua errors; use the authorized File API to save it if desired. Native startup failures may show one error dialog only for an interactive launch without an output receiver; automation can pass `--no-error-dialog`. See [diagnostics](doc/guide/debug-console.md).
+Diagnostics use stdout (Info/Debug) and stderr (Warn/Error/Fatal). No console window or log file is created automatically. `Debug.GetLog()` returns a bounded snapshot of Lua logs and reported Lua errors; use the authorized File API to save it if desired. Unhandled failures show one error dialog after cleanup on an interactive desktop, alongside stderr even with redirection or a console; automation can pass `--no-error-dialog` to suppress only the dialog. See [diagnostics](doc/guide/debug-console.md).
 
 Compatibility changes and version history: [CHANGELOG](CHANGELOG.md). This includes removed console controls, Lua log snapshots, JSON directory names, and deployment of the runtime DLL.
 
@@ -345,7 +345,7 @@ Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows
 .\tools\build.ps1 -Configuration Release
 ```
 
-诊断日志输出到 stdout（Info/Debug）及 stderr（Warn/Error/Fatal），不自动创建控制台或日志文件。`Debug.GetLog()` 返回有界的 Lua 日志及 Lua 错误快照，需要保存时通过已授权的 File API 写入。无输出接收方的交互启动遇到原生启动失败时可能显示一次错误框；自动化传 `--no-error-dialog` 禁用，详见[诊断指南](doc/guide/debug-console.md)。
+诊断日志输出到 stdout（Info/Debug）及 stderr（Warn/Error/Fatal），不自动创建控制台或日志文件。`Debug.GetLog()` 返回有界的 Lua 日志及 Lua 错误快照，需要保存时通过已授权的 File API 写入。交互桌面上的未处理致命错误在清理后统一弹一次错误框，同时保留 stderr（包括有终端或重定向的启动）；自动化传 `--no-error-dialog` 只禁用弹窗，详见[诊断指南](doc/guide/debug-console.md)。
 
 兼容性变更与版本归属集中在 [CHANGELOG](CHANGELOG.md)：包括控制台接口删除、Lua 日志快照、JSON 目录名称和运行时 DLL 部署。
 
@@ -512,7 +512,7 @@ Windows でソースをビルドするには、**Visual Studio C++ ツール（M
 .\tools\build.ps1 -Configuration Release
 ```
 
-診断ログは stdout（Info/Debug）と stderr（Warn/Error/Fatal）へ出力します。コンソールやログファイルを自動作成しません。`Debug.GetLog()` は容量制限付きの Lua ログと Lua エラーのスナップショットを返します。必要に応じて、許可された File API で保存してください。出力先のない対話起動でネイティブの初期化に失敗した場合に限り、エラーダイアログを一度表示することがあります。自動化では `--no-error-dialog` で無効にできます。[診断ガイド](doc/guide/debug-console.md)を参照してください。
+診断ログは stdout（Info/Debug）と stderr（Warn/Error/Fatal）へ出力します。コンソールやログファイルを自動作成しません。`Debug.GetLog()` は容量制限付きの Lua ログと Lua エラーのスナップショットを返します。必要に応じて、許可された File API で保存してください。対話デスクトップで未処理の致命的エラーが発生した場合、後処理後に一度だけダイアログを表示し、端末やリダイレクトがある場合も stderr 出力を保持します。自動化では `--no-error-dialog` でダイアログだけを無効にできます。[診断ガイド](doc/guide/debug-console.md)を参照してください。
 
 互換性に関わる変更とバージョン履歴は [CHANGELOG](CHANGELOG.md) にまとめています。削除済みのコンソール API、Lua ログ、JSON のディレクトリ名、実行時 DLL の配置を確認してください。
 
