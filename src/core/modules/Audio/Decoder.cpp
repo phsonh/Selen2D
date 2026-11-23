@@ -161,6 +161,7 @@ std::shared_ptr<const ResourceData> PrepareResource(std::shared_ptr<const File::
     auto result=std::make_shared<ResourceData>();
     result->info=decoder->GetInfo();
     result->info.mode=options.mode;
+    result->info.looping=options.loop.has_value();
     result->info.duration=static_cast<double>(result->info.frames)/result->info.sampleRate;
     result->info.loopEndFrame=result->info.frames;
     result->path=*files->NormalizePath(path);

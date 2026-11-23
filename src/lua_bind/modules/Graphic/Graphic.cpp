@@ -98,6 +98,11 @@ std::uint32_t Integer(lua_State* L,int index,std::uint32_t maximum=std::numeric_
     if(n<0 || n>maximum || std::floor(n)!=n) throw std::invalid_argument("Graphic integer is out of range");
     return static_cast<std::uint32_t>(n);
 }
+std::uint32_t ColorChannel(lua_State* L,int index) {
+    const auto n=Number(L,index);
+    if(n<0 || n>255) throw std::invalid_argument("Graphic color channel is out of range");
+    return static_cast<std::uint32_t>(std::round(n));
+}
 R::Blend Blend(lua_State* L,int index) {
     if(lua_isnoneornil(L,index)) return R::Blend::MulAlpha;
     const auto value=CheckString(L,index);
@@ -225,6 +230,16 @@ int GetBound(lua_State* L) {
     const auto b=info.bounds;
     lua_pushnumber(L,b.left); lua_pushnumber(L,b.right); lua_pushnumber(L,b.bottom); lua_pushnumber(L,b.top); return 4;
 }
+int SetPixelSize(lua_State* L) {
+    Count(L,3,3);auto& box=Require<CanvasBox>(L,1,CanvasType);
+    const auto width=Integer(L,2),height=Integer(L,3);
+    Live(box.token).renderer->SetPixelSize(box.handle,width,height);return 0;
+}
+int SetLogicalRect(lua_State* L) {
+    Count(L,5,5);auto& box=Require<CanvasBox>(L,1,CanvasType);
+    const C::Bounds bounds{Number(L,2),Number(L,3),Number(L,4),Number(L,5)};
+    Live(box.token).renderer->SetLogicalRect(box.handle,bounds);return 0;
+}
 int Equal(lua_State* L) {
     Count(L,2,2); const auto& a=Require<CanvasBox>(L,1,CanvasType); const auto& b=Require<CanvasBox>(L,2,CanvasType);
     lua_pushboolean(L,a.token==b.token && a.handle==b.handle); return 1;
@@ -240,7 +255,7 @@ template<bool explicitTarget> int Clear(lua_State* L) {
 }
 int Color(lua_State* L) {
     Count(L,4,4); (void)Host(L);
-    const auto value=(Integer(L,1,255)<<24)|(Integer(L,2,255)<<16)|(Integer(L,3,255)<<8)|Integer(L,4,255);
+    const auto value=(ColorChannel(L,1)<<24)|(ColorChannel(L,2)<<16)|(ColorChannel(L,3)<<8)|ColorChannel(L,4);
     lua_pushnumber(L,value); return 1;
 }
 template<bool explicitTarget> int RenderImage(lua_State* L) {
@@ -300,7 +315,7 @@ int CanvasIndex(lua_State* L) {
     const bool only3D=key=="SetPerspective" || key=="GetPerspective" || key=="OpenZBuffer" ||
         key=="CloseZBuffer" || key=="IsZBufferEnabled" || key=="SetFog" || key=="GetFog";
     const bool only2D=key=="GetBound" || key=="RenderImage" || key=="RenderRect" ||
-        key=="RenderRibbon" || key=="RenderText";
+        key=="RenderRibbon" || key=="RenderText" || key=="SetLogicalRect";
     if((only3D && !threeD) || (only2D && threeD)) {
         lua_pushnil(L); return 1;
     }
@@ -582,6 +597,7 @@ void Register(lua_State* L,Context& context) {
         throw std::logic_error("only one live Graphic Context may register in a Lua state");
     lua_pop(L,1);
     const luaL_Reg methods[]={{"GetSize",Guard<GetSize>},{"GetBound",Guard<GetBound>},{"Destroy",Guard<Destroy>},
+        {"SetPixelSize",Guard<SetPixelSize>},{"SetLogicalRect",Guard<SetLogicalRect>},
         {"SetPerspective",Guard<Perspective>},{"GetPerspective",Guard<GetPerspective>},
         {"OpenZBuffer",Guard<OpenDepth>},{"CloseZBuffer",Guard<CloseDepth>},{"IsZBufferEnabled",Guard<IsDepthEnabled>},
         {"SetFog",Guard<Fog>},{"GetFog",Guard<GetFog>},

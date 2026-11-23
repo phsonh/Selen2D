@@ -358,7 +358,7 @@ std::shared_ptr<Voice> CreateVoice(const std::shared_ptr<System>& system,const s
     voice->identity=system->nextVoiceIdentity++;
     voice->system=system; voice->info=record->data->info;
     voice->volume.store(static_cast<float>(volume)); voice->pan.store(static_cast<float>(pan));
-    voice->transport=std::make_unique<Transport>(record,voice->info.mode==StorageMode::Stream);
+    voice->transport=std::make_unique<Transport>(record,voice->info.looping);
     auto& value=*voice->transport;
     value.owner=voice.get();
     const SDL_AudioSpec sourceFormat{SDL_AUDIO_F32,2,voice->info.sampleRate};
@@ -672,11 +672,13 @@ PreparedAudio AudioSystem::Prepare(std::shared_ptr<const File::FileSystem> files
     core::runtime::Jobs::MemoryBudget memory,const core::runtime::Jobs::StopToken& stop) {
     return PreparedAudio(detail::PrepareResource(std::move(files),path,options,std::move(memory),stop));
 }
-std::shared_ptr<Source> AudioSystem::CreateSource(const PreparedAudio& prepared) {
+std::shared_ptr<Source> AudioSystem::CreateSource(const PreparedAudio& prepared, double volume) {
+    detail::GainValue(volume);
     if(!prepared.data_) throw std::invalid_argument("prepared audio is empty");
     std::lock_guard lock(system_->control); system_->RequireAlive();
     auto record=std::make_shared<detail::Record>();
     record->data=prepared.data_; record->system=system_;
+    record->volume.store(volume);
     if(system_->nextResourceGeneration==std::numeric_limits<std::uint64_t>::max()) throw std::overflow_error("audio resource generation exhausted");
     record->generation=system_->nextResourceGeneration++;
     return std::shared_ptr<Source>(new Source(std::move(record)));

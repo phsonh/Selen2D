@@ -2,14 +2,17 @@
 
 -- Selen2D Debug 声明；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Debug、core/modules/Debug、core/runtime/Log。
--- 参数数量和类型错误抛 Lua 错误；日志不隐式 tostring。弹窗是 SDL 主线程同步阻塞操作。
+-- Log/print 按 tostring 转换参数；其余接口严格检查参数。弹窗是 SDL 主线程同步阻塞操作。
 ---@alias DebugDialogType 'info'|'warning'|'error'
 ---@class DebugModule
 Debug = {}
 
 ---同步记录 Info 日志到 stdout 和本次运行的 Lua 日志缓存；不自动写文件、不请求退出。
----@param message string 允许包含 NUL 的 Lua 字符串。
-function Debug.Log(message) end
+---接收任意数量的参数，按当前全局 tostring 逐项转换，以制表符分隔为一条日志；空参数记录空正文。
+---支持 __tostring 和字符串内 NUL；转换失败抛原 Lua 错误，不写出本次调用的部分日志。无返回值。
+---引擎初始化时将全局 print 指向同一个函数（print == Debug.Log）。
+---@param ... any 要记录的值。
+function Debug.Log(...) end
 
 ---同步记录 Warn 日志到 stderr 和 Lua 日志缓存，无返回值；不请求退出或自动弹窗。
 ---@param message string
@@ -22,7 +25,7 @@ function Debug.Warn(message) end
 function Debug.Error(message) end
 
 ---获取本次进程运行的 Lua 日志快照，不接受参数；多次获取不清空、不写文件。
----包含 Debug.Log/Warn/Error 及宿主报告的 Lua 入口、帧、退出回调错误；不包含普通原生初始化和关闭日志。
+---包含 Debug.Log/print/Warn/Error 及宿主报告的 Lua 入口、帧、退出回调错误；不包含普通原生初始化和关闭日志。
 ---保留时间戳、级别和原始正文（包括 NUL）；有效 UTF-8 输入保持 UTF-8，不隐式 tostring。
 ---最多保留 1 MiB 格式化正文和 8192 条记录，超限淘汰最旧记录并在快照开头标明截断。
 ---单条超大日志保留头部和可容纳的正文尾部，标明截断；标准输出仍输出原消息。

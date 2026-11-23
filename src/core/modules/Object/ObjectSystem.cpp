@@ -130,13 +130,19 @@ void ObjectSystem::Update(ObjectCallbacks& cb) {
     Dispatch dispatch(dispatching_); Compact(); snapshot_.assign(activeOrder_.begin(),activeOrder_.end());
     for(auto h:snapshot_) {
         if(!Active(h)) continue;
-        auto* obj=Get(h);
-        if(!obj->scheduling.update) continue;
-        if(obj->lifecycle.timer==Object::maximum_timer) throw std::overflow_error("Object timer overflow");
-        // Commit both motion axes and timer before Lua; no pool pointer survives
-        // callbacks; all subsequent accesses resolve the generation again.
-        Object candidate=*obj; IntegrateMotion(candidate); ++candidate.lifecycle.timer; *obj=candidate;
+        {
+            auto* obj=Get(h);
+            if(!obj->scheduling.update) continue;
+            if(obj->lifecycle.timer==Object::maximum_timer) throw std::overflow_error("Object timer overflow");
+            // Preserve callback-visible timer numbering (first Update sees 1).
+            ++obj->lifecycle.timer;
+        }
         cb.Update(h);
+        // Resolve again after Lua: it may delete this object, create others or
+        // change any motion field. No pre-callback copy may overwrite its writes.
+        // update gates entry to the whole step; self-disabling takes effect next
+        // time. Deletion takes effect immediately, so a deleted object never moves.
+        if(Active(h)) IntegrateMotion(*Get(h));
     }
 }
 void ObjectSystem::Render(ObjectCallbacks& cb) {

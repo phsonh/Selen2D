@@ -6,7 +6,7 @@
 -- 全部接口严格检查参数数量和类型。控制与 Setter（包括 SetPlayer）成功零返回；
 -- CreatePlayer 与 Getter 返回下面声明的单值。不存在分类播放、固定分类音量、
 -- 单次播放句柄、Seek、设备或 FFT 接口。
--- name 是已发布且就绪的 Sound/Music 资源名，不是路径；非空、至多 512 字节、无 NUL。
+-- name 是已发布且就绪的 Sound 资源名，不是路径；非空、至多 512 字节、无 NUL。
 -- 未知/未发布/非音频资源始终抛错，包括无实例时的控制与 IsPlaying。
 -- 播放不依赖 Present、Object 更新或窗口状态；失焦/最小化不隐式暂停。
 -- 流式读取使用 File/VFS 授权且保留身份的来源。实际可听控制受设备缓冲延迟影响；
@@ -28,7 +28,7 @@ function Audio.SetPlayer(player) end
 ---@return AudioPlayer|nil player
 function Audio.GetPlayer() end
 
----在当前播放器中从头播放；Sound 单次，Music 经过前奏后按资源循环区间循环。
+---在当前播放器中从头播放 Sound；是否循环及循环区间由加载选项决定，与 memory/stream 无关。
 ---同一播放器/资源代次/Runtime 帧只接受第一次成功 Play，模块与对象入口共享记录。
 ---下一有效帧重播会截断本播放器该资源的旧实例；其他资源/播放器不受影响。
 ---@param name string
@@ -84,9 +84,9 @@ function Audio.IsPlaying(name) end
 ---@class AudioPlayer
 local AudioPlayer = {}
 
----从头播放已就绪 Sound/Music；同帧与模块入口共享去重，其他播放器独立。
+---从头播放已就绪 Sound；同帧与模块入口共享去重，其他播放器独立。
 ---成功准备后才记录去重；失败抛错，不要求恢复先前被截断的实例。
----自然结束保留当帧标记；每帧无条件 Play Music 会持续从头重播。
+---自然结束保留当帧标记；每帧无条件 Play 同一资源会持续从头重播，包括循环资源。
 ---@param name string
 function AudioPlayer:Play(name) end
 
@@ -123,7 +123,7 @@ function AudioPlayer:GetPan() end
 ---@return string[] names
 function AudioPlayer:GetPlaying() end
 
----先验证已发布 Sound/Music，再查询本播放器；暂停/停止/未播放为 false。
+---先验证已发布 Sound，再查询本播放器；暂停/停止/未播放为 false。
 ---@param name string
 ---@return boolean playing
 function AudioPlayer:IsPlaying(name) end

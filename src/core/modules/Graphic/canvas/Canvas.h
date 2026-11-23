@@ -44,6 +44,9 @@ struct Attachment {
     Geometry::SpatialState spatial;
     std::uint64_t colorSerial{}, distanceSerial{}; // Queue-ordered content versions; committed by Renderer only.
     bool initialized{}, live{true};
+    // Unsubmitted resize preservation survives AbortFrame. Cleared only after
+    // successful submission; the renderer then pins the chain through its fence.
+    std::shared_ptr<Attachment> previous;
 };
 }
 class Store {
@@ -62,6 +65,21 @@ public:
     bool Destroy(Handle); // Invalidates new access; already accepted commands keep their pin.
     std::shared_ptr<detail::Attachment> Acquire(Handle) const; // Internal renderer integration only.
     Stats GetStats() const;
+    class Replacement {
+    public:
+        ~Replacement();
+        std::shared_ptr<detail::Attachment> value;
+    private:
+        friend class Store;
+        Replacement(Store*, Handle);
+        Store* store;
+        Handle handle;
+    };
+    // Internal two-phase replacement: allocation/reservation may fail; Publish
+    // is allocation-free and keeps the public slot and generation unchanged.
+    std::unique_ptr<Replacement> PrepareResize(Handle, std::uint32_t, std::uint32_t);
+    void Publish(Replacement&) noexcept;
+    void SetLogicalRect(Handle, Bounds);
     void Reclaim(); // Owner-thread deferred release, once no command/read pin remains.
     void Shutdown(); // Caller must first stop submitting work; invalidates every surviving pin.
 private:

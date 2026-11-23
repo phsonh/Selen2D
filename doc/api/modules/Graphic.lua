@@ -21,11 +21,12 @@ Graphic = {}
 ---@alias GraphicShaderParams table<string,GraphicShaderValue>
 
 ---合成 0xAARRGGBB 数值，不提交绘制；可以在初始化时使用。没有全局 Color 别名。
----通道须为完整 0..255 整数，缺项、额外参数、负值或越界均报错，不静默截断。
----@param a integer Alpha。
----@param r integer 红。
----@param g integer 绿。
----@param b integer 蓝。
+---通道接受 0..255 有限数，小数四舍五入到最近整数（.5 向上）；先检查原始范围，不钳制越界值。
+---缺项、额外参数、非数值、非有限数、负值或大于 255 均报错。
+---@param a number Alpha。
+---@param r number 红。
+---@param g number 绿。
+---@param b number 蓝。
 ---@return integer argb
 function Graphic.Color(a, r, g, b) end
 
@@ -39,7 +40,7 @@ local Canvas = {}
 
 ---创建持久 RGBA8 离屏画布；首次使用前透明黑初始化，此后内容跨帧保留，不自动合成到窗口。
 ---只接受 2 个参数，或全部 6 个参数；不能用 6 个 nil 代替省略边界。边界可反向，但每轴范围须非零且有限。
----默认逻辑坐标居中，X 向右、Y 向上；像素尺寸与逻辑边界独立，创建后没有 Resize/SetBounds 接口。
+---默认逻辑坐标居中，X 向右、Y 向上；像素尺寸与逻辑边界独立，可分别通过 SetPixelSize/SetLogicalRect 修改。
 ---当前默认最多 256 个离屏 Canvas，单边 16384 像素，附件总预算 256 MiB（含在途回收）；2D 每像素 4 字节。
 ---可在初始化时创建；非法尺寸/边界、预算耗尽或 GPU 分配失败报错。
 ---@param width integer 正整数像素。
@@ -71,7 +72,7 @@ local Canvas3D = {}
 ---初次使用颜色透明黑、深度 1、距离 0；默认相机见 GraphicCamera，FOV=45°、near=1、far=1000，ZBuffer/Fog 均关闭。
 ---宽高比始终 width/height。切换目标或跨帧保留三种附件，Clear 同时清三者。
 ---预算/显式销毁/在途保活同 Graphic.CreateCanvas；只有两个必填参数，没有 2D 边界或 aspect 参数。
----普通图像绘制采样其颜色；Graphic.Render 可按 Shader 声明自动取得深度/距离。不提供 GetBound 或 2D 专属绘制方法。
+---普通图像绘制采样其颜色；Graphic.Render 可按 Shader 声明自动取得深度/距离。提供 SetPixelSize，不提供 GetBound、SetLogicalRect 或 2D 专属绘制方法。
 ---GPU 不支持所需附件格式、非法尺寸或预算耗尽时抛错；可在初始化时创建。
 ---@param width integer 正整数像素，当前上限 16384。
 ---@param height integer 正整数像素，当前上限 16384。
@@ -80,17 +81,44 @@ function Graphic.CreateCanvas3D(width, height) end
 
 ---读取当前窗口的稳定逻辑句柄，不绑定某一帧交换链指针；窗口调整后 GetSize 返回已确认的客户区逻辑宽高，与 Window.GetSize 一致。
 ---每个可呈现帧自动清一次不透明黑；同帧切出再返回不重清，不承诺跨帧保留窗口内容。
----WindowCanvas 禁止销毁、禁止作为任何纹理输入；可在初始化时取得句柄，截图仍受帧时机限制。
+---WindowCanvas 禁止销毁、禁止作为任何纹理输入，SetPixelSize/SetLogicalRect 调用抛错；窗口尺寸由 Window 管理。
+---可在初始化时取得句柄，截图仍受帧时机限制。
 ---@return GraphicCanvas windowCanvas
 function Graphic.GetWindowCanvas() end
 
----离屏返回创建时的像素大小；WindowCanvas 返回本轮确认的客户区逻辑宽高；不建屏障、不等待 GPU。
----离屏大小固定，窗口与 Window/Input 使用同一尺寸快照；服务关闭或失效句柄报错。不是顶层 Graphic.CanvasGetSize API。
+---修改离屏 Canvas2D/Canvas3D 的像素尺寸，严格两个参数、零返回值；WindowCanvas 调用报错。
+---以纹理左上角为像素原点，逐像素保留新旧重叠区域；缩小裁掉右/下部分，扩大新增区域透明黑，裁掉内容以后不复原。
+---不拉伸、不重采样、不执行 Lua 重绘，保留当前 2D 逻辑边界；对象/原生句柄身份和当前目标不变。
+---Canvas3D 同时保留颜色/深度/距离重叠像素，新区域为透明黑/深度1/距离0；不重新计算旧深度或距离。
+---Camera 代理、位置/朝向、Perspective/Fog/ZBuffer 保持不变；后续绘制投影宽高比使用新尺寸。需要完整重画时显式 Clear。
+---成功后 GetSize 立即反映新尺寸；实际复制按 GPU 队列依赖完成，不使用 CPU 读回或全局 GPU 空闲等待。
+---变化形成排序屏障：此前接受的绘制使用旧附件/状态且其结果参与复制，后续绘制使用新附件；旧引用保活至安全完成。
+---合法同尺寸调用无副作用、保留像素；非法参数、失效服务/句柄、预算或分配失败抛错，不部分修改尺寸、状态或内容。
+---可在初始化、帧内及图形服务仍存活的退出阶段调用；无需先选作目标。旧、新及在途附件共同计入现有 Canvas 预算。
+---若宿主随后取消未提交帧，原有未提交绘制仍取消；已成功设置的尺寸不回滚，先前已提交像素继续按新尺寸保留。
+---@param width integer 正整数像素，沿用创建范围，当前单边上限 16384。
+---@param height integer 正整数像素，沿用创建范围，当前单边上限 16384。
+function CanvasBase:SetPixelSize(width, height) end
+
+---离屏返回当前像素大小，包含成功 SetPixelSize 的结果；WindowCanvas 返回本轮确认的客户区逻辑宽高。
+---不建屏障、不等待 GPU；窗口与 Window/Input 使用同一尺寸快照。服务关闭或失效句柄报错；不是顶层 Graphic.CanvasGetSize API。
 ---@return integer width
 ---@return integer height
 function CanvasBase:GetSize() end
 
----立即读取 2D 逻辑边界；普通 Canvas 返回创建配置，窗口返回当前客户区逻辑宽高对应的居中范围。
+---修改普通离屏 2D Canvas 的逻辑坐标范围，严格四个参数、零返回值；Canvas3D 不提供此方法，WindowCanvas 调用报错。
+---边界与每轴差值必须有限且范围非零，允许反向；沿用 CreateCanvas 的校验，不接受额外参数。
+---只影响之后接受的绘制映射，不改变像素尺寸、不分配新颜色纹理、不清除或变换已有像素；GetBound 立即返回新范围。
+---变化形成排序屏障，已接受绘制保持其原边界快照；对象/句柄身份和当前目标不变，同值调用无副作用。
+---可在初始化、帧内及图形服务仍存活的退出阶段调用；非法参数、失效服务/句柄等错误不修改原范围。
+---宿主取消未提交帧时，未提交绘制按既有规则取消，已成功设置的逻辑范围不回滚。
+---@param left number 有限边界。
+---@param right number 有限且与 left 构成非零有限范围。
+---@param bottom number 有限边界。
+---@param top number 有限且与 bottom 构成非零有限范围。
+function Canvas:SetLogicalRect(left, right, bottom, top) end
+
+---立即读取 2D 当前逻辑边界，包含成功 SetLogicalRect 的结果；窗口返回当前客户区逻辑宽高对应的居中范围。
 ---可在帧外查询，不改状态、不建屏障；Canvas3D 不提供此方法；失效句柄或服务关闭报错。
 ---@return number left
 ---@return number right

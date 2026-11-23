@@ -15,7 +15,7 @@
 -- CreateDirectory/Remove/Copy/Rename/Move/Replace 及实际 ChangeExtension
 -- 保留全量结构验证，可能受无关来源影响。
 -- 参数/状态/路径/授权及异常 VFS 结构抛 Lua 错误；正常 I/O 失败返回独立错误表。
--- 除 GetScriptPath、File.Path 四函数一值、三个读取方法三值外，公开函数固定返回两值。
+-- 除 GetScriptPath、File.Path 四函数一值、三个读取方法和 GetImageFileSize 三值外，公开函数固定返回两值。
 -- File 均读写原始字节；文本与二进制模式不隐式变换编码或换行。
 -- require 保留原生缓存、preload、自定义搜索器。只在文件候选开头允许去掉一个 ./。
 -- loadfile/dofile、标准 io 文件名、os.remove/rename、package.searchpath 共用 VFS 授权。
@@ -49,6 +49,17 @@ File = {}
 ---@return FileHandle|nil file
 ---@return FileError|nil err
 function File.Open(path, mode) end
+
+---同步查询源图片的像素宽高，当前仅支持 PNG，按内容识别而非扩展名。
+---通过 VFS 读取 33 字节头，校验签名、IHDR 字段与 CRC；不解码像素、不注册资源。
+---只验证文件头，不保证其余数据可解码；不套用 GPU 或资源解码尺寸限制。
+---成功 width,height,nil；普通失败 nil,nil,err。非 PNG 为 unsupported，坏头/截短为 corrupt_data。
+---参数、路径、授权及异常 VFS 结构沿用 File 抛错规则。
+---@param path string
+---@return integer|nil width 原图像素宽度。
+---@return integer|nil height 原图像素高度。
+---@return FileError|nil err
+function File.GetImageFileSize(path) end
 
 ---合法缺失为 false,nil；文件或目录存在为 true,nil；查询失败为 false,err。
 ---@param path string

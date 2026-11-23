@@ -46,6 +46,8 @@ public:
     Canvas::Info GetTargetInfo(std::optional<Canvas::Handle> output = {}); // Requires an active frame, including for argument layout selection.
     Geometry::SpatialState GetSpatialState(Canvas::Handle) const;
     void SetSpatialState(Canvas::Handle, const Geometry::SpatialState&);
+    void SetPixelSize(Canvas::Handle, std::uint32_t width, std::uint32_t height);
+    void SetLogicalRect(Canvas::Handle, Canvas::Bounds);
     void Clear(std::uint32_t argb, std::optional<Canvas::Handle> output = {}); // Input straight ARGB; Canvas storage is PMA.
     void RenderImage(const Image&, Transform, Paint = {}, std::optional<Canvas::Handle> output = {});
     void RenderImage(Canvas::Handle, Transform, Paint = {}, std::optional<Canvas::Handle> output = {});

@@ -10,10 +10,12 @@ Object = {}
 
 ---由 Object.Class 注册的类表。回调按继承链动态查找；未定义回调不执行，非函数回调报错。
 ---类表可附加自定义字段。base 只读；继承回调中宜使用定义类时捕获的父类引用。
+---生命周期回调的 self 是对象实例。LuaLS 的 object-callbacks.lua 插件支持点号和冒号两种定义写法。
 ---@class ObjectClass
+---@field [string] any 类表上的自定义字段或方法。
 ---@field base? ObjectClass 只读的直接父类；根类为 nil。
 ---@field Init? fun(self: ObjectInstance, ...) 创建时同步执行一次，任意附加参数原样传入。
----@field Update? fun(self: ObjectInstance) 原生运动与 timer 增加之后调用。
+---@field Update? fun(self: ObjectInstance) timer 增加之后、原生运动之前调用；回调内修改的运动参数用于本次积分。
 ---@field Render? fun(self: ObjectInstance) 自行提交 Graphic 绘制；Object 不绘制默认图像。
 ---@field Colli? fun(self: ObjectInstance, other: ObjectInstance) 一次命中对应一个对侧对象。
 ---@field Delete? fun(self: ObjectInstance) 显式 Commit 或退出收尾时最多执行一次；可读取自身全部字段，可写自定义字段，禁止写原生字段。
@@ -24,6 +26,7 @@ Object = {}
 ---group、timer 为 32 位整数；其余数值字段有限。a/b/rate 另要求非负，开关只接受 boolean。
 ---layer/navi/hide/omega/omiga 若使用，仅是自定义字段，没有内建行为；没有自动角速度、排序或级联删除。
 ---@class ObjectInstance
+---@field [string] any 实例上的自定义字段。
 ---@field class ObjectClass 只读所属类。
 ---@field x number 中心世界坐标，默认 0。
 ---@field y number 中心世界坐标，默认 0。
@@ -39,7 +42,7 @@ Object = {}
 ---@field rect boolean 默认 false 为圆形；true 为旋转矩形；零尺寸允许，不支持椭圆。
 ---@field colli boolean 默认 true，决定是否作为碰撞候选，与其他开关独立。
 ---@field bound boolean 默认 true，决定是否接受中心越界删除。
----@field update boolean 默认 true；false 同时停止原生运动、timer 和 Update 回调。
+---@field update boolean 默认 true；轮到本对象时为 false 则跳过原生运动、timer 和 Update 回调；需由外部恢复，无法靠被停掉的自身 Update 恢复。
 ---@field render boolean 默认 true，控制 Render 回调。
 ---@field timer integer 默认 0，可写 -2147483648..2147483647；表示 UpdateAll 次数，并非帧数或毫秒。
 
@@ -169,9 +172,10 @@ function Object.IsColliding(first, second) end
 function Object.Commit() end
 
 ---执行一次逻辑步；按稳定激活次序处理活动且 update=true 的对象。
----依次 vx+=ax*rate、vy+=ay*rate，再 x+=vx*rate、y+=vy*rate，timer+=1，最后调用 Update。
+---每个对象先 timer+=1，再调用 Update；仍活动则用回调后的状态依次 vx+=ax*rate、vy+=ay*rate，再 x+=vx*rate、y+=vy*rate。
 ---rate=0 仍增加 timer 并调用 Update；首次回调读到 timer=1。重复调用就重复推进，不按真实时间补步。
----timer 达 2147483647 或积分结果非有限时抛错；该对象的运动和 timer 不部分提交。
+---自身回调将 update 设为 false 不截断已开始的逻辑步，下次才停止；自身回调删除对象则不再积分。缺少 Update 回调仍积分。
+---timer 达 2147483647 时在回调前抛错，不增加 timer；回调抛错则不积分。积分失败不部分写入位置/速度；已增加的 timer 及脚本修改不回滚。
 ---入口固定活动对象身份，调用前重查有效性和 update；错误停止本次，下一次调用从新快照首项开始，不续跑旧游标。
 ---无参数，无返回值，不隐式 Commit；不得在任何 Object 回调或原生批量调度中重入。
 function Object.UpdateAll() end

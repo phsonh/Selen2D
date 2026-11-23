@@ -1,6 +1,6 @@
 ---@meta
 
--- Selen2D Window 声明（14 个公开函数）；仅供编辑器，不应执行。
+-- Selen2D Window 声明（17 个公开函数）；仅供编辑器，不应执行。
 -- 来源：lua_bind/modules/Window、core/modules/Window、core/modules/Graphic/Graphic.cpp、engine/Engine.cpp。
 -- 操作系统状态与绘制目标可用性分别处理。
 -- 单一宿主窗口；所有接口须在已初始化 SDL/图形主线程调用。参数数量/类型或平台操作失败抛错。
@@ -29,6 +29,16 @@ function Window.SetSize(width, height) end
 ---@return integer width
 ---@return integer height
 function Window.GetSize() end
+
+---返回当前游戏窗口关联显示器的桌面模式像素宽高；不是窗口客户区、工作区或全部显示器合并尺寸。
+---按 SDL 确定窗口关联显示器；扩展屏跟随窗口，复制屏遵循系统提供的桌面模式，不查询面板最大支持分辨率。
+---严格零参数，返回两个正整数；按 SDL desktop mode 的 pixel_density 换算为像素并四舍五入，不乘系统 UI 缩放倍率。
+---每次读取当前已知显示状态，不缓存启动值、不泵事件或等待切换完成；移屏/桌面变化在 SDL 更新后反映。
+---入口执行前隐藏窗口已创建，因此可在入口、帧内和窗口仍有效的退出回调中查询；查询不显示或调整窗口、不切换全屏。
+---调用线程、窗口生命周期、平台查询或返回尺寸无效时抛错；Window.SetFullscreen 的原有行为保持不变。
+---@return integer width 桌面模式像素宽度。
+---@return integer height 桌面模式像素高度。
+function Window.GetScreenSize() end
 
 ---请求无边框桌面全屏/恢复窗口模式；默认 false，不改变显示器分辨率。
 ---隐藏启动阶段请求在首次显示时同步；其他情形可能延迟生效，尺寸/位置恢复由 SDL 处理。
@@ -73,3 +83,20 @@ function Window.IsFocused() end
 ---查询不泵事件、不获取/等待 GPU，也不暂停 Lua、音频或离屏工作；服务无效时抛错。
 ---@return boolean minimized
 function Window.IsMinimized() end
+
+---请求还原最小化/最大化窗口；无参数、无返回值，平台请求失败抛错。
+---返回只表示请求已受理；不额外同步等待完成、不泵事件、不提前改变 IsMinimized/IsMaximized。
+---不额外调用 SDL_SyncWindow；平台调用仍可能耗时，SDL 同步窗口环境选项也可能使底层等待。
+---后续帧需确认非全屏且两者为 false，再 SetSize；保留 GetSize 与输入的本帧尺寸快照。
+---最小化窗口可能先恢复到原最大化状态；不能假定一次请求必然回到普通窗口。
+---隐藏启动时不显示窗口，只取消待应用的最小化/最大化请求，不取消待应用全屏。
+---全屏时不直接还原、不隐式退出全屏；SDL 可能改变以后退出全屏的窗口化状态。
+---不额外请求聚焦/显示；实际还原产生的激活/显示由窗口系统处理。普通窗口重复调用不调整尺寸。
+---须在窗口有效的 SDL 主线程调用；服务已关闭或线程错误抛错。
+function Window.Restore() end
+
+---返回窗口事件已经确认的最大化状态；与 IsMinimized/IsFullscreen 一样，不把请求当作完成。
+---最小化或还原事件清除此状态；全屏不是最大化的同义词，不由全屏尺寸推断。
+---无参数，返回一个 boolean；查询不泵事件、不等待 GPU，服务/线程无效时抛错。
+---@return boolean maximized
+function Window.IsMaximized() end

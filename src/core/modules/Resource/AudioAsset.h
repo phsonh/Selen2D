@@ -3,7 +3,7 @@
 #include "core/modules/Audio/Audio.h"
 
 namespace core::modules::Resource {
-// Anonymous playback source owned by the sole resource registry. Sound/Music
+// Anonymous playback source owned by the sole resource registry. Sound
 // naming and readiness remain registry concerns; Audio never registers names.
 struct AudioAsset final : Asset {
     explicit AudioAsset(std::shared_ptr<Audio::Source> value) : source(std::move(value)) {}

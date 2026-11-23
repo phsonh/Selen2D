@@ -32,10 +32,36 @@ Native::DialogType Type(lua_State* L, int index) {
     throw std::invalid_argument("Debug dialog type must be info, warning or error");
 }
 
-int Log(lua_State* L) {
-    Count(L, 1, 1);
-    core::runtime::Log::LuaInfo(CheckString(L, 1));
+int WriteLog(lua_State* L) {
+    const int count = lua_gettop(L);
+    if (count == 1) {
+        core::runtime::Log::LuaInfo(CheckString(L, 1));
+        return 0;
+    }
+    std::string message;
+    for (int index = 1; index <= count; ++index) {
+        if (index > 1) message.push_back('\t');
+        message.append(CheckString(L, index));
+    }
+    core::runtime::Log::LuaInfo(message);
     return 0;
+}
+
+int Log(lua_State* L) {
+    const int count = lua_gettop(L);
+    lua_getglobal(L, "tostring");
+    // Convert before building/writing the record. Lua errors must not unwind
+    // through an active C++ catch scope or a live std::string.
+    for (int index = 1; index <= count; ++index) {
+        lua_pushvalue(L, count + 1);
+        lua_pushvalue(L, index);
+        lua_call(L, 1, 1);
+        if (!lua_tolstring(L, -1, nullptr))
+            return luaL_error(L, "'tostring' must return a string to 'Debug.Log'");
+        lua_replace(L, index);
+    }
+    lua_pop(L, 1);
+    return Guard<WriteLog>(L);
 }
 
 int Warn(lua_State* L) {
@@ -135,12 +161,14 @@ int ButtonBox(lua_State* L) {
 
 void Register(lua_State* L) {
     const luaL_Reg functions[] = {
-        {"Log", Guard<Log>}, {"Warn", Guard<Warn>}, {"Error", Error},
+        {"Log", Log}, {"Warn", Guard<Warn>}, {"Error", Error},
         {"MessageBox", Guard<MessageBox>}, {"ButtonBox", Guard<ButtonBox>},
         {"GetLog", Guard<GetLog>},
         {nullptr, nullptr}
     };
     luaL_openlib(L, "Debug", functions, 0);
+    lua_getfield(L, -1, "Log");
+    lua_setglobal(L, "print");
     lua_pop(L, 1);
 }
 }

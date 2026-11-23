@@ -72,6 +72,8 @@ Lua 使用相对 VFS 根的虚拟路径。默认部署根不随终端工作目�
 
 请把 `doc/api` 配给 Lua 编辑器作为声明目录，运行代码直接使用引擎全局模块。声明文件中的空函数不是实现，执行它们会覆盖真实接口。
 
+使用 LuaLS 时，在游戏项目的 `.luarc.json` 中设置 `"runtime.plugin": "doc/api/editor/object-callbacks.lua"`。如果复制了声明目录，请按实际位置填写路径。启用后，所有 `Object.Class()` 类及其子类的生命周期回调都可以写成 `function Enemy.Init(self, ...)` 或 `function Enemy:Update()`，编辑器会为 `self` 提供实例字段补全和类型检查。
+
 
 <a id="upgrade-230"></a>
 ## 从 2.2.0 升级到 2.3.0

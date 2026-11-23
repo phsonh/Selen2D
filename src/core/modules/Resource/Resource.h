@@ -11,7 +11,7 @@
 // format dependency. Concrete providers are introduced in subsequent stages.
 namespace core::modules::Resource {
 
-enum class Kind { Image, Sound, Music, Shader, Font };
+enum class Kind { Image, Sound, Shader, Font };
 struct Id {
     Kind kind{};
     std::string name;
@@ -53,6 +53,7 @@ struct Loop {
 struct AudioRequest {
     AudioMode mode{AudioMode::Decoded};
     std::optional<Loop> loop;
+    double volume{1};
     bool operator==(const AudioRequest&) const = default;
 };
 struct FileRequest { bool operator==(const FileRequest&) const = default; };

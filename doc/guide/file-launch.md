@@ -33,6 +33,7 @@ File 路径是非空 UTF-8 虚拟路径，自动转为 NFC，使用 `/`，严格
 | 修改函数、`RunLuaFile`、句柄 `Write/Seek/Close` | `true, nil` | `false, err` |
 | `Exists/IsFile/IsDirectory` | `true, nil` 或正常 `false, nil` | `false, err` |
 | `Read/ReadLine/ReadLines` | `data, true, nil` | `nil, false, err` |
+| `GetImageFileSize` | `width, height, nil` | `nil, nil, err` |
 | `GetScriptPath` | 来源字符串或单个 `nil` | 无可靠来源不算 I/O 失败 |
 | `File.Path.Join/GetFileName/GetParent/GetExtension` | 单个字符串；`GetParent` 也可返回单个 `nil` | 纯字符串操作，非法参数抛错 |
 
@@ -50,6 +51,23 @@ if not closed then error(closeError.message) end
 ```
 
 包内文件只读。`Copy` 可从包复制到获准真实目录中的新路径；不会借写模式在原虚拟路径建立覆盖副本。`Move/Replace` 要求同一实际文件系统，跨设备失败保留源。映射根与合并来源的目录不能作为普通目录整体搬移或卸载。根授权与 local_app_data→save 等另一真实源会形成重叠，不能组合；受保护游戏应改用明确的非根映射。包与真实文件同一完整虚拟路径仍报冲突。
+
+## 查询源图片尺寸
+
+`File.GetImageFileSize(path)` 同步返回源图片的像素宽高，当前仅支持 PNG，按文件内容识别，不依赖扩展名。使用与 `File.Open` 相同的 VFS 路径和授权，可查询获准真实目录或包内的图片，不要求资源已加载。
+
+查询仅读取前 33 字节，复用 PNG 文件头解析，校验签名、IHDR 字段和 CRC。它不解码像素、不注册资源、不上传纹理，也不套用 GPU 或资源解码的尺寸上限；PNG 宽高必须在 `1..2^31-1`。查询成功只表示文件头有效，不保证 IDAT 等后续数据完整或能够成功加载。
+
+成功固定返回 `width,height,nil`。普通读取失败返回 `nil,nil,err`；可识别为非 PNG 的头返回 `unsupported`，不足 8 字节或无效/截短的 PNG 头返回 `corrupt_data`。缺失、目录等沿用 File 错误分类，参数、路径、授权和异常 VFS 结构仍抛错。
+
+```lua
+local width, height, err = File.GetImageFileSize(path)
+assert(width, err and err.message)
+-- 切片配置以左下为原点时，换算为加载接口的左上原点。
+local v = height - piece.y - piece.h
+```
+
+每张源图登记多个切片时，在切片循环外查询一次即可。该接口不缓存文件信息，下一次查询会重新打开当前文件。
 
 ## 目录查询与资源扫描
 

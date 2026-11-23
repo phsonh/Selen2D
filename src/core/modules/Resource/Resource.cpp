@@ -400,12 +400,13 @@ Manifest& Manifest::LoadImage(std::string path, std::string name, ImageRequest r
 Manifest& Manifest::LoadAudio(std::string path, std::string name, AudioRequest options) {
     auto core = Require(owner);
     if (!state) throw std::logic_error("invalid manifest");
+    if (!std::isfinite(options.volume) || options.volume < 0 || options.volume > 1)
+        throw std::invalid_argument("sound volume must be in [0,1]");
     if ((options.mode != AudioMode::Decoded && options.mode != AudioMode::Stream) ||
         (options.loop && (!std::isfinite(options.loop->start) || options.loop->start < 0 ||
             (options.loop->finish && (!std::isfinite(*options.loop->finish) || *options.loop->finish <= options.loop->start)))))
         throw std::invalid_argument("invalid audio loading options");
-    core->Append(*state, {{options.mode == AudioMode::Decoded ? Kind::Sound : Kind::Music,
-        std::move(name)}, std::move(path), options});
+    core->Append(*state, {{Kind::Sound, std::move(name)}, std::move(path), options});
     return *this;
 }
 Manifest& Manifest::LoadImage(std::string path, std::string name, ImageOptions options) {

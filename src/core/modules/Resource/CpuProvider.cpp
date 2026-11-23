@@ -53,7 +53,8 @@ public:
         state->ticket->CheckResult(); // Synchronizes result publication; no worker touches registry.
         if(state->result->audio) {
             if(!gate->audio) throw std::runtime_error("Audio device service is unavailable");
-            state->result->asset=std::make_shared<AudioAsset>(gate->audio->CreateSource(*state->result->audio));
+            const auto volume=std::get<AudioRequest>(state->request.data).volume;
+            state->result->asset=std::make_shared<AudioAsset>(gate->audio->CreateSource(*state->result->audio,volume));
             state->result->audio.reset();
         }
         if(!state->result->asset) throw std::runtime_error("CPU preparation returned no resource");
@@ -83,8 +84,8 @@ CpuProvider::~CpuProvider() { Shutdown(); }
 std::unique_ptr<Operation> CpuProvider::Start(Handle,const Request& request) {
     if(impl->gate->owner!=std::this_thread::get_id() || !impl->gate->active)
         throw std::logic_error("CPU resource provider requires live owner thread");
-    if(request.id.kind!=Kind::Sound && request.id.kind!=Kind::Music && request.id.kind!=Kind::Font)
-        throw std::invalid_argument("CPU provider accepts only Sound, Music and Font");
+    if(request.id.kind!=Kind::Sound && request.id.kind!=Kind::Font)
+        throw std::invalid_argument("CPU provider accepts only Sound and Font");
     if(request.id.kind!=Kind::Font && !impl->gate->audio) throw std::runtime_error("Audio service is unavailable");
     impl->active.remove_if([](const auto& weak){ return weak.expired(); });
     auto state=std::make_shared<CpuState>(); state->request=request;

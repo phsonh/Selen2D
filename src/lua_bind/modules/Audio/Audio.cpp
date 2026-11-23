@@ -113,8 +113,8 @@ NamedSource Source(lua_State* L, Token& host, int index) {
     const auto handle = host.resources->Find(name);
     if (!handle) throw std::runtime_error("audio resource does not exist or is not published: " + name);
     const auto kind = host.resources->GetInfo(*handle).id.kind;
-    if (kind != Resource::Kind::Sound && kind != Resource::Kind::Music)
-        throw std::invalid_argument("audio resource must be Sound or Music: " + name);
+    if (kind != Resource::Kind::Sound)
+        throw std::invalid_argument("audio resource must be Sound: " + name);
     const auto asset = std::dynamic_pointer_cast<const Resource::AudioAsset>(host.resources->Acquire(*handle));
     if (!asset || !asset->source) throw std::runtime_error("audio resource has no prepared source: " + name);
     return {name, asset->source};

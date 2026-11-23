@@ -27,6 +27,9 @@ struct PngImage {
 };
 // PNG only, top-left origin, straight RGBA8; preserves transparent RGB. No
 // premultiplication, implicit scale, Y flip, gamma or Object collision data.
+// Inspect only the 33-byte signature/IHDR, without decode or GPU size limits.
+// A valid header does not imply that the remaining pixel stream is valid.
+Dimensions InspectPngHeader(std::span<const std::uint8_t> prefix);
 Dimensions InspectPng(std::span<const std::uint8_t> prefix, std::uint32_t maxDimension);
 PngImage DecodePng(std::span<const std::uint8_t> bytes, std::uint32_t maxDimension,
     std::size_t allocationLimit, CancelFn = nullptr, void* cancelData = nullptr);

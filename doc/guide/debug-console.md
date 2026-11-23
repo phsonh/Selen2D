@@ -33,7 +33,16 @@ CMD 可使用 `start /wait "" Selen2D.exe 1>stdout.txt 2>stderr.txt` 捕获分�
 
 ## Lua 日志快照与主动保存
 
-`Debug.Log(message)` 不请求退出；`Debug.Warn(message)` 不自动弹窗；`Debug.Error(message)` 记录后抛出原消息的 Lua 错误，仍可用 `pcall` 捕获。未捕获错误在宿主边界报告并正常清理，原有非零退出码不变。
+`Debug.Log(...)` 接收任意数量的参数，按当前全局 `tostring` 从左到右转换，以制表符（`\t`）分隔为一条 Info 日志，写入 stdout 和 Lua 日志缓存，无返回值。支持数字、布尔值、nil、表、userdata 及 `__tostring`；字符串内的 NUL 保留。空参数调用记录一条空正文日志。转换失败时原 Lua 错误继续向外传播，本次调用不写出部分日志；转换函数自己产生的副作用保留。
+
+引擎注册 Debug 时将全局 `print` 指向同一个函数，因此 `print == Debug.Log`，两者都带日志时间戳和 Info 级别，并进入 `Debug.GetLog()`。这是初始化时赋值，后续自行替换其中一个变量不会自动同步另一个。
+
+```lua
+Debug.Log("场景帧数：", 120)
+print("加载完成", true, nil) -- 正文为：加载完成\ttrue\tnil
+```
+
+`Debug.Log`/`print` 不请求退出；`Debug.Warn(message)` 仍只接受一个字符串且不自动弹窗；`Debug.Error(message)` 仍记录后抛出原消息的 Lua 错误，可用 `pcall` 捕获。未捕获错误在宿主边界报告并正常清理，原有非零退出码不变。
 
 `Debug.GetLog()` 无参数，返回当前进程中由 Lua 日志 API 以及宿主报告的 Lua 错误产生的快照。它不包括 SDL、D3D12、Audio 等普通初始化日志，也不包括 Lua VM 卸载后的原生日志。获取不清空记录、不访问磁盘、不改变日志级别。保留时间戳、级别及消息字节，包括 Lua 字符串中的 NUL。
 

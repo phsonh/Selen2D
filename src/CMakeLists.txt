@@ -61,6 +61,7 @@ target_include_directories(engine_upload PUBLIC .)
 target_link_libraries(engine_upload PUBLIC SDL3::SDL3-static)
 include("${PROJECT_SOURCE_DIR}/tools/cmake/ImageShaders.cmake")
 include("${PROJECT_SOURCE_DIR}/tools/cmake/CanvasViewShaders.cmake")
+include("${PROJECT_SOURCE_DIR}/tools/cmake/DepthCopyShaders.cmake")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/image_sampling.hlsli")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/image_sampling.hlsli" ENGINE_IMAGE_SAMPLING_SOURCE)
 configure_file(core/modules/Graphic/shader/ImageSamplingSource.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/ImageSamplingSource.h" @ONLY)
@@ -99,13 +100,15 @@ target_link_libraries(engine_readback PUBLIC SDL3::SDL3-static)
 add_library(engine_renderer STATIC
     "${image_shader_dir}/ImageShaders.h"
     "${image_shader_dir}/SpriteShaders.h"
+    "${depth_copy_shader_dir}/DepthCopyShaders.h"
+    core/modules/Graphic/backend/CanvasCopy.cpp
     core/modules/Graphic/backend/ImagePipeline.cpp
     core/modules/Graphic/backend/ShaderPipeline.cpp
     core/modules/Graphic/canvas/Canvas.cpp
     core/modules/Graphic/render/GlyphTextures.cpp
     core/modules/Graphic/render/ShaderCommands.cpp
     core/modules/Graphic/render/Renderer.cpp)
-target_include_directories(engine_renderer PUBLIC . PRIVATE "${image_shader_dir}")
+target_include_directories(engine_renderer PUBLIC . PRIVATE "${image_shader_dir}" "${depth_copy_shader_dir}")
 target_link_libraries(engine_renderer PUBLIC SDL3::SDL3-static engine_geometry engine_render_values engine_shader_views engine_shader_programs engine_shader_builtins engine_readback engine_log engine_text_layout)
 add_library(engine_image_sources STATIC core/modules/Resource/ImageSources.cpp)
 target_include_directories(engine_image_sources PUBLIC .)

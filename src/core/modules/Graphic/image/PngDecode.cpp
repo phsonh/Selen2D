@@ -216,17 +216,13 @@ int Eof(void* user) noexcept {
 namespace core::modules::Graphic::Image {
 void FreePixels::operator()(std::uint8_t* pixels) const noexcept { Free(pixels); }
 
-Dimensions InspectPng(std::span<const std::uint8_t> prefix, std::uint32_t maxDimension) {
+Dimensions InspectPngHeader(std::span<const std::uint8_t> prefix) {
     if (prefix.size() < 33 || !std::equal(pngSignature.begin(), pngSignature.end(), prefix.begin())
         || Read32(prefix.data() + 8) != 13 || !Type(prefix.data() + 12, "IHDR"))
         throw PngError(PngFailure::Invalid, "PNG signature or IHDR is invalid or truncated");
     const auto width = Read32(prefix.data() + 16), height = Read32(prefix.data() + 20);
-    if (!width || !height || !maxDimension)
-        throw PngError(PngFailure::Invalid, "PNG dimensions and dimension limit must be positive");
-    if (width > maxDimension || height > maxDimension || width > (1u << 24) || height > (1u << 24)
-        || width > static_cast<std::size_t>(std::numeric_limits<int>::max()) / 4 / height
-        || width > std::numeric_limits<std::size_t>::max() / 4 / height)
-        throw PngError(PngFailure::TooLarge, "PNG dimensions exceed the supported limit");
+    if (!width || !height || width > 0x7fffffffu || height > 0x7fffffffu)
+        throw PngError(PngFailure::Invalid, "PNG dimensions must be in 1..2^31-1");
     const auto depth = prefix[24], color = prefix[25];
     const bool validDepth = (color == 0 && (depth == 1 || depth == 2 || depth == 4 || depth == 8 || depth == 16))
         || (color == 3 && (depth == 1 || depth == 2 || depth == 4 || depth == 8))
@@ -236,6 +232,18 @@ Dimensions InspectPng(std::span<const std::uint8_t> prefix, std::uint32_t maxDim
     if (Read32(prefix.data() + 29) != Crc(prefix.subspan(12, 17)))
         throw PngError(PngFailure::Invalid, "PNG IHDR CRC does not match");
     return {width, height};
+}
+
+Dimensions InspectPng(std::span<const std::uint8_t> prefix, std::uint32_t maxDimension) {
+    const auto dimensions = InspectPngHeader(prefix);
+    const auto [width, height] = dimensions;
+    if (!maxDimension)
+        throw PngError(PngFailure::Invalid, "PNG dimension limit must be positive");
+    if (width > maxDimension || height > maxDimension || width > (1u << 24) || height > (1u << 24)
+        || width > static_cast<std::size_t>(std::numeric_limits<int>::max()) / 4 / height
+        || width > std::numeric_limits<std::size_t>::max() / 4 / height)
+        throw PngError(PngFailure::TooLarge, "PNG dimensions exceed the supported limit");
+    return dimensions;
 }
 
 PngImage DecodePng(std::span<const std::uint8_t> bytes, std::uint32_t maxDimension,

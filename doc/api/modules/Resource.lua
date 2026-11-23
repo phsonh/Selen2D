@@ -1,13 +1,14 @@
 ---@meta
 
----资源名称跨 Image/Sound/Music/Font/Shader 全局唯一，1..512 字节且不含 NUL。
+---资源名称跨 Image/Sound/Font/Shader 全局唯一，1..512 字节且不含 NUL。
 ---path 是编译期授权的 VFS 路径；登记即检查语法和权限。非法参数、重名、未就绪及类型错误抛错。
 ---同步加载可能等待 I/O、解码、编译及 GPU Fence，不执行 Lua 游戏回调。资源存活至 Unload 或退出。
 ---本文件仅为编辑器声明，不应执行；没有公开 Texture、Group、Job 或 Cancel API。
 ---@class Resource
 Resource = {}
 
----@alias ResourceType 'Image'|'Sound'|'Music'|'Font'|'Shader'
+---@alias ResourceType 'Image'|'Sound'|'Font'|'Shader'
+---@alias SoundLoadMode 'memory'|'stream'
 ---@alias ImageSampler 'point+clamp'|'linear+clamp'|'point+wrap'|'linear+wrap'
 
 ---只读表自身字段，不执行元方法、不补写默认值；未知键、数字键、数字字符串、scale 别名均报错。
@@ -22,9 +23,12 @@ Resource = {}
 ---@field vscale? number 有限数，默认最终 hscale，允许正、负、0。
 ---@field mipmap? boolean 默认 false；不改变逻辑尺寸、中心及缩放。
 
----@class ResourceMusicOptions
----@field loopStart? number 有限且 >=0，默认 0 秒。
----@field loopEnd? number 有限数，默认源时长；要求 loopStart < loopEnd <= 源时长。
+---@class ResourceSoundOptions
+---@field loadmode? SoundLoadMode 省略/nil 默认 memory；memory 完整解码 PCM，stream 流式解码。
+---@field volume? number 初始资源音量，有限数 [0,1]，省略/nil 默认 1；与 loadmode、loop 无关。
+---@field loop? boolean 默认 false；与 loadmode 无关，两种模式均可循环。
+---@field loopStart? number 仅 loop=true 时可指定；有限且 >=0，默认 0 秒。
+---@field loopEnd? number 仅 loop=true 时可指定；有限数，默认源时长；要求 loopStart < loopEnd <= 源时长。
 
 ---增量收集器，可跨帧登记；GC 不卸载资源、不取消已提交任务。
 ---@class ResourceLoader
@@ -49,29 +53,23 @@ function Resource.LoadImage(name, path, options) end
 ---@param options? ResourceImageOptions
 function Loader:LoadImage(name, path, options) end
 
----完整解码 WAV/Vorbis 音效，不自动播放；资源音量初始 1。只接受两个参数。
+---加载 WAV/Vorbis 音频，不自动播放；资源类型统一为 Sound，初始资源音量由 options.volume 指定，默认 1。
+---第三参数 options.loadmode 为 memory 或 stream，省略/nil 默认 memory；不接受旧位置 loadmode 或第四参数。
+---options 省略/nil/空表均为单次播放；loop=true 时首次从 0 播至 loopEnd，之后重复 [loopStart,loopEnd)。
+---循环端点以秒表示，内部换算为源 PCM 帧；静态参数立即验证，时长越界在加载时抛错。
+---初始音量在资源发布前生效；后续可用 SetVolume 修改，与播放器音量相乘。
+---选项只读自身字段，不执行元方法；非布尔 loop、未知键及 loop 未启用时的端点均报错。
 ---@param name string
 ---@param path string
-function Resource.LoadSound(name, path) end
+---@param options? ResourceSoundOptions
+function Resource.LoadSound(name, path, options) end
 
----登记完整解码音效；只接受 name/path，提交前不读文件。
+---登记 Sound 并复制 options 快照，提交前不读文件；参数规则与 Resource.LoadSound 相同。
+---静态错误立即抛错且不占名字；时长越界、解码等内容错误由提交后查询报告。
 ---@param name string
 ---@param path string
-function Loader:LoadSound(name, path) end
-
----准备流式 WAV/Vorbis 音乐，不自动播放，不保存整首 PCM；资源音量初始 1。
----默认整段循环；首次从 0 播至 loopEnd，后续重复 [loopStart,loopEnd)，内部换算为源 PCM 帧。
----起点/终点独立缺省，时长越界在加载时抛错；不接受第四参数。
----@param name string
----@param path string
----@param options? ResourceMusicOptions
-function Resource.LoadMusic(name, path, options) end
-
----登记流式音乐并复制 options 快照；不读取元方法，内容错误由提交后查询报告。
----@param name string
----@param path string
----@param options? ResourceMusicOptions
-function Loader:LoadMusic(name, path, options) end
+---@param options? ResourceSoundOptions
+function Loader:LoadSound(name, path, options) end
 
 ---同步准备独立可缩放 TTF/OTF 字体，不接受集合、位图字库、WOFF 或 options 重载。
 ---完成时字体字节和解析已验证，不预栅格化整个 Unicode 字库。
@@ -152,13 +150,13 @@ function Resource.SetImageSampler(name, sampler) end
 ---@return ImageSampler sampler
 function Resource.GetImageSampler(name) end
 
----Sound/Music 资源音量立即影响所有已有和未来播放器，最终增益另乘播放器音量。
+---Sound 资源音量立即影响所有已有和未来播放器，最终增益另乘播放器音量。
 ---越界、非有限数、未知/未就绪或非音频资源抛错。
 ---@param name string
----@param volume number 有限数 [0,1]，加载默认 1。
+---@param volume number 有限数 [0,1]，加载初始值由 options.volume 指定，缺省为 1。
 function Resource.SetVolume(name, volume) end
 
----@param name string 已就绪 Sound/Music。
+---@param name string 已就绪 Sound。
 ---@return number volume 资源音量，不乘播放器音量。
 function Resource.GetVolume(name) end
 

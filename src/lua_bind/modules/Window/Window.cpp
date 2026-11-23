@@ -29,6 +29,7 @@ int SetTitle(lua_State* L) {
 int GetTitle(lua_State* L) { Count(L,0); lua_pushstring(L,Native::GetTitle()); return 1; }
 int SetSize(lua_State* L) { Count(L,2); Native::SetSize(Dimension(L,1),Dimension(L,2)); return 0; }
 int GetSize(lua_State* L) { Count(L,0); const auto size=Native::GetSize(); lua_pushinteger(L,size.width); lua_pushinteger(L,size.height); return 2; }
+int GetScreenSize(lua_State* L) { Count(L,0); const auto size=Native::GetScreenSize(); lua_pushinteger(L,size.width); lua_pushinteger(L,size.height); return 2; }
 int SetFullscreen(lua_State* L) { Native::SetFullscreen(Boolean(L)); return 0; }
 int IsFullscreen(lua_State* L) { Count(L,0); lua_pushboolean(L,Native::IsFullscreen()); return 1; }
 int SetResizable(lua_State* L) { Native::SetResizable(Boolean(L)); return 0; }
@@ -37,17 +38,21 @@ int SetVSync(lua_State* L) { core::modules::Graphic::SetVSync(Boolean(L)); retur
 int IsVSyncEnabled(lua_State* L) { Count(L,0); lua_pushboolean(L,core::modules::Graphic::IsVSyncEnabled()); return 1; }
 int IsFocused(lua_State* L) { Count(L,0); lua_pushboolean(L,Native::IsFocused()); return 1; }
 int IsMinimized(lua_State* L) { Count(L,0); lua_pushboolean(L,Native::IsMinimized()); return 1; }
+int Restore(lua_State* L) { Count(L,0); Native::Restore(); return 0; }
+int IsMaximized(lua_State* L) { Count(L,0); lua_pushboolean(L,Native::IsMaximized()); return 1; }
 int SetCursorVisible(lua_State* L) { Native::SetCursorVisible(Boolean(L)); return 0; }
 int IsCursorVisible(lua_State* L) { Count(L,0); lua_pushboolean(L,Native::IsCursorVisible()); return 1; }
 }
 void Register(lua_State* L) {
     const luaL_Reg functions[]={
         {"SetTitle",Guard<SetTitle>},{"GetTitle",Guard<GetTitle>},{"SetSize",Guard<SetSize>},{"GetSize",Guard<GetSize>},
+        {"GetScreenSize",Guard<GetScreenSize>},
         {"SetFullscreen",Guard<SetFullscreen>},{"IsFullscreen",Guard<IsFullscreen>},
         {"SetResizable",Guard<SetResizable>},{"IsResizable",Guard<IsResizable>},{"SetVSync",Guard<SetVSync>},
         {"IsVSyncEnabled",Guard<IsVSyncEnabled>},
         {"SetCursorVisible",Guard<SetCursorVisible>},{"IsCursorVisible",Guard<IsCursorVisible>},
-        {"IsFocused",Guard<IsFocused>},{"IsMinimized",Guard<IsMinimized>},{nullptr,nullptr}};
+        {"IsFocused",Guard<IsFocused>},{"IsMinimized",Guard<IsMinimized>},
+        {"Restore",Guard<Restore>},{"IsMaximized",Guard<IsMaximized>},{nullptr,nullptr}};
     luaL_register(L,"Window",functions); lua_pop(L,1);
 }
 }

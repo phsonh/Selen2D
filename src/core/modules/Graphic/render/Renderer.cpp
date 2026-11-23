@@ -5,6 +5,7 @@
 #include "core/modules/Graphic/readback/Readback.h"
 #include "core/runtime/Log/Log.h"
 #include "core/modules/Graphic/backend/ImagePipeline.h"
+#include "core/modules/Graphic/backend/CanvasCopy.h"
 #include "core/modules/Graphic/geometry/Ribbon.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -92,7 +93,7 @@ SDL_FColor Pma(std::uint32_t argb) {
 }
 }
 struct Renderer::Impl {
-    enum class Kind { Target, Clear, Image, Shader, Text };
+    enum class Kind { Target, Clear, Image, Shader, Text, Resize };
     struct TextPart {
         GlyphTextures::Lease glyph;
         Uint32 inputVertex{},firstVertex{};
@@ -141,6 +142,7 @@ struct Renderer::Impl {
         Clock::time_point submitted;
         std::size_t shaderBytes{};
         std::vector<GlyphTextures::Lease> glyphUploads;
+        std::vector<std::shared_ptr<Attachment>> copyPins;
         SDL_GPUCommandBuffer* presentCommand{};
         SDL_GPUTexture* swapchain{};
         SDL_GPUTexture* mirror{};
@@ -155,6 +157,7 @@ struct Renderer::Impl {
     const std::thread::id thread{std::this_thread::get_id()};
     std::vector<Frame> frames;
     std::unique_ptr<backend::ImagePipeline> imagePipeline;
+    std::unique_ptr<backend::DepthCopy> depthCopy;
     std::unique_ptr<detail::ShaderCommands> shaderCommands;
     Text::GlyphCache glyphMasks;
     std::unique_ptr<GlyphTextures::Store> glyphTextures;
@@ -424,12 +427,18 @@ struct Renderer::Impl {
     struct Encoding {
         std::vector<Attachment*> initialized;
         std::unordered_map<Attachment*,Version> versions;
+        std::vector<std::shared_ptr<Attachment>> copyPins;
         bool windowInitialized{};
     };
     Encoding EncodingState(const Frame& frame,Attachment* extra=nullptr) {
         Encoding result; result.windowInitialized=frame.windowInitialized;
         const auto add=[&](Attachment* a){
-            if(a && !a->info.window) result.versions.try_emplace(a,Version{a->colorSerial,a->distanceSerial});
+            while(a && !a->info.window) {
+                if(!result.versions.try_emplace(a,Version{a->colorSerial,a->distanceSerial}).second) break;
+                if(!a->previous) break;
+                result.copyPins.push_back(a->previous);
+                a=a->previous.get();
+            }
         };
         add(extra);
         for(const auto index:frame.order) {
@@ -485,25 +494,60 @@ struct Renderer::Impl {
         // A newly created Canvas may be read before it is ever selected as a
         // target. Initialize those sources once, before any sorted draw segment.
         // No prior contents exist; later explicit writes still execute in order.
-        auto initializeSource=[&](Attachment* source) {
+        auto initializeSource=[&](auto&& self,Attachment* source)->void {
             if(!source || source->initialized || std::find(initialized.begin(),initialized.end(),source)!=initialized.end()) return;
+            if(source->previous) self(self,source->previous.get());
             const auto output=ColorTargets(*source,source->texture,true,{0,0,0,0});
             const auto depth=DepthTarget(*source,true);
             auto* pass=SDL_BeginGPURenderPass(command,output.data(),source->distance ? 2u : 1u,source->depth ? &depth : nullptr);
             if(!pass) throw std::runtime_error(std::string("Canvas source initialization failed: ")+SDL_GetError());
             SDL_EndGPURenderPass(pass); initialized.push_back(source);
+            if(source->previous) {
+                const auto& old=*source->previous;
+                auto* copy=SDL_BeginGPUCopyPass(command);
+                if(!copy) throw std::runtime_error(std::string("Canvas resize copy pass failed: ")+SDL_GetError());
+                const SDL_GPUTextureLocation from{old.texture,0,0,0,0,0};
+                const SDL_GPUTextureLocation to{source->texture,0,0,0,0,0};
+                SDL_CopyGPUTextureToTexture(copy,&from,&to,std::min(old.info.width,source->info.width),
+                    std::min(old.info.height,source->info.height),1,false);
+                if(source->distance) {
+                    const SDL_GPUTextureLocation distanceFrom{old.distance,0,0,0,0,0};
+                    const SDL_GPUTextureLocation distanceTo{source->distance,0,0,0,0,0};
+                    SDL_CopyGPUTextureToTexture(copy,&distanceFrom,&distanceTo,std::min(old.info.width,source->info.width),
+                        std::min(old.info.height,source->info.height),1,false);
+                }
+                SDL_EndGPUCopyPass(copy);
+                if(source->depth) depthCopy->Encode(command,old.depth,source->depth,
+                    std::min(old.info.width,source->info.width),std::min(old.info.height,source->info.height));
+            }
             written(*source,true);
             ++stats.renderPasses; ++stats.clearPasses;
         };
-        if(readSource && !readSource->info.window) initializeSource(readSource);
+        // Base attachments have no prior contents. Resized attachments must be
+        // preserved at their ordered barrier, never ahead of queued old writes.
+        if(readSource && !readSource->info.window && !readSource->previous) initializeSource(initializeSource,readSource);
         for(const auto index:frame.order) {
             const auto& item=frame.commands[index];
-            initializeSource(item.sourceCanvas.get());
-            if(item.shader) for(const auto& source:item.shader->canvases) initializeSource(source.get());
+            if(item.sourceCanvas && !item.sourceCanvas->previous) initializeSource(initializeSource,item.sourceCanvas.get());
+            if(item.shader) for(const auto& source:item.shader->canvases)
+                if(source && !source->previous) initializeSource(initializeSource,source.get());
         }
         for(std::size_t i=0;i<frame.order.size();) {
             const auto& item=frame.commands[frame.order[i]];
             auto& attachment = *item.target;
+            if(item.kind==Kind::Resize) {
+                initializeSource(initializeSource,&attachment);++i;continue;
+            }
+            // Initialize any deferred sources before opening this target pass.
+            // Image commands share a pass until the next non-Image/target barrier.
+            for(std::size_t n=i;n<frame.order.size();++n) {
+                const auto& input=frame.commands[frame.order[n]];
+                if(n!=i && (item.kind!=Kind::Image || input.kind!=Kind::Image || input.target!=item.target)) break;
+                if(input.sourceCanvas) initializeSource(initializeSource,input.sourceCanvas.get());
+                if(input.shader) for(const auto& source:input.shader->canvases) initializeSource(initializeSource,source.get());
+                if(item.kind!=Kind::Image) break;
+            }
+            if(attachment.previous) initializeSource(initializeSource,&attachment);
             auto* texture = attachment.info.window ? windowTexture : attachment.texture;
             if (!texture) {
                 if (attachment.info.window) { ++i; continue; } // Minimized/offscreen host; other canvases still execute.
@@ -514,7 +558,7 @@ struct Renderer::Impl {
             if(item.kind==Kind::Shader) {
                 // Historical distance must be initialized before its copy, and
                 // color conversions must follow all earlier sorted writes.
-                if(isNew && !attachment.info.window) {initializeSource(&attachment); isNew=false;}
+                if(isNew && !attachment.info.window) {initializeSource(initializeSource,&attachment); isNew=false;}
                 shaderCommands->EncodeInputs(command,*item.shader,[&](Attachment* source,bool distance){
                     const auto& v=versions.at(source ? source:&attachment);
                     return distance ? v.distance:v.color;
@@ -598,12 +642,15 @@ struct Renderer::Impl {
             if (attachment.info.window) windowInitialized=true;
             else if (isNew) initialized.push_back(&attachment);
         }
+        // Screenshot of a freshly resized Canvas sees all accepted prefix draws.
+        if(readSource && !readSource->info.window) initializeSource(initializeSource,readSource);
     }
-    void CommitEncoding(Frame& frame,SDL_GPUCommandBuffer* command,const Encoding& state) {
+    void CommitEncoding(Frame& frame,SDL_GPUCommandBuffer* command,Encoding& state) {
         if(shaderCommands) shaderCommands->Commit(command);
         if(glyphTextures) frame.glyphUploads=glyphTextures->CommitEncoded(command);
         for(const auto& [attachment,version]:state.versions) {attachment->colorSerial=version.color;attachment->distanceSerial=version.distance;}
-        for(auto* attachment:state.initialized) attachment->initialized=true;
+        frame.copyPins=std::move(state.copyPins); // Pins prepared before encoding/submission; no allocation here.
+        for(auto* attachment:state.initialized) {attachment->initialized=true;attachment->previous.reset();}
         frame.windowInitialized=state.windowInitialized;
     }
     void AcquirePresentation(Frame& frame);
@@ -612,7 +659,7 @@ struct Renderer::Impl {
     void RetirePresentation(Frame& frame);
     void ClearCommands(Frame& frame) {
         frame.commands.clear();frame.recordedVertices.clear();frame.vertices.clear();frame.shaderBytes=0;frame.glyphUploads.clear();
-        frame.order.clear();
+        frame.order.clear();frame.copyPins.clear();
         frame.recordedSprites.clear();frame.spriteIndices.clear();frame.spriteParameters.clear();
     }
 #ifdef ENGINE_SPRITE_PROFILE
@@ -929,6 +976,30 @@ void Renderer::SetSpatialState(Canvas::Handle handle,const Geometry::SpatialStat
     // change seals the preceding segment before publishing the new state.
     if(impl->current!=noFrame) impl->Append(Impl::Kind::Target,handle);
     impl->canvases.Acquire(handle)->spatial=state;
+}
+void Renderer::SetPixelSize(Canvas::Handle handle,std::uint32_t width,std::uint32_t height) {
+    impl->Check();
+    auto replacement=impl->canvases.PrepareResize(handle,width,height);
+    if(!replacement) return;
+    if(replacement->value->info.threeD && !impl->depthCopy)
+        impl->depthCopy=std::make_unique<backend::DepthCopy>(impl->device);
+    if(impl->current!=noFrame) {
+        auto& frame=impl->Recording();
+        if(frame.commands.size()>=impl->config.maxCommands) throw std::length_error("Renderer command budget exhausted");
+        Impl::Command command{};command.kind=Impl::Kind::Resize;command.target=replacement->value;
+        command.sourceCanvas=replacement->value->previous;
+        frame.commands.push_back(std::move(command)); // All allocation before Store publication.
+    }
+    impl->canvases.Publish(*replacement);
+}
+void Renderer::SetLogicalRect(Canvas::Handle handle,Canvas::Bounds bounds) {
+    impl->Check();const auto before=impl->canvases.Describe(handle);
+    if(before.window || before.threeD) throw std::invalid_argument("SetLogicalRect requires an offscreen Canvas2D");
+    Canvas::Validate(bounds);
+    if(bounds.left==before.bounds.left && bounds.right==before.bounds.right &&
+        bounds.bottom==before.bounds.bottom && bounds.top==before.bounds.top) return;
+    if(impl->current!=noFrame) impl->Append(Impl::Kind::Target,handle);
+    impl->canvases.SetLogicalRect(handle,bounds);
 }
 void Renderer::Clear(std::uint32_t argb, std::optional<Canvas::Handle> requested) { impl->Append(Impl::Kind::Clear,requested.value_or(impl->target),argb); }
 void Renderer::RenderImage(const Image& image, Transform transform, Paint paint, std::optional<Canvas::Handle> requested) {
@@ -1261,6 +1332,7 @@ bool Renderer::Shutdown() {
     impl->shaderCommands.reset();
     impl->glyphTextures.reset();impl->glyphMasks.Clear();
     impl->imagePipeline.reset();
+    impl->depthCopy.reset();
     impl->canvases.Shutdown(); impl->stats.inFlight=0;
     return impl->shutdownResult;
 }

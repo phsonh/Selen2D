@@ -118,15 +118,28 @@ N::ImageRequest ImageOptions(lua_State* L,int index) {
     lua_pop(L,1);
     return result;
 }
-N::AudioRequest AudioOptions(lua_State* L,int index,N::Kind kind) {
+N::AudioRequest AudioOptions(lua_State* L,int index) {
     N::AudioRequest result;
-    if(kind==N::Kind::Music) {
-        result.mode=N::AudioMode::Stream;
-        result.loop=N::Loop{0,{}}; // A Music resource defaults to its entire source.
-        if(Options(L,index,{"loopStart","loopEnd"})) {
-            result.loop->start=OptionNumber(L,index,"loopStart").value_or(0);
-            result.loop->finish=OptionNumber(L,index,"loopEnd");
-        }
+    if(!Options(L,index,{"loadmode","volume","loop","loopStart","loopEnd"})) return result;
+    lua_pushliteral(L,"loadmode"); lua_rawget(L,index);
+    if(!lua_isnil(L,-1)) {
+        const auto mode=CheckString(L,-1);
+        if(mode=="memory") result.mode=N::AudioMode::Decoded;
+        else if(mode=="stream") result.mode=N::AudioMode::Stream;
+        else throw std::invalid_argument("Sound loadmode must be 'memory' or 'stream'");
+    }
+    lua_pop(L,1);
+    result.volume=OptionNumber(L,index,"volume").value_or(1);
+    lua_pushliteral(L,"loop"); lua_rawget(L,index);
+    if(!lua_isnil(L,-1) && lua_type(L,-1)!=LUA_TBOOLEAN)
+        throw std::invalid_argument("Sound loop must be a boolean");
+    const bool loop=lua_toboolean(L,-1)!=0;
+    lua_pop(L,1);
+    const auto start=OptionNumber(L,index,"loopStart");
+    const auto finish=OptionNumber(L,index,"loopEnd");
+    if(loop) result.loop=N::Loop{start.value_or(0),finish};
+    else if(start || finish) {
+        throw std::invalid_argument("Sound loopStart and loopEnd require loop=true");
     }
     return result;
 }
@@ -149,7 +162,7 @@ std::shared_ptr<const N::Images::ImageAsset> Image(N::Service& service,N::Handle
 std::shared_ptr<const N::AudioAsset> AudioAsset(lua_State* L) {
     auto& service=Service(L);
     auto asset=std::dynamic_pointer_cast<const N::AudioAsset>(service.Acquire(Find(service,Name(L,1))));
-    if(!asset) throw std::invalid_argument("resource is not Sound or Music");
+    if(!asset) throw std::invalid_argument("resource is not Sound");
     return asset;
 }
 void Add(lua_State* L,N::Manifest& manifest,N::Kind kind,int offset,const Token& token) {
@@ -159,14 +172,14 @@ void Add(lua_State* L,N::Manifest& manifest,N::Kind kind,int offset,const Token&
     const auto path=*token.files->NormalizePath(Text(L,offset+2,4096,"source path"));
     if(kind==N::Kind::Image) {
         manifest.LoadImage(std::string(path),std::string(name),ImageOptions(L,offset+3));
-    } else if(kind==N::Kind::Sound || kind==N::Kind::Music) {
-        manifest.LoadAudio(std::string(path),std::string(name),AudioOptions(L,offset+3,kind));
+    } else if(kind==N::Kind::Sound) {
+        manifest.LoadAudio(std::string(path),std::string(name),AudioOptions(L,offset+3));
     } else if(kind==N::Kind::Font) manifest.LoadFont(std::string(path),std::string(name));
     else manifest.LoadShader(std::string(path),std::string(name));
 }
 template<N::Kind Kind,bool Async> int Load(lua_State* L) {
     constexpr int offset=Async?1:0;
-    Count(L,offset+2,offset+((Kind==N::Kind::Image || Kind==N::Kind::Music)?3:2));
+    Count(L,offset+2,offset+(Kind==N::Kind::Sound||Kind==N::Kind::Image?3:2));
     if constexpr(Async) {
         auto& box=RequireBox<LoaderBox>(L,1,LoaderType); (void)Service(box.token);
         if(box.job) throw std::logic_error("Loader has already been submitted");
@@ -221,7 +234,6 @@ int GetType(lua_State* L) {
     switch(*kind) {
     case N::Kind::Image: lua_pushliteral(L,"Image"); break;
     case N::Kind::Sound: lua_pushliteral(L,"Sound"); break;
-    case N::Kind::Music: lua_pushliteral(L,"Music"); break;
     case N::Kind::Font: lua_pushliteral(L,"Font"); break;
     case N::Kind::Shader: lua_pushliteral(L,"Shader"); break;
     }
@@ -306,7 +318,7 @@ void Register(lua_State* L,Context& context) {
     lua_pop(L,1);
     const luaL_Reg methods[]={
         {"LoadImage",Guard<Load<N::Kind::Image,true>>},{"LoadSound",Guard<Load<N::Kind::Sound,true>>},
-        {"LoadMusic",Guard<Load<N::Kind::Music,true>>},{"LoadFont",Guard<Load<N::Kind::Font,true>>},
+        {"LoadFont",Guard<Load<N::Kind::Font,true>>},
         {"LoadShader",Guard<Load<N::Kind::Shader,true>>},{"Submit",Guard<Submit>},
         {"IsFinished",Guard<IsFinished>},{"GetProgress",Guard<GetProgress>},{nullptr,nullptr}};
     Metatable(L,ServiceType,Guard<CollectService>,nullptr);
@@ -317,7 +329,7 @@ void Register(lua_State* L,Context& context) {
     const luaL_Reg functions[]={
         {"CreateLoader",Guard<CreateLoader>},
         {"LoadImage",Guard<Load<N::Kind::Image,false>>},{"LoadSound",Guard<Load<N::Kind::Sound,false>>},
-        {"LoadMusic",Guard<Load<N::Kind::Music,false>>},{"LoadFont",Guard<Load<N::Kind::Font,false>>},
+        {"LoadFont",Guard<Load<N::Kind::Font,false>>},
         {"LoadShader",Guard<Load<N::Kind::Shader,false>>},
         {"GetImageSize",Guard<GetImage<Property::Size>>},
         {"GetImageCenter",Guard<GetImage<Property::Center>>},{"SetImageCenter",Guard<SetImage<Property::Center>>},

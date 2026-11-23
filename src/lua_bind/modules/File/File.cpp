@@ -2,6 +2,7 @@
 #include "Handle.h"
 #include "core/modules/File/Vfs.h"
 #include "core/modules/File/IoError.h"
+#include "core/modules/Graphic/image/PngDecode.h"
 #include "core/runtime/Lua/VfsScripts.h"
 #include "lua_bind/Guard.h"
 #include <array>
@@ -52,7 +53,7 @@ double Integer(lua_State* L, int index) {
 }
 // Only IoError is translated to normal failure. Permission/argument/structure
 // exceptions continue through Guard and become Lua errors.
-enum class ResultKind { Value, Boolean, Read };
+enum class ResultKind { Value, Boolean, Read, Pair };
 template<int (*F)(lua_State*), ResultKind Kind> int IoResult(lua_State* L) {
     std::string code, message;
     try {
@@ -67,10 +68,11 @@ template<int (*F)(lua_State*), ResultKind Kind> int IoResult(lua_State* L) {
     if constexpr (Kind == ResultKind::Boolean) lua_pushboolean(L, false);
     else lua_pushnil(L);
     if constexpr (Kind == ResultKind::Read) lua_pushboolean(L, false);
+    if constexpr (Kind == ResultKind::Pair) lua_pushnil(L);
     lua_createtable(L, 0, 2);
     lua_pushlstring(L, code.data(), code.size()); lua_setfield(L, -2, "code");
     lua_pushlstring(L, message.data(), message.size()); lua_setfield(L, -2, "message");
-    return Kind == ResultKind::Read ? 3 : 2;
+    return Kind == ResultKind::Read || Kind == ResultKind::Pair ? 3 : 2;
 }
 void Readable(const Handle& handle) {
     if (!handle.readable) throw Native::IoError("permission_denied", "file was not opened for reading");
@@ -238,6 +240,35 @@ int Open(lua_State* L) {
     return 1;
 }
 int Exists(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type != Native::NodeType::Missing); return 1; }
+int GetImageFileSize(lua_State* L) {
+    Count(L, 1, 1);
+    const auto path = CheckString(L, 1);
+    std::unique_ptr<SDL_IOStream, decltype(&SDL_CloseIO)> stream(Filesystem(L).Open(path, "rb"), SDL_CloseIO);
+    std::array<std::uint8_t, 33> header{};
+    std::size_t size{};
+    while (size < header.size()) {
+        const auto count = SDL_ReadIO(stream.get(), header.data() + size, header.size() - size);
+        const auto status = SDL_GetIOStatus(stream.get());
+        if (status == SDL_IO_STATUS_ERROR) throw Native::GetStreamError(stream.get(), "read image header", path);
+        size += count;
+        if (status == SDL_IO_STATUS_EOF) break;
+        if (status != SDL_IO_STATUS_READY || count == 0)
+            throw Native::GetStreamError(stream.get(), "read image header", path);
+    }
+    Native::CloseStream(stream.release(), path);
+    constexpr std::array<std::uint8_t, 8> signature{137, 80, 78, 71, 13, 10, 26, 10};
+    if (size >= signature.size() && !std::equal(signature.begin(), signature.end(), header.begin()))
+        throw Native::IoError("unsupported", "image size query supports PNG files only");
+    core::modules::Graphic::Image::Dimensions dimensions;
+    try {
+        dimensions = core::modules::Graphic::Image::InspectPngHeader({header.data(), size});
+    } catch (const core::modules::Graphic::Image::PngError& error) {
+        throw Native::IoError("corrupt_data", error.what());
+    }
+    lua_pushinteger(L, dimensions.width);
+    lua_pushinteger(L, dimensions.height);
+    return 2;
+}
 int IsFile(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type == Native::NodeType::File); return 1; }
 int IsDirectory(lua_State* L) { Count(L, 1, 1); lua_pushboolean(L, Filesystem(L).Stat(CheckString(L, 1)).type == Native::NodeType::Directory); return 1; }
 std::uint64_t Depth(lua_State* L) {
@@ -370,6 +401,7 @@ void Register(lua_State* L, std::shared_ptr<const Native::FileSystem> filesystem
     lua_pushlightuserdata(L, &contextKey); lua_pushvalue(L, -2); lua_rawset(L, LUA_REGISTRYINDEX);
     const luaL_Reg functions[] = {
         {"Open", Guard<IoResult<Open, ResultKind::Value>>}, {"Exists", Guard<IoResult<Exists, ResultKind::Boolean>>}, {"IsFile", Guard<IoResult<IsFile, ResultKind::Boolean>>}, {"IsDirectory", Guard<IoResult<IsDirectory, ResultKind::Boolean>>},
+        {"GetImageFileSize", Guard<IoResult<GetImageFileSize, ResultKind::Pair>>},
         {"ListFiles", Guard<IoResult<ListFiles, ResultKind::Value>>}, {"ListDirectories", Guard<IoResult<ListDirectories, ResultKind::Value>>},
         {"GetMaxDepth", Guard<IoResult<GetMaxDepth, ResultKind::Value>>}, {"GetTree", Guard<IoResult<GetTree, ResultKind::Value>>},
         {"ChangeExtension", Guard<IoResult<ChangeExtension, ResultKind::Boolean>>}, {"CreateDirectory", Guard<IoResult<CreateDirectory, ResultKind::Boolean>>}, {"Remove", Guard<IoResult<Remove, ResultKind::Boolean>>},

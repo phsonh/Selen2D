@@ -15,15 +15,16 @@ public:
         switch(type) {
         case SDL_EVENT_WINDOW_SHOWN: hidden_=false; minimized_=false; break;
         case SDL_EVENT_WINDOW_HIDDEN: hidden_=true; break;
-        case SDL_EVENT_WINDOW_MINIMIZED: minimized_=true; break;
-        case SDL_EVENT_WINDOW_MAXIMIZED:
-        case SDL_EVENT_WINDOW_RESTORED: minimized_=false; break;
+        case SDL_EVENT_WINDOW_MINIMIZED: minimized_=true; maximized_=false; break;
+        case SDL_EVENT_WINDOW_MAXIMIZED: minimized_=false; maximized_=true; break;
+        case SDL_EVENT_WINDOW_RESTORED: minimized_=false; maximized_=false; break;
         case SDL_EVENT_WINDOW_ENTER_FULLSCREEN: fullscreen_=true; break;
         case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: fullscreen_=false; break;
         default: break;
         }
     }
     bool Minimized() const { return minimized_; }
+    bool Maximized() const { return maximized_; }
     bool Fullscreen() const { return fullscreen_; }
     bool Hidden() const { return hidden_; }
     bool Published() const { return published_; }
@@ -32,7 +33,7 @@ public:
     }
     FrameMetrics Frame() const { return frame_; }
 private:
-    bool minimized_{},fullscreen_{},hidden_{true},published_{};
+    bool minimized_{},maximized_{},fullscreen_{},hidden_{true},published_{};
     FrameMetrics frame_{};
 };
 }

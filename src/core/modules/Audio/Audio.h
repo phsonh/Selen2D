@@ -17,13 +17,14 @@ struct LoopRange { std::uint64_t begin{}, end{}; }; // Source frames, end exclus
 struct LoopSeconds { double start{}; std::optional<double> finish; };
 struct LoadOptions {
     StorageMode mode; // Explicit, no default mode inferred from a filename.
-    std::optional<LoopSeconds> loop;
+    std::optional<LoopSeconds> loop; // Present enables looping in either storage mode.
 };
 struct ResourceInfo {
     int sampleRate{}, channels{}; // Original source channels (1 or 2).
     std::uint64_t frames{};
     double duration{};
     StorageMode mode{};
+    bool looping{};
     std::uint64_t loopStartFrame{}, loopEndFrame{}, generation{};
 };
 namespace detail { struct System; struct ResourceData; struct Record; struct Voice; struct PlayerState; }
@@ -102,7 +103,7 @@ public:
     static PreparedAudio Prepare(std::shared_ptr<const File::FileSystem> files,
         const std::string& path, const LoadOptions& options,
         core::runtime::Jobs::MemoryBudget memory, const core::runtime::Jobs::StopToken& stop);
-    std::shared_ptr<Source> CreateSource(const PreparedAudio& prepared);
+    std::shared_ptr<Source> CreateSource(const PreparedAudio& prepared, double volume = 1);
     std::shared_ptr<Player> CreatePlayer();
     // Entry uses zero. The host publishes Clock::FrameCount immediately before
     // dispatching a frame callback; neither audio work nor queries advance it.

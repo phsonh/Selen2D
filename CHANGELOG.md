@@ -2,6 +2,50 @@
 
 按已存在的 Git 历史和当前开发内容记录。带“开发修订”的版本不表示已创建标签或发布二进制；当前公开版本仍以仓库的正式标签和 Releases 为准。
 
+## 2.3.13 — 开发修订，未发布
+
+- `Graphic.Color(a,r,g,b)` 的四个通道接受小数，四舍五入到最近整数（.5 向上）后合成 ARGB；仍先校验原始值为 `0..255` 有限数，不钳制越界值。已打包 ARGB 参数和其他整数参数的校验保持不变。
+- 新增 `Window.GetScreenSize()`：严格零参数，返回当前游戏窗口关联显示器的桌面模式像素宽高。按 SDL 的显示器选择和 desktop mode 像素密度换算，扩展屏跟随窗口，复制屏使用系统提供的桌面模式；不返回工作区、合并桌面或显示器最大支持分辨率。
+- 可在首次显示前的 Lua 入口、帧回调及窗口有效的退出阶段查询；查询不显示、移动、缩放窗口，不切换全屏、不推进事件或修改帧快照。查询失败抛错，原有 `Window.GetSize()` 与 `Window.SetFullscreen()` 保持不变。详见[窗口指南](doc/guide/input-window.md#查询显示器桌面尺寸)。
+
+## 2.3.12 — 开发修订，未发布
+
+- **音频加载 API 迁移**：`Resource.LoadSound` 与 `Loader:LoadSound` 统一为 `(name,path,options?)`，移除独立的 loadmode 位置参数和旧四参数形式；`options.loadmode` 接受 memory/stream，省略/nil 默认 memory。Image/Sound 最多三个参数，Font/Shader 两个参数。
+- `options.volume` 指定初始资源音量：有限数 `[0,1]`，省略/nil 默认 `1`，适用于 memory/stream、循环或单次播放。登记即复制和验证，初始音量在资源发布前随音频源建立，首次播放即生效，无需加载后补调 `SetVolume`。
+- 音量属于每个资源实例，不改变 PCM 数据、循环区间或播放器音量；后续仍可通过 `Resource.SetVolume/GetVolume` 修改和查询。同步与异步加载使用相同规则，非法值不占用资源名。详见[音频指南](doc/guide/audio.md)。
+
+## 2.3.11 — 开发修订，未发布
+
+- 新增 `File.GetImageFileSize(path)`：通过现有 VFS 读取 PNG 的 33 字节文件头，返回原图像素宽高；不解码像素、不注册资源、不上传纹理。成功返回 `width,height,nil`，普通失败返回 `nil,nil,err`；参数、路径及授权错误沿用 File 抛错规则。
+- 查询校验 PNG 签名、IHDR 字段和 CRC，仅验证文件头，不保证后续像素数据可解码；文件尺寸查询不套用 GPU 或资源解码尺寸限制。详见 [File 指南](doc/guide/file-launch.md#查询源图片尺寸)。
+
+## 2.3.10 — 开发修订，未发布
+
+- `Debug.Log(...)` 支持零个或多个任意类型参数，按 Lua `tostring` 从左到右转换，以制表符拼成一条 Info 日志；支持 `__tostring`、nil 和内嵌 NUL。转换失败传播原 Lua 错误，不写出本次调用的部分日志。
+- 全局 `print` 在引擎注册时直接引用 `Debug.Log`，输出进入同一 stdout 路由与 `Debug.GetLog()` 缓存，带时间戳和级别。`Debug.Warn/Error` 的单字符串参数及抛错行为保持不变。详见[日志指南](doc/guide/debug-console.md)。
+
+## 2.3.9 — 开发修订，未发布
+
+- 离屏 Canvas2D/Canvas3D 新增 `SetPixelSize(w,h)`：保持 userdata、句柄和当前目标身份，以纹理左上角为原点逐像素保留重叠区域；缩小裁掉右/下内容，扩大新增颜色区域透明黑，不拉伸、不重采样、不自动重绘。2D逻辑范围保持不变；3D深度/距离同样保留，新区深度1、距离0，Camera/Perspective/Fog/ZBuffer不变，之后绘制采用新宽高比。旧附件与待复制依赖纳入原附件预算并保活至安全回收。
+- Canvas2D 新增 `SetLogicalRect(left,right,bottom,top)`：只改变后续绘制映射，支持有限非零的反向轴范围，像素尺寸及已有栅格内容不变。两方法严格校验参数、无返回值、相同参数无副作用；初始化、帧内及图形服务存活的退出阶段均可调用。Canvas3D 不提供 SetLogicalRect，WindowCanvas 拒绝两个方法。
+- Setter 建立录制顺序屏障，已接受绘制保留原状态，resize 包含它之前的排队绘制；分配失败保留原画布。取消帧按原规则丢弃未提交绘制，但不回滚成功设置的尺寸/逻辑范围，仍保留原有已提交像素的复制依赖。用法及预算边界见[Canvas2D 调整说明](doc/guide/shader.md)。
+
+## 2.3.8 — 开发修订，未发布
+
+- **Object 更新顺序调整**：每个对象先增加 `timer`、执行脚本 `Update`，再以回调后的速度/加速度/倍率更新位置。本步停弹、转向及加速立即生效；首次回调仍看到 `timer=1`。保留快照遍历、显式 `Commit` 和既有碰撞/绘制调度，不改变宿主限帧。
+- `update=false` 仍同时停止脚本、原生运动和计时，可由其他对象或场景恢复；仅暂停原生运动用 `rate=0`。自身回调中关闭 update 从下一步生效，自删则跳过本步积分。回调或积分失败不回滚已执行的脚本及 timer，积分本身仍原子更新位置/速度。详见[Object 更新顺序](doc/guide/runtime.md#object-更新顺序与暂停)。
+- 包含既有 2.3.6 Sound 统一及 2.3.7 窗口还原接口。
+
+## 2.3.7 — 开发修订，未发布
+
+- 新增 `Window.Restore()` 和 `Window.IsMaximized()`：向平台请求还原最小化/最大化窗口，并通过后续窗口事件查询确认状态；不额外同步等待、不提前伪造状态。修改尺寸前需确认非全屏、非最小化及非最大化；最小化窗口可能先回到原最大化状态。隐藏启动不显示窗口，全屏不被隐式退出，当前帧尺寸/输入快照、限帧和VSync保持原契约。用法与有界超时见[窗口指南](doc/guide/input-window.md#还原窗口后调整尺寸)。
+- 本包包含2.3.6统一Sound加载与循环配置，音频迁移规则见下节；未新增其他窗口管理或音频接口。
+
+## 2.3.6 — 开发修订，未发布
+
+- **音频 API 迁移**：资源统一为 Sound，移除 `Resource.LoadMusic`、`Loader:LoadMusic` 和 Music 资源类型，不保留别名。统一入口为 `LoadSound(name,path,loadmode,options?)`，loadmode 必填且只接受 `"memory"`（完整 PCM）或 `"stream"`（流式）。旧双参数 LoadSound 增加 `"memory"`；旧 LoadMusic 改为 LoadSound 并传 `"stream"`。`Resource.GetType` 对两种模式均返回 `"Sound"`，播放继续使用 `Audio.Play(name)` 或 `player:Play(name)`。
+- 循环与解码模式解耦，两种模式均默认单次；options 的 `loop=true` 启用循环，loopStart/loopEnd 仅在启用循环时可指定，单位秒，缺省为整段。迁移旧音乐需显式补 `loop=true`，保留首次前奏及后续区间循环行为。详见[音频指南](doc/guide/audio.md)。
+
 ## 2.3.5 — 开发修订，未发布
 
 - 交互桌面上的未处理致命错误统一提供 stderr 与一次可见提示，覆盖原生启动、Lua入口/帧/退出、Object收尾及宿主运行期失败。保存首错阶段和原文/traceback，后续清理错误追加；终端或重定向不再禁止弹窗。`--no-error-dialog` 只禁用提示，参数分隔、日志、抛错和退出码不变。`Debug.Error` 保持记录并抛错；被pcall/xpcall处理时不弹窗。详见[诊断指南](doc/guide/debug-console.md)。

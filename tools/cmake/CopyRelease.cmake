@@ -43,7 +43,7 @@ set(shell_files main.lua example/main.lua example/effect.hlsl example/palette.hl
 set(guide_files README.md getting-started.md shader.md runtime.md input-window.md file-launch.md debug-console.md tools-gui.md
     resource.md audio.md fractional-images.md text.md example.md)
 set(api_modules Audio Debug File Graphic Input Math Object Resource Text Time Window)
-set(api_files runtime/Runtime.lua)
+set(api_files runtime/Runtime.lua editor/object-callbacks.lua)
 set(legacy_api_files doc/api/Runtime.d.lua)
 foreach(module IN LISTS api_modules)
     list(APPEND api_files "modules/${module}.lua")

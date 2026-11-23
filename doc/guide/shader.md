@@ -75,3 +75,30 @@ Canvas3D 的任意主名 `scene` 可派生 `scene_depth` 和 `scene_distance`，
 ### 仅使用深度或距离
 
 HLSL 仍须声明主 `Texture2D scene`，然后声明 `scene_depth`／`scene_distance` 及对应 Sampler；可以完全不采样主纹理颜色。Lua 只传 `params.scene = canvas3d`，不要传派生字段。即使主颜色被编译器优化掉，也会校验主字段、Canvas3D 类型和本次实际输出目标；用户不得采样当前目标的任何附件。
+
+## 调整离屏 Canvas2D 的尺寸与逻辑范围
+
+2.3.9 的普通离屏 2D Canvas 提供两个对象方法，均严格校验参数数目，成功时没有返回值：
+
+```lua
+local world = Graphic.CreateCanvas(384, 448, -192, 192, -224, 224)
+world:SetPixelSize(768, 896) -- 像素分辨率改变；逻辑范围仍为 384×448。
+
+local main = Graphic.CreateCanvas(768, 576)
+main:SetPixelSize(1024, 576)
+main:SetLogicalRect(-512, 512, -288, 288) -- 只改变未来绘制的逻辑映射。
+```
+
+`SetPixelSize(w, h)` 适用于离屏 Canvas2D 和 Canvas3D，接受两个正整数，尺寸与预算限制沿用创建 API。重叠区域按**纹理左上角像素原点一对一复制**：缩小裁掉右侧和下方超出的像素，扩大时新增区域为透明黑。不会拉伸、插值或重新执行游戏绘制；放大后旧图仍占原来的左上区域。裁掉的内容在以后扩大时不会恢复。2D 逻辑边界保持原值。
+
+Canvas3D 的深度、距离附件也保留重叠像素，新区域分别初始化为深度1、距离0。保留的是旧栅格数值，不会按新宽高比重新计算旧深度或距离。Camera 代理身份、位置和朝向、FOV/near/far、Fog、ZBuffer 配置保持；新尺寸的宽高比仅用于之后接受的几何绘制。若需要完整重画，请在合法绘制阶段显式 Clear。Canvas3D 不提供 SetLogicalRect。
+
+`SetLogicalRect(left, right, bottom, top)` 接受四个有限边界，每轴差值必须有限且非零，也可以反向。它不改变像素大小、不分配新颜色纹理、不清除或重采样旧图，只改变之后接受的绘制使用的坐标映射。已有图像不会自动跟随新逻辑范围重新排版。
+
+两者均可在初始化、帧回调及图形服务仍存活的退出阶段调用，不要求先选作当前目标。成功后 `GetSize()`／`GetBound()` 立即反映新设置，已有 userdata、原生句柄和当前目标身份保持不变。合法同值调用是无副作用操作；非法参数、失效句柄、服务关闭、预算或分配失败沿用抛错规则，原尺寸、范围及内容不被部分更新。调整像素尺寸时，仍被命令使用的旧附件与新附件共同计入原有 Canvas 预算。
+
+尺寸或逻辑范围实际变化会封闭前面的排序段，layer 不能穿过该边界。调用前已接受的绘制保留旧附件及坐标快照；像素复制包含这些排队绘制的结果，之后的绘制使用新设置。源 Canvas 的图像/Shader 命令同样保留各自接受时的附件和尺寸，旧资源持续保活到 GPU 安全完成。复制在正常 GPU 编码依赖中完成，不通过 CPU 读回、PNG 编码或等待整个 GPU 空闲来实现。
+
+如果宿主随后取消尚未提交的帧，原有未提交绘制仍按既有规则取消；已经成功设置的尺寸和逻辑范围不回滚，先前已提交的像素继续按新尺寸保留。不要将 setter 当作强制提交所有绘制或自动重绘入口。
+
+需要重新布局或清空时，由游戏在下一次合法绘制阶段自行重绘；清空可先 `Graphic.SetTargetCanvas(canvas)` 再 `Graphic.Clear(0x00000000)`。这些 setter 没有 clear 参数，也不额外调用 Lua Render。`WindowCanvas` 调用两方法会报错，窗口继续由 `Window` 管理；`Canvas3D` 只提供 SetPixelSize。没有 `Resize`、`SetBounds` 或 `SetLogicalSize` 别名。

@@ -1,6 +1,8 @@
 #include "Window.h"
 #include "BuildInfo.h"
 #include "core/runtime/Log/Log.h"
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -82,6 +84,25 @@ void SetTitle(const char* title) { Check(); Require(SDL_SetWindowTitle(window,ti
 const char* GetTitle() { Check(); return SDL_GetWindowTitle(window); }
 void SetSize(int width,int height) { Check(); Require(SDL_SetWindowSize(window,width,height),"Window.SetSize failed"); }
 Size GetSize() { return GetFrameMetrics().logicalSize; }
+Size GetScreenSize() {
+    Check();
+    const auto display=SDL_GetDisplayForWindow(window);
+    Require(display!=0,"Window.GetScreenSize display query failed");
+    const auto* mode=SDL_GetDesktopDisplayMode(display);
+    Require(mode!=nullptr,"Window.GetScreenSize desktop mode query failed");
+    // SDL mode dimensions use screen coordinates. Pixel density is independent
+    // of the user-facing content/UI scale (on Windows it is normally 1).
+    const double density=mode->pixel_density;
+    if(!std::isfinite(density) || density<=0)
+        throw std::runtime_error("Window.GetScreenSize returned invalid desktop pixel density");
+    const auto pixels=[density](int dimension) {
+        const double value=std::round(static_cast<double>(dimension)*density);
+        if(dimension<=0 || !std::isfinite(value) || value<1 || value>std::numeric_limits<int>::max())
+            throw std::runtime_error("Window.GetScreenSize returned invalid desktop pixel dimensions");
+        return static_cast<int>(value);
+    };
+    return {pixels(mode->w),pixels(mode->h)};
+}
 void SetFullscreen(bool enabled) {
     Check();
     // SDL owns the windowed rect and pending hidden-window state. A null mode
@@ -95,6 +116,8 @@ void SetResizable(bool enabled) { Check(); Require(SDL_SetWindowResizable(window
 bool IsResizable() { Check(); return (SDL_GetWindowFlags(window)&SDL_WINDOW_RESIZABLE)!=0; }
 bool IsFocused() { Check(); return SDL_GetKeyboardFocus()==window; }
 bool IsMinimized() { Check(); return state.Minimized(); }
+void Restore() { Check(); Require(SDL_RestoreWindow(window),"Window.Restore failed"); }
+bool IsMaximized() { Check(); return state.Maximized(); }
 void SetCursorVisible(bool visible) { Check(); Require(visible?SDL_ShowCursor():SDL_HideCursor(),"Window.SetCursorVisible failed"); }
 bool IsCursorVisible() { Check(); return SDL_CursorVisible(); }
 void Shutdown() {

@@ -101,6 +101,57 @@ Handle Store::Create(std::uint32_t w, std::uint32_t h, std::optional<Bounds> req
     return Allocate(w,h,requested,false);
 }
 Handle Store::Create3D(std::uint32_t w, std::uint32_t h) { return Allocate(w,h,{},true); }
+Store::Replacement::Replacement(Store* s, Handle h) : store(s), handle(h) {}
+Store::Replacement::~Replacement() { if(store && value) store->impl->Release(*value); }
+std::unique_ptr<Store::Replacement> Store::PrepareResize(Handle handle,std::uint32_t w,std::uint32_t h) {
+    auto old=Acquire(handle);
+    if(old->info.window) throw std::invalid_argument("SetPixelSize requires an offscreen Canvas");
+    if(!w || !h || w>impl->config.maxDimension || h>impl->config.maxDimension)
+        throw std::invalid_argument("Canvas pixel dimensions exceed the configured range");
+    if(w==old->info.width && h==old->info.height) return {};
+    auto info=old->info; info.width=w;info.height=h;info.logicalWidth=w;info.logicalHeight=h;
+    Reclaim();
+    if(Bytes(info)>impl->config.maxBytes-impl->stats.bytes ||
+        impl->stats.live+impl->retired.size()>=impl->config.maxCanvases)
+        throw std::length_error("Canvas attachment budget exhausted; retire unused canvases first");
+    // Complete every potentially throwing reservation before publication. The
+    // original allocation remains charged while accepted/GPU work can use it.
+    impl->retired.reserve(impl->retired.size()+1);
+    auto result=std::unique_ptr<Replacement>(new Replacement(this,handle));
+    result->value=std::make_shared<detail::Attachment>();
+    auto& value=*result->value;
+    value.info=info;value.spatial=old->spatial;value.previous=std::move(old);
+    SDL_GPUTextureCreateInfo create{};
+    create.type=SDL_GPU_TEXTURETYPE_2D;create.format=SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    create.usage=usage;create.width=w;create.height=h;
+    create.layer_count_or_depth=1;create.num_levels=1;create.sample_count=SDL_GPU_SAMPLECOUNT_1;
+    value.texture=SDL_CreateGPUTexture(impl->device,&create);
+    if(!value.texture) throw std::runtime_error(std::string("Canvas texture allocation failed: ")+SDL_GetError());
+    if(info.threeD) {
+        create.format=SDL_GPU_TEXTUREFORMAT_D32_FLOAT;create.usage=depthUsage;
+        value.depth=SDL_CreateGPUTexture(impl->device,&create);
+        if(!value.depth) throw std::runtime_error(std::string("Canvas3D depth allocation failed: ")+SDL_GetError());
+        value.depthFormat=create.format;
+        create.format=SDL_GPU_TEXTUREFORMAT_R32_FLOAT;create.usage=usage;
+        value.distance=SDL_CreateGPUTexture(impl->device,&create);
+        if(!value.distance) throw std::runtime_error(std::string("Canvas3D distance allocation failed: ")+SDL_GetError());
+    }
+    return result;
+}
+void Store::Publish(Replacement& replacement) noexcept {
+    auto& slot=impl->slots[replacement.handle.slot];
+    impl->retired.push_back(std::move(slot.attachment)); // Capacity reserved by PrepareResize.
+    impl->retired.back()->live=false;
+    slot.attachment=std::move(replacement.value);
+    impl->stats.bytes+=Bytes(slot.attachment->info);
+    replacement.store=nullptr;
+}
+void Store::SetLogicalRect(Handle handle,Bounds bounds) {
+    const auto value=Acquire(handle);
+    if(value->info.window || value->info.threeD) throw std::invalid_argument("SetLogicalRect requires an offscreen Canvas2D");
+    Validate(bounds);
+    value->info.bounds=bounds;
+}
 Handle Store::Allocate(std::uint32_t w, std::uint32_t h, std::optional<Bounds> requested, bool threeD) {
     impl->Check();
     if (!w || !h || w > impl->config.maxDimension || h > impl->config.maxDimension)
@@ -165,11 +216,20 @@ bool Store::Destroy(Handle h) {
 }
 void Store::Reclaim() {
     impl->Check();
-    for (auto it = impl->retired.begin(); it != impl->retired.end();) {
-        if (it->use_count() != 1) { ++it; continue; }
-        impl->stats.bytes -= Bytes((*it)->info);
-        impl->Release(**it); it = impl->retired.erase(it);
-    }
+    // Releasing a resized attachment drops its previous pin. An older retired
+    // attachment already visited in this pass can therefore become reclaimable.
+    // Reach a fixed point before checking allocation budgets, without disturbing
+    // attachments still pinned by accepted commands or in-flight GPU work.
+    bool released;
+    do {
+        released = false;
+        for (auto it = impl->retired.begin(); it != impl->retired.end();) {
+            if (it->use_count() != 1) { ++it; continue; }
+            impl->stats.bytes -= Bytes((*it)->info);
+            impl->Release(**it); it = impl->retired.erase(it);
+            released = true;
+        }
+    } while (released);
 }
 Stats Store::GetStats() const { impl->Check(); auto s = impl->stats; s.retired = impl->retired.size(); return s; }
 void Store::Shutdown() {
