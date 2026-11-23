@@ -17,7 +17,7 @@
 
 UI 的两项资源同步加载，使游戏资源准备期间仍能显示文字与真实进度。Loader 没有 Cancel；加载时按 Esc 会记录返回请求，等待本批完成后卸载。失败批次不会部分发布，示例返回菜单显示错误提示。窗口关闭可以在加载期间退出，剩余后台任务由引擎收尾。
 
-普通帧明确调用 `Object.Commit()`、`Object.UpdateAll()`、`Object.CheckCollision(1, 2)`、`Object.Commit()`。碰撞回调只请求 Delete/New，不在回调中重入 Commit。每个 Runtime 回调推进一个固定逻辑步，目标 60 FPS；这是教学示例的调度选择，拖动或卡顿时不会追赶多个逻辑步。`settings.speed` 按每秒 60 步换算；`settings.seed` 控制布局。游戏与配色各持有独立 RNG，从不替换或消耗模块默认生成器。
+普通帧明确调用 `Object.Commit()`、`Object.UpdateAll()`、`Object.CheckCollision(1, 2)`、`Object.Commit()`。碰撞回调请求删除已收集的光点并创建替代光点。第二次 Commit 激活新光点，旧光点在本帧绘制后回收。返回菜单的下一帧检查全部删除回调已完成。每个 Runtime 回调推进一个固定逻辑步，目标 60 FPS；这是教学示例的调度选择，拖动或卡顿时不会追赶多个逻辑步。`settings.speed` 按每秒 60 步换算；`settings.seed` 控制布局。游戏与配色各持有独立 RNG，从不替换或消耗模块默认生成器。
 
 绘制使用 720×440 的场景 Canvas 和 960×640 的 UI Canvas，再按窗口逻辑尺寸等比缩放并留黑边。`effect.hlsl` 仍是真实运行时编译的自定义 Shader，包含 `Engine.hlsl` 与相对的 `palette.hlsl`；Lua 传入时间、玩家位置和颜色。Object 的 Render 回调再绘制图片。暂停 UI 叠在场景之上，场景本身不推进。Canvas 方法不会改变模块默认目标。
 

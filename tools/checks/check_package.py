@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -103,19 +104,29 @@ def check(archive: Path, manifest: Path, output: Path, smoke: bool) -> dict:
         environment = os.environ.copy()
         environment["PATH"] = system_directory.value
         runs = []
-        for label, arguments in (("finite", ["--frames", "8"]), ("self-test", ["--self-test", "--frames", "9000"])):
+        object_check = output / "object-frame"
+        object_check.mkdir()
+        for binary in ("Selen2D.exe", "dxcompiler.dll"):
+            shutil.copy2(deployment / binary, object_check / binary)
+        shutil.copy2(Path(__file__).with_name("object_frame.lua"), object_check / "main.lua")
+        for label, root, arguments in (
+                ("finite", deployment, ["--frames", "8"]),
+                ("self-test", deployment, ["--self-test", "--frames", "9000"]),
+                ("object-frame", object_check, ["--frames", "5"])):
             started = time.monotonic()
             with (output / f"{label}.stdout.txt").open("wb") as stdout, (output / f"{label}.stderr.txt").open("wb") as stderr:
-                child = subprocess.run([str(deployment / "Selen2D.exe"), "--no-error-dialog", *arguments], cwd=foreign,
+                child = subprocess.run([str(root / "Selen2D.exe"), "--no-error-dialog", *arguments], cwd=foreign,
                                        env=environment, stdout=stdout, stderr=stderr, timeout=180)
             runs.append({"name": label, "exit": child.returncode, "seconds": time.monotonic() - started})
             if child.returncode != 0:
                 raise RuntimeError(f"{label} failed with exit {child.returncode}; stdout/stderr retained")
-            if (deployment / "engine.log").exists() or (foreign / "engine.log").exists():
+            if (root / "engine.log").exists() or (foreign / "engine.log").exists():
                 raise RuntimeError("implicit engine.log was created")
             text = (output / f"{label}.stdout.txt").read_text(encoding="utf-8", errors="strict")
             if "actual='direct3d12'" not in text or "Engine shutdown complete" not in text:
                 raise RuntimeError(f"{label} did not confirm D3D12 and complete shutdown")
+            if label == "object-frame" and "Object frame-end regression passed" not in text:
+                raise RuntimeError("the frame-end deletion check did not reach its final frame")
         outcome = json.loads((deployment / "output/result.json").read_text(encoding="utf-8"))
         if not outcome["completed"] or outcome["exitCalls"] != 1 or outcome["finalCount"] != 0:
             raise RuntimeError("Orbit Garden did not complete its lifecycle checks")

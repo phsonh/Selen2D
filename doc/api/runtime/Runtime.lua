@@ -3,7 +3,7 @@
 -- Selen2D Runtime 声明；仅供编辑器，不应由游戏执行。
 -- 核对来源：lua_bind/runtime/Runtime.cpp、core/runtime/Clock、core/runtime/Lua、engine/Engine.cpp。
 -- 所有函数严格检查实参数量和类型；不将字符串转换为数字。调用错误抛 Lua 错误。
--- Runtime 只调度整帧回调；不会自动 Commit、更新、碰撞或绘制 Object，也不管理游戏暂停/Replay。
+-- Lua 安排 Object 的激活、更新、碰撞和绘制。宿主在绘制提交后处理当帧已请求的对象销毁。
 ---@class RuntimeModule
 Runtime = {}
 

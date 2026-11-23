@@ -15,10 +15,11 @@ struct Object {
         std::optional<std::int32_t> group;
         bool enabled{true},rectangle{};
     } collision;
-    enum class Status : std::uint8_t { pendingActivation,active,pendingDelete };
+    enum class Status : std::uint8_t { pendingActivation,active,deleting };
     struct Lifecycle {
         std::int32_t timer{};
         Status status{Status::pendingActivation};
+        bool deleteRequested{};
         bool auto_bound{true};
     } lifecycle;
     void reset() noexcept;

@@ -19,7 +19,7 @@ struct Dispatch {
 };
 }
 ObjectSystem::ObjectSystem(std::uint32_t capacity):pool_(capacity),deletions_(capacity) {
-    for(auto* list:{&order_,&activeOrder_,&snapshot_,&activate_}) list->reserve(capacity);
+    for(auto* list:{&order_,&activeOrder_,&snapshot_}) list->reserve(capacity);
     sources_.reserve(capacity); targets_.reserve(capacity);
 }
 void ObjectSystem::Compact() noexcept {
@@ -38,7 +38,7 @@ ObjectHandle ObjectSystem::Create() {
 Object* ObjectSystem::Get(ObjectHandle h) noexcept { return pool_.get(h); }
 const Object* ObjectSystem::Get(ObjectHandle h) const noexcept { return pool_.get(h); }
 bool ObjectSystem::IsValid(ObjectHandle h) const noexcept {
-    const auto* obj=Get(h); return obj && obj->lifecycle.status!=Object::Status::pendingDelete;
+    const auto* obj=Get(h); return obj && obj->lifecycle.status!=Object::Status::deleting;
 }
 bool ObjectSystem::Active(ObjectHandle h) const noexcept {
     const auto* obj=Get(h); return obj && obj->lifecycle.status==Object::Status::active;
@@ -64,12 +64,13 @@ bool ObjectSystem::IsColliding(ObjectHandle first,ObjectHandle second) const {
 }
 bool ObjectSystem::Delete(ObjectHandle h) noexcept {
     auto* obj=Get(h);
-    if(!obj || obj->lifecycle.status==Object::Status::pendingDelete) return false;
+    if(!obj || obj->lifecycle.deleteRequested) return false;
     // At most pool capacity allocated objects can have one request each. The
     // queue never allocates, including while a deletion callback adds requests.
     deletions_[(deleteHead_+deleteCount_)%deletions_.size()]=h;
     ++deleteCount_;
-    obj->lifecycle.status=Object::Status::pendingDelete; --validCount_; return true;
+    obj->lifecycle.deleteRequested=true;
+    return true;
 }
 void ObjectSystem::Reclaim(ObjectHandle h,ObjectCallbacks& cb) noexcept {
     const bool valid=IsValid(h);
@@ -77,43 +78,44 @@ void ObjectSystem::Reclaim(ObjectHandle h,ObjectCallbacks& cb) noexcept {
     if(valid) --validCount_;
     orderDirty_=true; cb.Release(h);
 }
-ObjectHandle ObjectSystem::PopDeletion() noexcept {
+ObjectHandle ObjectSystem::BeginNextDeletion() noexcept {
     const auto h=deletions_[deleteHead_];
     deleteHead_=(deleteHead_+1)%deletions_.size(); --deleteCount_;
+    Get(h)->lifecycle.status=Object::Status::deleting;
+    --validCount_;
     return h;
 }
-void ObjectSystem::Commit(ObjectCallbacks& cb) {
+void ObjectSystem::Commit(ObjectCallbacks&) {
     if(closing_) throw std::logic_error("Object.Commit is unavailable during shutdown");
-    Dispatch dispatch(dispatching_); Compact(); activate_.clear();
-    // Freeze BOTH queues before the first callback. Only these requests belong
-    // to this boundary; callback additions remain queued for another Commit.
-    const auto pendingDeletes=deleteCount_;
+    Dispatch dispatch(dispatching_); Compact();
     for(auto h:order_) {
-        if(Get(h)->lifecycle.status==Object::Status::pendingActivation) activate_.push_back(h);
-    }
-    for(std::size_t i=0;i<pendingDeletes;++i) {
-        const auto h=PopDeletion();
-        try { cb.Delete(h); }
-        catch(...) { Reclaim(h,cb); throw; }
-        Reclaim(h,cb);
-    }
-    Compact();
-    for(auto h:activate_) {
         auto* obj=Get(h);
-        if(obj && obj->lifecycle.status==Object::Status::pendingActivation) {
+        if(obj->lifecycle.status==Object::Status::pendingActivation) {
             activeOrder_.push_back(h);
             obj->lifecycle.status=Object::Status::active;
         }
+    }
+}
+void ObjectSystem::FinishFrame(ObjectCallbacks& cb) {
+    if(closing_) throw std::logic_error("Object frame has already closed");
+    Dispatch dispatch(dispatching_);
+    // A Delete callback may queue additional requests for the following frame.
+    const auto pendingDeletes=deleteCount_;
+    for(std::size_t i=0;i<pendingDeletes;++i) {
+        const auto h=BeginNextDeletion();
+        try { cb.Delete(h); }
+        catch(...) { Reclaim(h,cb); throw; }
+        Reclaim(h,cb);
     }
 }
 void ObjectSystem::BeginShutdown() noexcept { closing_=true; }
 bool ObjectSystem::FinalizeShutdown(ObjectCallbacks& cb) {
     if(finalized_) return cleanupSucceeded_;
     Dispatch dispatch(dispatching_); BeginShutdown();
-    // Unlike normal Commit this is a drain, not an entry snapshot. New delete
+    // Unlike normal frame end this is a drain, not an entry snapshot. New delete
     // requests append in FIFO order, and a failed callback cannot stop cleanup.
     while(deleteCount_) {
-        const auto h=PopDeletion();
+        const auto h=BeginNextDeletion();
         try { cb.Delete(h); }
         catch(const std::exception& error) { cleanupSucceeded_=false; cb.CleanupError(error.what()); }
         catch(...) { cleanupSucceeded_=false; cb.CleanupError("unknown Object deletion error during shutdown"); }
@@ -121,7 +123,7 @@ bool ObjectSystem::FinalizeShutdown(ObjectCallbacks& cb) {
     }
     // No synthetic Delete calls for survivors, no pending activation.
     for(auto h:order_) Reclaim(h,cb);
-    order_.clear(); activeOrder_.clear(); snapshot_.clear(); activate_.clear(); sources_.clear(); targets_.clear();
+    order_.clear(); activeOrder_.clear(); snapshot_.clear(); sources_.clear(); targets_.clear();
     collisionRadii_.reset();
     deleteHead_=deleteCount_=validCount_=0; orderDirty_=false; finalized_=true;
     return cleanupSucceeded_;
@@ -138,11 +140,8 @@ void ObjectSystem::Update(ObjectCallbacks& cb) {
             ++obj->lifecycle.timer;
         }
         cb.Update(h);
-        // Resolve again after Lua: it may delete this object, create others or
-        // change any motion field. No pre-callback copy may overwrite its writes.
-        // update gates entry to the whole step; self-disabling takes effect next
-        // time. Deletion takes effect immediately, so a deleted object never moves.
-        if(Active(h)) IntegrateMotion(*Get(h));
+        // Use the motion fields as left by Lua, including on the final update.
+        IntegrateMotion(*Get(h));
     }
 }
 void ObjectSystem::Render(ObjectCallbacks& cb) {
@@ -183,7 +182,7 @@ void ObjectSystem::Collide(std::int32_t groupA,std::int32_t groupB,ObjectCallbac
     if(groupA<0 || groupB<0) throw std::invalid_argument("Object collision groups must be non-negative");
     Dispatch dispatch(dispatching_); Compact(); sources_.clear(); targets_.clear();
     // Pool storage is reserved to its fixed capacity. Create cannot move existing
-    // objects, and Delete only queues reclamation. Dispatch excludes Commit and
+    // objects, and Delete only queues reclamation. Dispatch excludes FinishFrame and
     // FinalizeShutdown, the only operations that can move or reclaim objects.
     // Keep addresses only for this dispatch; all eligibility and geometry remain
     // live, including after callbacks. Exceptions must clear the snapshot too.

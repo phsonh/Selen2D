@@ -1,6 +1,6 @@
 # 开始运行与修改 Lua
 
-本指南描述当前标准包布局；当前源码为**尚未发布的 2.3.1 开发修订**。旧 2.2.0 包不包含也不需要 `dxcompiler.dll`；不要混用不同包内的文件。
+本指南适用于当前 Windows x64 标准发行包。请使用同一 ZIP 中配套的 `Selen2D.exe` 和 `dxcompiler.dll`。
 
 将候选 ZIP 完整解压到一个独立项目目录，再运行其中的 `Selen2D.exe`。这是自包含运行目录：EXE、同目录的 `dxcompiler.dll`、示例和文档一起打包，不需要另行安装编译器或运行库。包中不放入 Python 打包工具、启动头文件、构建元数据或预先生成的日志，许可证随文档提供。候选面向 Windows x64 / Direct3D 12，不代表其他平台已经完成验收。
 
@@ -74,6 +74,14 @@ Lua 使用相对 VFS 根的虚拟路径。默认部署根不随终端工作目�
 
 使用 LuaLS 时，在游戏项目的 `.luarc.json` 中设置 `"runtime.plugin": "doc/api/editor/object-callbacks.lua"`。如果复制了声明目录，请按实际位置填写路径。启用后，所有 `Object.Class()` 类及其子类的生命周期回调都可以写成 `function Enemy.Init(self, ...)` 或 `function Enemy:Update()`，编辑器会为 `self` 提供实例字段补全和类型检查。
 
+
+<a id="upgrade-240"></a>
+## 从 2.3.0 升级到 2.4.0
+
+- **对象销毁。** `Object.Delete(obj)` 首次登记返回 `true`。请求当帧对象仍有效，可以继续运动、碰撞和渲染。需要让子弹命中后立刻停止碰撞时，在命中回调里设置 `self.colli = false`。对象数和销毁回调的结果可在下一帧检查。`Object.Commit()` 仍用于激活新对象。[对象调度](runtime.md)
+- **运动顺序。** 首次 `Update` 仍看到 `timer = 1`。引擎现在先调用脚本 `Update`，再推进原生运动；回调里设置的速度和加速度会作用于当帧。
+- **音频。** 把 `Resource.LoadMusic(name, path)` 改成 `Resource.LoadSound(name, path, {loadmode="stream", loop=true})` 可保留流式循环播放。普通音效可直接调用 `LoadSound(name, path)`。`Loader:LoadSound` 使用相同的选项表，资源类型统一为 `"Sound"`。[音频加载](audio.md)
+- **目录查询。** 用 `File.ListFiles(path, 1)` 和 `File.ListDirectories(path, 1)` 分别列出直属文件和目录。需要递归整棵树时省略深度参数，显式传 `0` 会报错。[文件查询](file-launch.md)
 
 <a id="upgrade-230"></a>
 ## 从 2.2.0 升级到 2.3.0

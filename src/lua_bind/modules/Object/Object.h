@@ -12,6 +12,10 @@ namespace lua_bind::modules::Object {
         Context(const Context&) = delete;
         Context& operator=(const Context&) = delete;
 
+        // After this frame's rendering, release the objects queued for deletion.
+        // Returns false with the callback diagnostic if frame-end cleanup fails.
+        bool FinishFrame(std::string& error);
+
         // Call before ExitFunction: keeps the service alive, but public Commit
         // can no longer activate anything. A mere Runtime.Quit request is not
         // this boundary; the current Lua call may finish normally first.

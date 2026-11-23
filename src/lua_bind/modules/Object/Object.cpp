@@ -183,7 +183,7 @@ struct Context::Impl final:Native::ObjectCallbacks {
         if(!OwnsVM(state,owner)) throw std::invalid_argument("Object instance belongs to another VM");
         auto* object=owner.system->Get(box.handle);
         if(!object || (!owner.system->IsValid(box.handle) && (write || box.handle!=owner.readableDeleted)))
-            throw std::runtime_error("Object instance is pending deletion or expired");
+            throw std::runtime_error("Object instance is being deleted or has expired");
         return *object;
     }
     bool HasRoot(Native::ObjectHandle h) const noexcept {
@@ -477,6 +477,22 @@ Context::Context(lua_State* L,std::uint32_t capacity):impl_(std::make_unique<Imp
 Context::~Context() { Shutdown(); }
 void Context::Shutdown() noexcept { if(impl_) impl_->Shutdown(); }
 void Context::BeginShutdown() noexcept { if(impl_) impl_->BeginShutdown(); }
+bool Context::FinishFrame(std::string& error) {
+    auto& owner=*impl_;
+    try {
+        owner.RequireRunning();
+        owner.RequireBatch();
+        Impl::Entry entry(owner,owner.L);
+        owner.system->FinishFrame(owner);
+        error.clear();
+        return true;
+    } catch(const std::exception& exception) {
+        error=exception.what();
+    } catch(...) {
+        error="unknown Object frame-end deletion error";
+    }
+    return false;
+}
 bool Context::FinalizeShutdown(std::string& error) {
     if(!impl_) { error.clear(); return true; }
     auto& owner=*impl_;

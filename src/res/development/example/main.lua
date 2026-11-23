@@ -23,7 +23,7 @@ Graphic.SetTextLineSpacing(0)
 Graphic.SetTextOutline(0)
 
 local state, stateFrames, frame, round = 'menu', 0, 0, 0
-local world, loader, loadProgress, cancelLoad, lastError
+local world, retiredWorld, loader, loadProgress, cancelLoad, lastError
 local ready, capture, worldCapture = false, nil, nil
 local report = {completed = false, exitCalls = 0, rounds = {}, transitions = {'menu'}, checks = {}, screenshots = {}}
 local defaultRng = Math.Random.GetState()
@@ -128,16 +128,13 @@ local function leaveWorld(exiting)
         for obj in pairs(old.objects) do
             if Object.IsValid(obj) then Object.Delete(obj) end
         end
-        -- ExitFunction cannot Commit; the host drains the requested deletes.
-        if not exiting then Object.Commit() end
         old.canvas:Destroy()
         if not exiting then
             local row = report.rounds[round]
-            row.created, row.deleted, row.finalCount = old.created, old.deleted, Object.GetObjectCount()
+            retiredWorld = old
             row.score, row.steps = old.score, old.steps
             row.oldPlayerRejected = not pcall(function() old.audio:GetVolume() end)
             row.oldCanvasRejected = not pcall(function() old.canvas:GetSize() end)
-            check('round ' .. round .. ': explicit delete callbacks and empty pool', row.created == row.deleted and row.finalCount == 0)
             check('round ' .. round .. ': retired player and canvas', row.oldPlayerRejected and row.oldCanvasRejected)
             check('round ' .. round .. ': real collision and replacement', row.score >= 1)
         end
@@ -277,7 +274,7 @@ local function update(input)
             Object.Commit()
             Object.UpdateAll() -- one deliberate simulation step per callback
             Object.CheckCollision(1, 2)
-            Object.Commit() -- retire collected motes and activate replacements
+            Object.Commit() -- activate replacements; collected motes render once more
             world.steps = world.steps + 1
         end
     end
@@ -347,6 +344,13 @@ if selfTest then
     capture = 'menu'
 end
 Runtime.SetFrameFunction(function()
+    if retiredWorld then
+        -- The previous frame's Delete callbacks have all returned.
+        local row = report.rounds[round]
+        row.created, row.deleted, row.finalCount = retiredWorld.created, retiredWorld.deleted, Object.GetObjectCount()
+        check('round ' .. round .. ': frame-end delete callbacks and empty pool', row.created == row.deleted and row.finalCount == 0)
+        retiredWorld = nil
+    end
     frame, stateFrames = frame + 1, stateFrames + 1
     if selfTest then assert(frame < 9000, 'self-test did not complete its ordinary game flow') end
     update(actions())

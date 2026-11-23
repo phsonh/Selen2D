@@ -253,6 +253,12 @@ bool Run(std::uint64_t frameLimit,StartupFailure::Failure* failure) {
             recordTimer.Stop();
 #endif
             renderer.EndFrame(); recording=false;
+            // Keep the final update and draw of a deleted object in this frame.
+            if(!objects->FinishFrame(error)) {
+                ReportLua("Frame-end Object.Delete callback failed",error,failure,StartupFailure::Kind::LuaFrame);
+                succeeded=false;
+                break;
+            }
             // Submission boundary, not a GPU timestamp or physical display time.
             if(hostFrames==0) { VFS_PROFILE_MARK(FirstFrameSubmitElapsed); }
             Graphic::ApplyPendingPresentation();

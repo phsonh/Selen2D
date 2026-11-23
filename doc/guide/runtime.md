@@ -1,7 +1,7 @@
 # 帧调度、时间与错误
 
 入口脚本执行一次。`Runtime.SetFrameFunction` 注册整个游戏帧；Lua 自行决定何时调用
-`Object.Commit`、更新、碰撞和绘制。宿主不代办对象生命周期，也不会在卡顿后补逻辑帧。
+`Object.Commit` 激活新对象，以及何时更新、碰撞和绘制。宿主提交本帧渲染后处理对象删除请求。
 
 ```lua
 local Particle = Object.Class()
@@ -10,13 +10,23 @@ local particle = Object.New(Particle)
 Runtime.SetFrameFunction(function()
     Object.Commit()
     Object.UpdateAll()
-    -- 绘制由游戏自行提交；没有 Render 回调时对象只参与模拟。
+    Object.RenderAll()
 end)
 Runtime.SetExitFunction(function()
     Object.Delete(particle)
     -- 关闭阶段不能 Commit；宿主随后收尾已请求的 Delete，其他对象只释放。
 end)
 ```
+
+调用 `Object.Delete(obj)` 会排入一次删除请求。对象到本帧末仍可读写并计入
+`GetObjectCount()`。即使在自己的 `Update` 中自删，对象仍会完成原生运动，
+并在本帧的 `RenderAll()` 中画出最后状态。重复请求返回 `false`。需要提前停止
+碰撞或隐藏对象时，可以显式设置 `obj.colli=false` 或 `obj.render=false`。
+
+宿主成功提交渲染后按请求顺序处理这一批对象。轮到某个对象时，
+`IsValid` 变为 `false`，宿主调用它的 `Delete` 并回收槽位。回调中新请求的
+删除留到下一帧末。帧末回调抛错会作为 Lua 帧错误进入关闭流程，已经提交的画面仍然有效，
+剩余请求在退出收尾时继续处理。Lua 帧回调或渲染提交失败时也通过关闭流程收尾。
 
 `Runtime.GetArguments()` 每次返回独立字符串数组，包含宿主接收到的全部参数（不含程序名），
 保留中文、空项、重复项和单个参数中的空格。它不改入口或文件授权。
@@ -71,7 +81,7 @@ FPS、Delta 仍在准备完成后的真实 Lua 回调开始时统计，不提前
 
 1. `timer += 1`，因此第一次脚本 `Update` 仍看到 `timer=1`。
 2. 执行脚本 `Update`（没有该回调则直接继续）。
-3. 如果对象未被删除，使用回调结束时的状态先更新速度，再更新位置：
+3. 使用回调结束时的状态先更新速度，再更新位置：
    `vx += ax * rate`、`vy += ay * rate`，随后 `x += vx * rate`、`y += vy * rate`。
 
 因此脚本本步改变速度、加速度、位置或 `rate`，会立即用于本步积分；停止或转向不再多走一次旧速度。
@@ -89,7 +99,7 @@ FPS、Delta 仍在准备完成后的真实 Lua 回调开始时统计，不提前
 `timer` 和回调照常执行，脚本可以自行恢复 `rate`。脚本直接修改位置或速度仍然有效。
 
 `timer` 溢出在回调前拒绝。回调抛错时不积分；积分结果非有限时，位置/速度不会部分写入，
-但已执行的脚本修改和已经增加的 `timer` 不回滚。对象自删后不再积分。
+但已执行的脚本修改和已经增加的 `timer` 不回滚。
 错误停止本次批量更新；调用者捕获后再次调用将从新的对象快照开始。
 
 ## Object 极坐标运动辅助
@@ -115,7 +125,7 @@ local speed, angle = Object.GetVelocity(bullet)
 不额外要求它们的合成模长可表示；因此一次 Add 成功后，Get 仍可能因极大模长而报错。
 这些调用不修改位置、`rot`、`rate`、`timer` 或另一组运动分量，不执行 Update、Commit 或回调。
 
-有效的待激活对象可以使用全部六个函数。待删除、过期或其他服务的对象报错；仅在对象自身的 Delete 回调内，
+待激活对象及已请求删除且仍有效的对象可以使用全部六个函数。过期或其他服务的对象报错；仅在对象自身的 Delete 回调内，
 Get 可按既有只读例外读取当前运动，Set/Add 仍禁止写入。原生积分继续在 `Object.UpdateAll()` 中执行。
 
 ## 碰撞分发与性能边界

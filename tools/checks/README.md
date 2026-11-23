@@ -27,7 +27,11 @@ from the same staging operation as the ZIP:
 python tools/checks/check_package.py --zip releases/selen2d-v2.3.0-windows-x64.zip --manifest build/release-work/<staging-directory>/package-files.json --output build/checks/package-01
 ```
 
-Add `--smoke` for the existing finite-frame and Orbit Garden self-test runs.
+Add `--smoke` for the finite-frame run, Orbit Garden self-test and a three-frame
+Object lifecycle check. The latter runs the packaged binaries with
+`object_frame.lua` in a separate deployment. It checks that a deletion request
+preserves the final update, movement, collision and render, and verifies when
+the FIFO callbacks run and the object count changes.
 All engine launches in these automated checks pass `--no-error-dialog` before
 any application `--` separator, including negative startup cases. This makes
 automation independent of interactive-desktop or inherited-output detection.

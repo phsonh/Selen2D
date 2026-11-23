@@ -28,9 +28,9 @@
 
 Selen2D is a C++20 game engine with **LuaJIT** scripting and **SDL3 / SDL_GPU** rendering. It provides windowing, input, graphics, audio, resources, and file access through Lua. Game code controls the frame loop, object updates, and draw order.
 
-This source tree contains the **unpublished 2.3.1 development revision**, based on the accepted 2.3.0 source baseline. See the [changelog](CHANGELOG.md) for this revision; the download link below points to the separately published release.
+The [changelog](CHANGELOG.md) lists changes by version. The Windows download below points to the latest published release.
 
-The engine targets **Windows x64 / Direct3D 12 / DXIL**. Keep `Selen2D.exe`, the included `dxcompiler.dll`, and your game resources together. No separate compiler/runtime installation or Python installation is needed to run a game. See the [2.2.0 → 2.3.0 upgrade notes](doc/guide/getting-started.md#upgrade-230) before replacing an existing engine.
+The engine targets **Windows x64 / Direct3D 12 / DXIL**. Keep `Selen2D.exe`, the included `dxcompiler.dll`, and your game resources together. No separate compiler/runtime installation or Python installation is needed to run a game. See the [2.3.0 → 2.4.0 upgrade notes](doc/guide/getting-started.md#upgrade-240) before replacing an existing engine.
 
 [LÖVE](https://love2d.org/) provides a Lua game framework with conventional callbacks. [Defold](https://defold.com/) combines Lua scripting with an editor and content pipeline. Selen2D keeps its workflow close to Lua code, explicit rendering targets, and a small set of native systems.
 
@@ -65,7 +65,7 @@ end)
 
 ### Features
 
-- **Lua-controlled runtime** — Register frame and exit callbacks, choose when to advance objects, and use `Object.Commit()` to apply lifecycle changes.
+- **Lua-controlled runtime** — Use `Object.Commit()` to activate new objects before updating them. Objects requested for deletion finish the current frame, including rendering.
 - **2D rendering and Canvas3D** — Draw to the window or offscreen canvases, use meshes and blend modes, and compile custom HLSL shaders with `Engine.hlsl`.
 - **Text and audio** — Load fonts, render and measure text, and control sound or music through independent audio players.
 - **Resource loading** — Load images, shaders, fonts, and audio through the resource system, with asynchronous batch loading when needed.
@@ -174,13 +174,15 @@ When `launch/launch.json` has not been created, source builds use `src/res/devel
 Windows source builds require **MSVC (Visual Studio C++ tools)**, the **Windows SDK**, **CMake**, **Ninja**, and Python for build-time configuration. Normal source builds use:
 
 ```powershell
+python -m venv build/tools-venv
+.\build\tools-venv\Scripts\python.exe -m pip install -r tools/pack/requirements-launch.txt
 .\tools\build.ps1 -Configuration Debug
 .\tools\build.ps1 -Configuration Release
 ```
 
 Diagnostics use stdout (Info/Debug) and stderr (Warn/Error/Fatal). No console window or log file is created automatically. `Debug.GetLog()` returns a bounded snapshot of Lua logs and reported Lua errors; use the authorized File API to save it if desired. Unhandled failures show one error dialog after cleanup on an interactive desktop, alongside stderr even with redirection or a console; automation can pass `--no-error-dialog` to suppress only the dialog. See [diagnostics](doc/guide/debug-console.md).
 
-Compatibility changes and version history: [CHANGELOG](CHANGELOG.md). This includes removed console controls, Lua log snapshots, JSON directory names, and deployment of the runtime DLL.
+The [changelog](CHANGELOG.md) covers object timing, directory queries, audio loading, canvas resizing and other changes by version.
 
 Documentation: [Getting started](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shaders](doc/guide/shader.md) · [Resources and startup configuration](doc/guide/file-launch.md) · [Lua API](doc/api/).
 
@@ -193,11 +195,11 @@ Documentation: [Getting started](doc/guide/getting-started.md) · [Selen2D Tools
 
 ### Selen2D
 
-Selen2D 是一款使用 **LuaJIT** 编写游戏逻辑、以 **C++20** 和 **SDL3 / SDL_GPU** 实现底层功能的轻量级游戏引擎。窗口、输入、图形、音频、资源和文件访问都有对应的 Lua 接口。每帧要更新什么、何时处理对象生命周期、按什么顺序绘制，都由 Lua 代码安排。
+Selen2D 是一款使用 **LuaJIT** 编写游戏逻辑、以 **C++20** 和 **SDL3 / SDL_GPU** 实现底层功能的轻量级游戏引擎。窗口、输入、图形、音频、资源和文件访问都有对应的 Lua 接口。Lua 决定每帧激活和更新哪些对象，以及绘制顺序。宿主在本帧绘制提交后统一处理销毁请求。
 
-当前源码为基于已验收 2.3.0 源码基线的 **2.3.1 开发修订，尚未发布**。本轮变化见 [CHANGELOG](CHANGELOG.md)；下方下载链接指向单独发布的正式版本。
+[更新记录](CHANGELOG.md)按版本列出改动，下方的 Windows 下载链接指向最新正式版。
 
-引擎面向 **Windows x64 / Direct3D 12 / DXIL**。保留同目录的 `Selen2D.exe`、随包提供的 `dxcompiler.dll` 和游戏资源，运行时无需另行安装编译器、运行库或 Python。替换旧引擎前，请阅读 [2.2.0 → 2.3.0 升级说明](doc/guide/getting-started.md#upgrade-230)。
+引擎面向 **Windows x64 / Direct3D 12 / DXIL**。保留同目录的 `Selen2D.exe`、随包提供的 `dxcompiler.dll` 和游戏资源，运行时无需另行安装编译器、运行库或 Python。替换旧引擎前，请阅读 [2.3.0 → 2.4.0 升级说明](doc/guide/getting-started.md#upgrade-240)。
 
 [LÖVE](https://love2d.org/) 提供基于 Lua 回调的游戏框架；[Defold](https://defold.com/) 提供编辑器和资源构建流程。Selen2D 的使用方式更接近直接编写 Lua，通过明确的 API 控制对象、画布、资源和帧流程。
 
@@ -232,7 +234,7 @@ end)
 
 ### 主要功能
 
-- **Lua 主导的运行流程**：注册帧回调和退出回调，通过 `Object.Commit()` 明确处理对象生命周期。
+- **Lua 主导的运行流程**。在更新前用 `Object.Commit()` 激活新对象。请求销毁的对象仍会完成当帧的更新与渲染，帧末执行销毁回调。
 - **2D 绘制与 Canvas3D**：窗口和离屏画布、Mesh、Blend、Fog，以及通过 `Engine.hlsl` 使用自定义 HLSL Shader。
 - **文字与音频**：字体加载、文字绘制和测量；独立播放器控制音效、音乐和声像。
 - **资源管理**：图像、Shader、字体、音频资源及支持整批发布的异步加载器。
@@ -341,13 +343,15 @@ MyGame/dist/
 Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows SDK**、**CMake**、**Ninja** 以及用于编译期配置的 Python。常规构建命令：
 
 ```powershell
+python -m venv build/tools-venv
+.\build\tools-venv\Scripts\python.exe -m pip install -r tools/pack/requirements-launch.txt
 .\tools\build.ps1 -Configuration Debug
 .\tools\build.ps1 -Configuration Release
 ```
 
 诊断日志输出到 stdout（Info/Debug）及 stderr（Warn/Error/Fatal），不自动创建控制台或日志文件。`Debug.GetLog()` 返回有界的 Lua 日志及 Lua 错误快照，需要保存时通过已授权的 File API 写入。交互桌面上的未处理致命错误在清理后统一弹一次错误框，同时保留 stderr（包括有终端或重定向的启动）；自动化传 `--no-error-dialog` 只禁用弹窗，详见[诊断指南](doc/guide/debug-console.md)。
 
-兼容性变更与版本归属集中在 [CHANGELOG](CHANGELOG.md)：包括控制台接口删除、Lua 日志快照、JSON 目录名称和运行时 DLL 部署。
+对象时序、目录查询、音频加载和画布缩放等变更按版本列在[更新记录](CHANGELOG.md)中。
 
 详细资料：[入门指南](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [文件与启动配置](doc/guide/file-launch.md) · [Lua API](doc/api/)。
 
@@ -362,9 +366,9 @@ Windows 源码构建需要 **Visual Studio C++ 工具链（MSVC）**、**Windows
 
 Selen2D は **LuaJIT** でゲームロジックを記述できる軽量なゲームエンジンです。基盤には **C++20** と **SDL3 / SDL_GPU** を採用しています。ウィンドウ、入力、描画、音声、リソース、ファイル操作を Lua API から利用でき、フレーム処理やオブジェクトの更新、描画順序をゲーム側で組み立てられます。
 
-現在のソースは、検証済みの 2.3.0 ソースを基にした **未公開の 2.3.1 開発リビジョン**です。変更内容は [CHANGELOG](CHANGELOG.md) を参照してください。下のリンクは別途公開されたリリースを指します。
+[変更履歴](CHANGELOG.md)にバージョンごとの変更をまとめています。下のリンクから Windows 向けの最新リリースをダウンロードできます。
 
-対象は **Windows x64 / Direct3D 12 / DXIL** です。`Selen2D.exe`、同梱の `dxcompiler.dll`、ゲームのリソースを一緒に配置してください。実行時にコンパイラ、ランタイム、Python を別途インストールする必要はありません。既存のエンジンを置き換える前に、[2.2.0 → 2.3.0 の移行手順](doc/guide/getting-started.md#upgrade-230)を確認してください。
+対象は **Windows x64 / Direct3D 12 / DXIL** です。`Selen2D.exe`、同梱の `dxcompiler.dll`、ゲームのリソースを一緒に配置してください。実行時にコンパイラ、ランタイム、Python を別途インストールする必要はありません。既存のエンジンを置き換える前に、[2.3.0 → 2.4.0 の移行手順](doc/guide/getting-started.md#upgrade-240)を確認してください。
 
 [LÖVE](https://love2d.org/) は Lua のコールバックを中心としたフレームワークを提供し、[Defold](https://defold.com/) はエディタとアセット構築の環境を備えています。Selen2D は Lua コードからフレーム処理、描画先、リソースの扱いを明示的に指定するスタイルです。
 
@@ -399,7 +403,7 @@ end)
 
 ### 主な機能
 
-- **Lua 主導のランタイム**：フレーム・終了コールバックを登録し、`Object.Commit()` でオブジェクトの状態変更を反映します。
+- **Lua 主導のランタイム**。更新前に `Object.Commit()` で新しいオブジェクトを有効にします。削除を要求したオブジェクトも、そのフレームの更新と描画を終えてから破棄されます。
 - **2D 描画と Canvas3D**：ウィンドウ・オフスクリーン Canvas、Mesh、Blend、Fog、`Engine.hlsl` を使用した HLSL Shader。
 - **文字と音声**：フォントの読み込み、文字描画と計測、独立したプレイヤーによる効果音・音楽の制御。
 - **リソース管理**：画像、Shader、フォント、音声の読み込みと、バッチ単位で公開する非同期ローダー。
@@ -508,13 +512,15 @@ MyGame/dist/
 Windows でソースをビルドするには、**Visual Studio C++ ツール（MSVC）**、**Windows SDK**、**CMake**、**Ninja**、ビルド時の設定に使う Python が必要です。
 
 ```powershell
+python -m venv build/tools-venv
+.\build\tools-venv\Scripts\python.exe -m pip install -r tools/pack/requirements-launch.txt
 .\tools\build.ps1 -Configuration Debug
 .\tools\build.ps1 -Configuration Release
 ```
 
 診断ログは stdout（Info/Debug）と stderr（Warn/Error/Fatal）へ出力します。コンソールやログファイルを自動作成しません。`Debug.GetLog()` は容量制限付きの Lua ログと Lua エラーのスナップショットを返します。必要に応じて、許可された File API で保存してください。対話デスクトップで未処理の致命的エラーが発生した場合、後処理後に一度だけダイアログを表示し、端末やリダイレクトがある場合も stderr 出力を保持します。自動化では `--no-error-dialog` でダイアログだけを無効にできます。[診断ガイド](doc/guide/debug-console.md)を参照してください。
 
-互換性に関わる変更とバージョン履歴は [CHANGELOG](CHANGELOG.md) にまとめています。削除済みのコンソール API、Lua ログ、JSON のディレクトリ名、実行時 DLL の配置を確認してください。
+オブジェクトの更新・削除、ディレクトリ検索、音声の読み込み、キャンバスのリサイズなど、バージョンごとの変更は[変更履歴](CHANGELOG.md)を参照してください。
 
 資料：[入門ガイド](doc/guide/getting-started.md) · [Selen2D Tools](doc/guide/tools-gui.md) · [Shader](doc/guide/shader.md) · [ファイルと起動設定](doc/guide/file-launch.md) · [Lua API](doc/api/)。
 

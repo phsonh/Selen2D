@@ -11,7 +11,7 @@ struct ObjectCallbacks {
     virtual void Collision(ObjectHandle,ObjectHandle)=0;
     virtual void Delete(ObjectHandle)=0;
     virtual void Release(ObjectHandle) noexcept=0;
-    // Shutdown diagnostics must not throw or enter Lua. Normal Commit errors
+    // Shutdown diagnostics must not throw or enter Lua. Normal frame-end errors
     // propagate to its caller instead of going through this cleanup channel.
     virtual void CleanupError(const char*) noexcept {}
 };
@@ -30,6 +30,7 @@ public:
     bool IsColliding(ObjectHandle,ObjectHandle) const;
     bool Delete(ObjectHandle) noexcept;
     void Commit(ObjectCallbacks&);
+    void FinishFrame(ObjectCallbacks&);
     void BeginShutdown() noexcept;
     bool FinalizeShutdown(ObjectCallbacks&);
     void Update(ObjectCallbacks&);
@@ -41,7 +42,7 @@ public:
     void CheckOutBound();
 private:
     ObjectPool pool_;
-    std::vector<ObjectHandle> order_,activeOrder_,snapshot_,activate_,deletions_;
+    std::vector<ObjectHandle> order_,activeOrder_,snapshot_,deletions_;
     struct CollisionEntry { ObjectHandle handle; Object* object; };
     std::vector<CollisionEntry> sources_,targets_;
     // Optional, at most 65536 doubles (512 KiB). Contents are rebuilt for each
@@ -59,6 +60,6 @@ private:
     bool PrepareCollisionBounds(bool sameGroup) noexcept;
     void Compact() noexcept;
     void Reclaim(ObjectHandle,ObjectCallbacks&) noexcept;
-    ObjectHandle PopDeletion() noexcept;
+    ObjectHandle BeginNextDeletion() noexcept;
 };
 }
